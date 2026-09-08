@@ -276,7 +276,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.header.number;
-        println!("📦 Live WSS Block Synced: #{} (Internal counter: {})", block_num, block_counter);
+        println!("📦 Live WSS Block Synced: #{} (Internal counter: {})", block_num.unwrap_or(0), block_counter);
 
         let simulated_market_price = 1.005 - (block_counter % 3) as f64 * 0.01;
         let (direction, velocity) = radar.update_and_predict(simulated_market_price);

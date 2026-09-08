@@ -220,13 +220,16 @@ where
         alloy::dyn_abi::DynSolValue::Array(target_path.1.into_iter().map(|p| alloy::dyn_abi::DynSolValue::Bytes(p.into())).collect()),
     ]).abi_encode();
 
-    let contract = BaseAtomicArbitrage::new(contract_address, http_provider);
+    let contract = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
     let token_to_borrow = address!("4200000000000000000000000000000000000006"); 
     let loan_amount = U256::from(1000000000000000000u64); 
 
-    let tx_builder = contract.triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.into());
+    let my_address = http_provider.default_signer_address();
 
-    println!("🧪 Running Simulation Call via HTTP Provider...");
+    let tx_builder = contract.triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
+        .from(my_address);
+
+    println!("🧪 Running Simulation Call via HTTP Provider for wallet: {:?}", my_address);
     match tx_builder.call().await {
         Ok(_simulation_result) => {
             println!("✅ Simulation Passed Successfully! Sending Real Transaction...");

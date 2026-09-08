@@ -295,12 +295,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("❌ Error executing on-chain command: {:?}", e);
             }
         }
-
-        if block_counter >= 10 {
-            break;
-        }
     }
 
-    println!("🏁 Live stream simulation logs generated completely.");
     Ok(())
 }

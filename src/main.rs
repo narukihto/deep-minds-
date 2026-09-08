@@ -7,7 +7,7 @@ use alloy::{
     providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
-    primitives::{address, Address, Bytes, U256},
+    primitives::{address, Address, U256},
     transports::http::Http,
     sol,
 };
@@ -166,11 +166,11 @@ impl CausalCollapseSystem {
 
         let whitelist_pools = vec![
             address!("cf77A3bA9Aab7D3E44917635033322DF3f564171"),
-            address!("0x2626664c2603336E57B271c5C0b26F421741e481"),
-            address!("0x198FEe7650eAC16286848227e24eC0DFA5e51DA5"),
-            address!("0x327Df1e6de05895D2Ab08513aADD931325260A99"),
-            address!("0x089A8e0F6fCE8e00138F9b6E7Ff5B2FCC4Ac9D94"),
-            address!("0x1b81D678ffb9C0263b24A97847620C99d213eB14"),
+            address!("2626664c2603336E57B271c5C0b26F421741e481"),
+            address!("198FEe7650eAC16286848227e24eC0DFA5e51DA5"),
+            address!("327Df1e6de05895D2Ab08513aADD931325260A99"),
+            address!("089A8e0F6fCE8e00138F9b6E7Ff5B2FCC4Ac9D94"),
+            address!("1b81D678ffb9C0263b24A97847620C99d213eB14"),
         ];
 
         let mut addresses = Vec::new();
@@ -205,7 +205,8 @@ sol! {
 async fn trigger_on_chain_arbitrage<P>(
     http_provider: P,
     contract_address: Address,
-    target_path: (Vec<Address>, Vec<Vec<u8>>)
+    target_path: (Vec<Address>, Vec<Vec<u8>>),
+    signer_address: Address
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     P: Provider<Http<alloy::transports::http::Client>, Ethereum> + Clone,
@@ -224,12 +225,10 @@ where
     let token_to_borrow = address!("4200000000000000000000000000000000000006"); 
     let loan_amount = U256::from(1000000000000000000u64); 
 
-    let my_address = http_provider.default_signer_address();
-
     let tx_builder = contract.triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
-        .from(my_address);
+        .from(signer_address);
 
-    println!("🧪 Running Simulation Call via HTTP Provider for wallet: {:?}", my_address);
+    println!("🧪 Running Simulation Call via HTTP Provider for wallet: {:?}", signer_address);
     match tx_builder.call().await {
         Ok(_simulation_result) => {
             println!("✅ Simulation Passed Successfully! Sending Real Transaction...");
@@ -262,6 +261,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string());
 
     let signer: PrivateKeySigner = private_key_str.parse()?;
+    let signer_address = signer.address();
     let wallet = EthereumWallet::from(signer);
 
     println!("📡 Activating HTTP Connection to: {}", alchemy_http_url);
@@ -301,7 +301,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let system = CausalCollapseSystem::new(nodes);
             let optimized_path = system.execute_collapse();
 
-            if let Err(e) = trigger_on_chain_arbitrage(http_provider.clone(), contract_address, optimized_path).await {
+            if let Err(e) = trigger_on_chain_arbitrage(http_provider.clone(), contract_address, optimized_path, signer_address).await {
                 println!("❌ Error executing on-chain command: {:?}", e);
             }
         }

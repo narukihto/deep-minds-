@@ -1,0 +1,36 @@
+name: Deploy and Run Base MEV Bot
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Execute MEV Engine
+        env:
+          CONTRACT_ADDR: ${{ secrets.CONTRACT_ADDR }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          ALCHEMY_HTTP_URL: ${{ secrets.ALCHEMY_HTTP_URL }}
+          ALCHEMY_WSS_URL: ${{ secrets.ALCHEMY_WSS_URL }}
+        run: cargo run --release
+        

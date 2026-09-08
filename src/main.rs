@@ -2,6 +2,7 @@ use num_bigint::BigUint;
 use num_traits::{ToPrimitive, One};
 use rayon::prelude::*;
 use std::time::Instant;
+use futures_util::StreamExt;
 use alloy::{
     providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
@@ -9,8 +10,6 @@ use alloy::{
     primitives::{address, Address, Bytes, U256},
     transports::http::Http,
     sol,
-    pubsub::PubSubFrontend,
-    rpc::types::BlockNumberOrTag,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -165,14 +164,23 @@ impl CausalCollapseSystem {
             }
         }
 
-        let addresses: Vec<Address> = final_path.iter().map(|id| {
-            let hex_str = format!("{:040x}", id);
-            hex_str.parse().unwrap_or(address!("0000000000000000000000000000000000000000"))
-        }).collect();
+        let whitelist_pools = vec![
+            address!("cf77A3bA9Aab7D3E44917635033322DF3f564171"),
+            address!("0x2626664c2603336E57B271c5C0b26F421741e481"),
+            address!("0x198FEe7650eAC16286848227e24eC0DFA5e51DA5"),
+            address!("0x327Df1e6de05895D2Ab08513aADD931325260A99"),
+            address!("0x089A8e0F6fCE8e00138F9b6E7Ff5B2FCC4Ac9D94"),
+            address!("0x1b81D678ffb9C0263b24A97847620C99d213eB14"),
+        ];
 
-        let payloads: Vec<Vec<u8>> = final_path.iter().map(|id| {
-            vec![(*id as u8), 0x01, 0x02]
-        }).collect();
+        let mut addresses = Vec::new();
+        let mut payloads = Vec::new();
+
+        for (idx, id) in final_path.iter().enumerate() {
+            let pool = whitelist_pools[idx % whitelist_pools.len()];
+            addresses.push(pool);
+            payloads.push(vec![(*id as u8), 0x01, 0x02]);
+        }
 
         (addresses, payloads)
     }
@@ -209,7 +217,7 @@ where
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(target_path.0.into_iter().map(alloy::dyn_abi::DynSolValue::Address).collect()),
-        alloy::dyn_abi::DynSolValue::Array(target_path.1.into_iter().map(|p| alloy::dyn_abi::DynSolValue::Bytes(p)).collect()),
+        alloy::dyn_abi::DynSolValue::Array(target_path.1.into_iter().map(|p| alloy::dyn_abi::DynSolValue::Bytes(p.into())).collect()),
     ]).abi_encode();
 
     let contract = BaseAtomicArbitrage::new(contract_address, http_provider);
@@ -272,7 +280,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut radar = MachineMetric::new();
     let mut block_counter = 0u64;
 
-    use futures_util::StreamExt;
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.header.number;
@@ -284,9 +291,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if direction == Direction::Peak || direction == Direction::Bottom {
             println!("⚡ [RADAR ALERT] Velocity Pivot Discovered: {:.4}", velocity);
             let nodes = vec![
-                QuantumNode { id: 1, energy_scale: generate_astronomical_number(3000000usize), frequency: simulated_market_price },
-                QuantumNode { id: 2, energy_scale: generate_astronomical_number(1000000usize), frequency: 0.01 },
-                QuantumNode { id: 3, energy_scale: generate_astronomical_number(500000usize), frequency: 0.015 },
+                QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000usize), frequency: simulated_market_price },
+                QuantumNode { id: 2, energy_scale: generate_astronomical_number(1000usize), frequency: 0.01 },
+                QuantumNode { id: 3, energy_scale: generate_astronomical_number(1000usize), frequency: 0.015 },
             ];
             let system = CausalCollapseSystem::new(nodes);
             let optimized_path = system.execute_collapse();
@@ -297,5 +304,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    println!("🏁 Live stream simulation logs generated completely.");
     Ok(())
 }

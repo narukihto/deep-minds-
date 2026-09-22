@@ -238,11 +238,14 @@ async fn fetch_live_market_data<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    let mut latest_price = 1.0;
-    let mut dynamic_token_to_borrow = whitelist_pools[0];
-    let mut dynamic_loan_amount = U256::from(1000000000000000000u64);
-    let mut t0 = whitelist_pools[0];
-    let mut t1 = whitelist_pools[0];
+    struct PoolData {
+        price: f64,
+        token0: Address,
+        token1: Address,
+        loan_amount: U256,
+    }
+
+    let mut pool_results = Vec::new();
 
     for pool_address in whitelist_pools {
         let pair_contract = IUniswapV2Pair::new(*pool_address, http_provider.clone());
@@ -250,25 +253,49 @@ where
             let r0 = reserves.reserve0;
             let r1 = reserves.reserve1;
             if r0 > 0 && r1 > 0 {
-                latest_price = r1.to::<u128>() as f64 / r0.to::<u128>() as f64;
+                let live_price = r1.to::<u128>() as f64 / r0.to::<u128>() as f64;
+                let mut t0 = *pool_address;
+                let mut t1 = *pool_address;
+
                 if let Ok(token0_res) = pair_contract.token0().call().await {
                     t0 = token0_res;
-                    dynamic_token_to_borrow = t0;
                 }
                 if let Ok(token1_res) = pair_contract.token1().call().await {
                     t1 = token1_res;
                 }
-                dynamic_loan_amount = U256::from(r0) / U256::from(100);
+                let dynamic_loan_amount = U256::from(r0) / U256::from(100);
 
-                // Enhancement 1: Pool-level detailed log
-                println!("   🔍 [POOL WATCH] Target: {:?}, Live Price: {:.6}, Debt Token: {:?}", pool_address, latest_price, dynamic_token_to_borrow);
+                println!("   🔍 [POOL WATCH] Target: {:?}, Live Price: {:.6}, Debt Token: {:?}", pool_address, live_price, t0);
 
-                break;
+                pool_results.push(PoolData {
+                    price: live_price,
+                    token0: t0,
+                    token1: t1,
+                    loan_amount: dynamic_loan_amount,
+                });
             }
         }
     }
 
-    Ok((latest_price, dynamic_token_to_borrow, dynamic_loan_amount, t0, t1))
+    if pool_results.is_empty() {
+        return Ok((1.0, whitelist_pools[0], U256::from(1000000000000000000u64), whitelist_pools[0], whitelist_pools[0]));
+    }
+
+    // Compute the market mean price across all scanned pools to find arbitrage deviations
+    let sum_price: f64 = pool_results.iter().map(|p| p.price).sum();
+    let avg_market_price = sum_price / pool_results.len() as f64;
+
+    // Pick the pool with the highest volatility/deviation from the mean market price
+    let best_pool = pool_results
+        .into_iter()
+        .max_by(|a, b| {
+            let dev_a = (a.price - avg_market_price).abs();
+            let dev_b = (b.price - avg_market_price).abs();
+            dev_a.partial_cmp(&dev_b).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap();
+
+    Ok((best_pool.price, best_pool.token0, best_pool.loan_amount, best_pool.token0, best_pool.token1))
 }
 
 async fn trigger_on_chain_arbitrage<P>(
@@ -368,7 +395,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let (live_market_price, dynamic_token, dynamic_loan, token0, token1) = fetch_live_market_data(http_provider.clone(), &whitelist_pools).await?;
         
-        // Enhancement 2: Radar & system metric printout
         println!("   📊 [METRIC FEED] Aggregated Price: {:.6}, Checking Velocity Pivots...", live_market_price);
 
         let (direction, velocity) = radar.update_and_predict(live_market_price);
@@ -381,7 +407,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 QuantumNode { id: 3, energy_scale: generate_astronomical_number(1000usize), frequency: 0.015, token0, token1 },
             ];
 
-            // Enhancement 3: System evaluation logs showing proprietary math outcomes for QuantumNodes
             for node in &nodes {
                 println!("   ⚛️ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
             }

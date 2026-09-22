@@ -10,6 +10,7 @@ use alloy::{
     primitives::{address, Address, U256},
     transports::http::Http,
     sol,
+    sol_types::SolCall,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -182,7 +183,6 @@ impl CausalCollapseSystem {
             let pool = whitelist_pools[idx % whitelist_pools.len()];
             addresses.push(pool);
 
-            // Correctly map underlying tokens instead of pool addresses for the router swap path
             let swap_call = IUniswapV2Router02::swapExactTokensForTokensCall {
                 amountIn: U256::from(1000000000000000000u64),
                 amountOutMin: U256::ZERO,
@@ -236,7 +236,7 @@ async fn fetch_live_market_data<P>(
     whitelist_pools: &[Address],
 ) -> Result<(f64, Address, U256, Address, Address), Box<dyn std::error::Error>>
 where
-    P: Provider<Http<alloy::transports::http::Client>, Ethereum> + Clone,
+    P: Provider<Ethereum> + Clone,
 {
     let mut latest_price = 1.0;
     let mut dynamic_token_to_borrow = whitelist_pools[0];
@@ -276,7 +276,7 @@ async fn trigger_on_chain_arbitrage<P>(
     loan_amount: U256,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
-    P: Provider<Http<alloy::transports::http::Client>, Ethereum> + Clone,
+    P: Provider<Ethereum> + Clone,
 {
     println!("🚀 [BOT -> CONTRACT] Executing Atomic Multi-Swap Command!");
     println!("🔗 Atomic Route Dispatched: Targets: {:?}, Payloads Count: {}", target_path.0, target_path.1.len());
@@ -349,7 +349,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ws = alloy::providers::WsConnect::new(alchemy_wss_url);
     let ws_provider = ProviderBuilder::new()
         .wallet(wallet)
-        .on_ws(ws)
+        .connect_ws(ws)
         .await?;
 
     let sub = ws_provider.subscribe_blocks().await?;

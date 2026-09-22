@@ -8,7 +8,6 @@ use alloy::{
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256},
-    transports::http::Http,
     sol,
     sol_types::SolCall,
 };
@@ -323,7 +322,6 @@ where
         })
         .unwrap();
 
-    // Enforce high-liquidity base asset selection (WETH or USDC) to clear BAL#528
     let borrow_token = if best_pool.token0 == WETH_BASE || best_pool.token0 == USDC_BASE {
         best_pool.token0
     } else if best_pool.token1 == WETH_BASE || best_pool.token1 == USDC_BASE {
@@ -361,8 +359,8 @@ where
 
     let contract = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
 
-    // --- BALANCER-TO-AAVE FALLBACK ENGINE ---
-    let balancer_builder = contract.triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.clone())
+    // --- BALANCER-TO-AAVE FALLBACK ENGINE (with explicit .into() for alloy::primitives::Bytes) ---
+    let balancer_builder = contract.triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
         .from(signer_address);
 
     println!("🧪 [BALANCER] Running Simulation Call via HTTP Provider...");
@@ -377,7 +375,7 @@ where
         Err(e_balancer) => {
             println!("⚠️ Balancer Simulation Failed ({:?}). Activating Aave Fallback Route...", e_balancer);
 
-            let aave_builder = contract.triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data)
+            let aave_builder = contract.triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
                 .from(signer_address);
 
             println!("🧪 [AAVE] Running Fallback Simulation Call...");

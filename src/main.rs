@@ -245,7 +245,7 @@ where
 
     let length = factory.allPairsLength().call().await?;
     let total_pairs = length.to::<u64>();
-    let start_index = if total_pairs > 200 { total_pairs - 200 } else { 0 };
+    let start_index = if total_pairs > 100 { total_pairs - 100 } else { 0 };
 
     let mut pool_addresses = Vec::new();
     for i in start_index..total_pairs {
@@ -291,8 +291,6 @@ where
                     t1 = token1_res;
                 }
                 let dynamic_loan_amount = U256::from(r0) / U256::from(100);
-
-                println!("   🔥 [DYNAMIC SCAN] Pair Indexed: {:?}, Price Ratio: {:.6}", pool_address, live_price);
 
                 pool_results.push(PoolData {
                     price: live_price,
@@ -359,7 +357,6 @@ where
 
     let contract = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
 
-    // --- BALANCER-TO-AAVE FALLBACK ENGINE (with explicit .into() for alloy::primitives::Bytes) ---
     let balancer_builder = contract.triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
         .from(signer_address);
 
@@ -428,6 +425,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect_ws(ws)
         .await?;
 
+    // --- INITIALIZATION CACHING: Fetch Factory Pools Once at Startup ---
+    println!("🔍 [INIT CACHE] Fetching initial active factory pools from Aerodrome factory...");
+    let cached_pools = match fetch_dynamic_pools(http_provider.clone()).await {
+        Ok(pools) => {
+            println!("✅ Successfully cached {} pool addresses in memory.", pools.len());
+            pools
+        }
+        Err(e) => {
+            println!("❌ Critical Error fetching initial factory pools: {:?}. Aborting boot.", e);
+            return Err(e);
+        }
+    };
+
     let sub = ws_provider.subscribe_blocks().await?;
     let mut stream = sub.into_stream();
 
@@ -439,16 +449,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let block_num = block.inner.number;
         println!("📦 Live WSS Block Synced: #{} (Internal counter: {})", block_num, block_counter);
 
-        let dynamic_pools = match fetch_dynamic_pools(http_provider.clone()).await {
-            Ok(pools) => pools,
-            Err(e) => {
-                println!("❌ Error fetching dynamic factory pools: {:?}", e);
-                continue;
-            }
-        };
-
+        // Reuse the cached pool list instead of querying factory length on every block
         let (live_market_price, dynamic_token, dynamic_loan, token0, token1, scanned_addresses) = 
-            fetch_live_market_data(http_provider.clone(), &dynamic_pools).await?;
+            fetch_live_market_data(http_provider.clone(), &cached_pools).await?;
         
         println!("   📊 [METRIC FEED] Aggregated Price: {:.6}, Checking Velocity Pivots...", live_market_price);
 

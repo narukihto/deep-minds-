@@ -37,8 +37,7 @@ jobs:
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           ALCHEMY_HTTP_URL: ${{ secrets.ALCHEMY_HTTP_URL }}
           ALCHEMY_WSS_URL: ${{ secrets.ALCHEMY_WSS_URL }}
-          # إضافة المتغير الحرج الذي يستدعيه كود البوت الجديد الخاص بك للـ WebSocket
           BASE_WSS_RPC: ${{ secrets.ALCHEMY_WSS_URL }} 
         run: |
-          println!("[*] Starting MEV Engine in Release Mode...")
+          echo "[*] Starting MEV Engine in Release Mode..."
           cargo run --release

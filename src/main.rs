@@ -231,21 +231,22 @@ sol! {
     }
 }
 
-async fn fetch_live_market_data<P>(
+pub struct PoolMarketData {
+    pub pool_address: Address,
+    pub live_price: f64,
+    pub token0: Address,
+    pub token1: Address,
+    pub loan_amount: U256,
+}
+
+async fn fetch_live_market_data_independent<P>(
     http_provider: P,
     whitelist_pools: &[Address],
-) -> Result<(f64, Address, U256, Address, Address), Box<dyn std::error::Error>>
+) -> Result<Vec<PoolMarketData>, Box<dyn std::error::Error>>
 where
     P: Provider<Ethereum> + Clone,
 {
-    struct PoolData {
-        price: f64,
-        token0: Address,
-        token1: Address,
-        loan_amount: U256,
-    }
-
-    let mut pool_results = Vec::new();
+    let mut scanned_pools = Vec::new();
 
     for pool_address in whitelist_pools {
         let pair_contract = IUniswapV2Pair::new(*pool_address, http_provider.clone());
@@ -265,10 +266,12 @@ where
                 }
                 let dynamic_loan_amount = U256::from(r0) / U256::from(100);
 
-                println!("   🔍 [POOL WATCH] Target: {:?}, Live Price: {:.6}, Debt Token: {:?}", pool_address, live_price, t0);
+                // Independent Pool Logging format required
+                println!("   📈 [TARGET WATCH] Pool: {:?}, Price: {:.6}, Token0: {:?}", pool_address, live_price, t0);
 
-                pool_results.push(PoolData {
-                    price: live_price,
+                scanned_pools.push(PoolMarketData {
+                    pool_address: *pool_address,
+                    live_price,
                     token0: t0,
                     token1: t1,
                     loan_amount: dynamic_loan_amount,
@@ -277,25 +280,7 @@ where
         }
     }
 
-    if pool_results.is_empty() {
-        return Ok((1.0, whitelist_pools[0], U256::from(1000000000000000000u64), whitelist_pools[0], whitelist_pools[0]));
-    }
-
-    // Compute the market mean price across all scanned pools to find arbitrage deviations
-    let sum_price: f64 = pool_results.iter().map(|p| p.price).sum();
-    let avg_market_price = sum_price / pool_results.len() as f64;
-
-    // Pick the pool with the highest volatility/deviation from the mean market price
-    let best_pool = pool_results
-        .into_iter()
-        .max_by(|a, b| {
-            let dev_a = (a.price - avg_market_price).abs();
-            let dev_b = (b.price - avg_market_price).abs();
-            dev_a.partial_cmp(&dev_b).unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .unwrap();
-
-    Ok((best_pool.price, best_pool.token0, best_pool.loan_amount, best_pool.token0, best_pool.token1))
+    Ok(scanned_pools)
 }
 
 async fn trigger_on_chain_arbitrage<P>(
@@ -385,7 +370,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sub = ws_provider.subscribe_blocks().await?;
     let mut stream = sub.into_stream();
 
-    let mut radar = MachineMetric::new();
+    // Maintain independent radars per pool to track individual price streams accurately
+    let mut pool_radars: std::collections::HashMap<Address, MachineMetric> = std::collections::HashMap::new();
     let mut block_counter = 0u64;
 
     while let Some(block) = stream.next().await {
@@ -393,29 +379,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let block_num = block.inner.number;
         println!("📦 Live WSS Block Synced: #{} (Internal counter: {})", block_num, block_counter);
 
-        let (live_market_price, dynamic_token, dynamic_loan, token0, token1) = fetch_live_market_data(http_provider.clone(), &whitelist_pools).await?;
-        
-        println!("   📊 [METRIC FEED] Aggregated Price: {:.6}, Checking Velocity Pivots...", live_market_price);
+        let scanned_pools = fetch_live_market_data_independent(http_provider.clone(), &whitelist_pools).await?;
 
-        let (direction, velocity) = radar.update_and_predict(live_market_price);
+        // Independent Evaluator Feed: evaluate each pool's price stream separately
+        for pool in scanned_pools {
+            let radar = pool_radars.entry(pool.pool_address).or_insert_with(MachineMetric::new);
+            println!("   📊 [METRIC FEED] Pool: {:?}, Price: {:.6}, Checking Velocity Pivots...", pool.pool_address, pool.live_price);
 
-        if direction == Direction::Peak || direction == Direction::Bottom {
-            println!("⚡ [RADAR ALERT] Velocity Pivot Discovered: {:.4}", velocity);
-            let nodes = vec![
-                QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000usize), frequency: live_market_price, token0, token1 },
-                QuantumNode { id: 2, energy_scale: generate_astronomical_number(1000usize), frequency: 0.01, token0, token1 },
-                QuantumNode { id: 3, energy_scale: generate_astronomical_number(1000usize), frequency: 0.015, token0, token1 },
-            ];
+            let (direction, velocity) = radar.update_and_predict(pool.live_price);
 
-            for node in &nodes {
-                println!("   ⚛️ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
-            }
+            if direction == Direction::Peak || direction == Direction::Bottom {
+                println!("⚡ [RADAR ALERT] Velocity Pivot Discovered on Pool {:?}: {:.4}", pool.pool_address, velocity);
+                let nodes = vec![
+                    QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000usize), frequency: pool.live_price, token0: pool.token0, token1: pool.token1 },
+                    QuantumNode { id: 2, energy_scale: generate_astronomical_number(1000usize), frequency: 0.01, token0: pool.token0, token1: pool.token1 },
+                    QuantumNode { id: 3, energy_scale: generate_astronomical_number(1000usize), frequency: 0.015, token0: pool.token0, token1: pool.token1 },
+                ];
 
-            let system = CausalCollapseSystem::new(nodes);
-            let optimized_path = system.execute_collapse();
+                for node in &nodes {
+                    println!("   ⚛️ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
+                }
 
-            if let Err(e) = trigger_on_chain_arbitrage(http_provider.clone(), contract_address, optimized_path, signer_address, dynamic_token, dynamic_loan).await {
-                println!("❌ Error executing on-chain command: {:?}", e);
+                let system = CausalCollapseSystem::new(nodes);
+                let optimized_path = system.execute_collapse();
+
+                if let Err(e) = trigger_on_chain_arbitrage(http_provider.clone(), contract_address, optimized_path, signer_address, pool.token0, pool.loan_amount).await {
+                    println!("❌ Error executing on-chain command: {:?}", e);
+                }
             }
         }
     }

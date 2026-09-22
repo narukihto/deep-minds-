@@ -250,15 +250,15 @@ where
             let r0 = reserves.reserve0;
             let r1 = reserves.reserve1;
             if r0 > 0 && r1 > 0 {
-                latest_price = (r1 as f64) / (r0 as f64);
+                latest_price = r1.to::<u128>() as f64 / r0.to::<u128>() as f64;
                 if let Ok(token0_res) = pair_contract.token0().call().await {
-                    t0 = token0_res._0;
+                    t0 = token0_res;
                     dynamic_token_to_borrow = t0;
                 }
                 if let Ok(token1_res) = pair_contract.token1().call().await {
-                    t1 = token1_res._0;
+                    t1 = token1_res;
                 }
-                dynamic_loan_amount = U256::from(r0 / 100);
+                dynamic_loan_amount = U256::from(r0) / U256::from(100);
                 break;
             }
         }
@@ -341,7 +341,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("📡 Activating HTTP Connection to: {}", alchemy_http_url);
     let http_provider = ProviderBuilder::new()
-        .with_recommended_fillers()
         .wallet(wallet.clone())
         .on_http(alchemy_http_url.parse()?);
 
@@ -360,7 +359,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Some(block) = stream.next().await {
         block_counter += 1;
-        let block_num = block.header.number;
+        let block_num = block.inner.header.number;
         println!("📦 Live WSS Block Synced: #{} (Internal counter: {})", block_num.unwrap_or(0), block_counter);
 
         let (live_market_price, dynamic_token, dynamic_loan, token0, token1) = fetch_live_market_data(http_provider.clone(), &whitelist_pools).await?;

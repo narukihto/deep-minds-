@@ -259,6 +259,10 @@ where
                     t1 = token1_res;
                 }
                 dynamic_loan_amount = U256::from(r0) / U256::from(100);
+
+                // Enhancement 1: Pool-level detailed log
+                println!("   🔍 [POOL WATCH] Target: {:?}, Live Price: {:.6}, Debt Token: {:?}", pool_address, latest_price, dynamic_token_to_borrow);
+
                 break;
             }
         }
@@ -363,6 +367,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("📦 Live WSS Block Synced: #{} (Internal counter: {})", block_num, block_counter);
 
         let (live_market_price, dynamic_token, dynamic_loan, token0, token1) = fetch_live_market_data(http_provider.clone(), &whitelist_pools).await?;
+        
+        // Enhancement 2: Radar & system metric printout
+        println!("   📊 [METRIC FEED] Aggregated Price: {:.6}, Checking Velocity Pivots...", live_market_price);
+
         let (direction, velocity) = radar.update_and_predict(live_market_price);
 
         if direction == Direction::Peak || direction == Direction::Bottom {
@@ -372,6 +380,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 QuantumNode { id: 2, energy_scale: generate_astronomical_number(1000usize), frequency: 0.01, token0, token1 },
                 QuantumNode { id: 3, energy_scale: generate_astronomical_number(1000usize), frequency: 0.015, token0, token1 },
             ];
+
+            // Enhancement 3: System evaluation logs showing proprietary math outcomes for QuantumNodes
+            for node in &nodes {
+                println!("   ⚛️ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
+            }
+
             let system = CausalCollapseSystem::new(nodes);
             let optimized_path = system.execute_collapse();
 

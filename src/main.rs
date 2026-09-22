@@ -13,6 +13,9 @@ use alloy::{
     sol_types::SolCall,
 };
 
+const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
+const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Direction {
     Peak,
@@ -290,7 +293,6 @@ where
                 }
                 let dynamic_loan_amount = U256::from(r0) / U256::from(100);
 
-                // Volatile Multi-Asset Logging format
                 println!("   🔥 [DYNAMIC SCAN] Pair Indexed: {:?}, Price Ratio: {:.6}", pool_address, live_price);
 
                 pool_results.push(PoolData {
@@ -306,7 +308,7 @@ where
 
     if pool_results.is_empty() {
         let fallback_addr = dynamic_pools.first().copied().unwrap_or_else(|| address!("0000000000000000000000000000000000000000"));
-        return Ok((1.0, fallback_addr, U256::from(1000000000000000000u64), fallback_addr, fallback_addr, vec![]));
+        return Ok((1.0, WETH_BASE, U256::from(1000000000000000000u64), fallback_addr, fallback_addr, vec![]));
     }
 
     let sum_price: f64 = pool_results.iter().map(|p| p.price).sum();
@@ -321,9 +323,18 @@ where
         })
         .unwrap();
 
+    // Enforce high-liquidity base asset selection (WETH or USDC) to clear BAL#528
+    let borrow_token = if best_pool.token0 == WETH_BASE || best_pool.token0 == USDC_BASE {
+        best_pool.token0
+    } else if best_pool.token1 == WETH_BASE || best_pool.token1 == USDC_BASE {
+        best_pool.token1
+    } else {
+        WETH_BASE
+    };
+
     let all_discovered_addresses: Vec<Address> = pool_results.iter().map(|p| p.pool_address).collect();
 
-    Ok((best_pool.price, best_pool.token0, best_pool.loan_amount, best_pool.token0, best_pool.token1, all_discovered_addresses))
+    Ok((best_pool.price, borrow_token, best_pool.loan_amount, best_pool.token0, best_pool.token1, all_discovered_addresses))
 }
 
 async fn trigger_on_chain_arbitrage<P>(
@@ -339,7 +350,7 @@ where
 {
     println!("🚀 [BOT -> CONTRACT] Executing Atomic Multi-Swap Command!");
     println!("🔗 Atomic Route Dispatched: Targets: {:?}, Payloads Count: {}", target_path.0, target_path.1.len());
-    println!("🪙 Dynamic Borrow Asset: {:?}, Loan Amount: {}", token_to_borrow, loan_amount);
+    println!("🪙 Forced High-Liquidity Borrow Asset: {:?}, Loan Amount: {}", token_to_borrow, loan_amount);
 
     if target_path.0.is_empty() { return Ok(()); }
 
@@ -350,20 +361,38 @@ where
 
     let contract = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
 
-    let tx_builder = contract.triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
+    // --- BALANCER-TO-AAVE FALLBACK ENGINE ---
+    let balancer_builder = contract.triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.clone())
         .from(signer_address);
 
-    println!("🧪 Running Simulation Call via HTTP Provider for wallet: {:?}", signer_address);
-    match tx_builder.call().await {
-        Ok(_simulation_result) => {
-            println!("✅ Simulation Passed Successfully! Sending Real Transaction...");
-            let pending_tx = tx_builder.send().await?;
+    println!("🧪 [BALANCER] Running Simulation Call via HTTP Provider...");
+    match balancer_builder.call().await {
+        Ok(_) => {
+            println!("✅ Balancer Simulation Passed Successfully! Dispatching Real Transaction...");
+            let pending_tx = balancer_builder.send().await?;
             println!("⏳ Transaction Sent! TX Hash: {:?}", pending_tx.tx_hash());
             let receipt = pending_tx.get_receipt().await?;
             println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
         }
-        Err(e) => {
-            println!("❌ Simulation Failed: {:?}. Aborting transaction to save gas.", e);
+        Err(e_balancer) => {
+            println!("⚠️ Balancer Simulation Failed ({:?}). Activating Aave Fallback Route...", e_balancer);
+
+            let aave_builder = contract.triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data)
+                .from(signer_address);
+
+            println!("🧪 [AAVE] Running Fallback Simulation Call...");
+            match aave_builder.call().await {
+                Ok(_) => {
+                    println!("✅ Aave Simulation Passed Successfully! Dispatching Real Transaction...");
+                    let pending_tx = aave_builder.send().await?;
+                    println!("⏳ Transaction Sent! TX Hash: {:?}", pending_tx.tx_hash());
+                    let receipt = pending_tx.get_receipt().await?;
+                    println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
+                }
+                Err(e_aave) => {
+                    println!("❌ Both Balancer and Aave Simulations Failed. Balancer Err: {:?}, Aave Err: {:?}. Aborting to save gas.", e_balancer, e_aave);
+                }
+            }
         }
     }
 
@@ -412,7 +441,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let block_num = block.inner.number;
         println!("📦 Live WSS Block Synced: #{} (Internal counter: {})", block_num, block_counter);
 
-        // Dynamically fetch the latest 200 pool addresses from the Aerodrome factory on Base
         let dynamic_pools = match fetch_dynamic_pools(http_provider.clone()).await {
             Ok(pools) => pools,
             Err(e) => {

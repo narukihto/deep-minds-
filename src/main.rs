@@ -342,7 +342,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📡 Activating HTTP Connection to: {}", alchemy_http_url);
     let http_provider = ProviderBuilder::new()
         .wallet(wallet.clone())
-        .on_http(alchemy_http_url.parse()?);
+        .connect_http(alchemy_http_url.parse()?);
 
     println!("📡 Activating WebSocket Connection to: {}", alchemy_wss_url);
     let ws = alloy::providers::WsConnect::new(alchemy_wss_url);
@@ -359,8 +359,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Some(block) = stream.next().await {
         block_counter += 1;
-        let block_num = block.inner.header.number;
-        println!("📦 Live WSS Block Synced: #{} (Internal counter: {})", block_num.unwrap_or(0), block_counter);
+        let block_num = block.inner.number;
+        println!("📦 Live WSS Block Synced: #{} (Internal counter: {})", block_num, block_counter);
 
         let (live_market_price, dynamic_token, dynamic_loan, token0, token1) = fetch_live_market_data(http_provider.clone(), &whitelist_pools).await?;
         let (direction, velocity) = radar.update_and_predict(live_market_price);

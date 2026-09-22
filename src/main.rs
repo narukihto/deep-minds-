@@ -74,14 +74,16 @@ pub struct CausalCollapseSystem {
     pub nodes: Vec<QuantumNode>,
     pub threshold_limit: f64,
     pub buffer_capacity: usize,
+    pub dynamic_pools: Vec<Address>,
 }
 
 impl CausalCollapseSystem {
-    pub fn new(nodes: Vec<QuantumNode>) -> Self {
+    pub fn new(nodes: Vec<QuantumNode>, dynamic_pools: Vec<Address>) -> Self {
         Self {
             nodes,
             threshold_limit: 0.02,
             buffer_capacity: 16,
+            dynamic_pools,
         }
     }
 
@@ -92,7 +94,9 @@ impl CausalCollapseSystem {
     }
 
     pub fn execute_collapse(&self) -> (Vec<Address>, Vec<Vec<u8>>) {
-        if self.nodes.is_empty() { return (vec![], vec![]); }
+        if self.nodes.is_empty() || self.dynamic_pools.is_empty() { 
+            return (vec![], vec![]); 
+        }
 
         let mut ordered_nodes = self.nodes.clone();
         ordered_nodes.sort_by(|a, b| b.energy_scale.cmp(&a.energy_scale));
@@ -167,20 +171,11 @@ impl CausalCollapseSystem {
             }
         }
 
-        let whitelist_pools = vec![
-            address!("cf77A3bA9Aab7D3E44917635033322DF3f564171"),
-            address!("2626664c2603336E57B271c5C0b26F421741e481"),
-            address!("198FEe7650eAC16286848227e24eC0DFA5e51DA5"),
-            address!("327Df1e6de05895D2Ab08513aADD931325260A99"),
-            address!("089A8e0F6fCE8e00138F9b6E7Ff5B2FCC4Ac9D94"),
-            address!("1b81D678ffb9C0263b24A97847620C99d213eB14"),
-        ];
-
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
         for (idx, node) in final_path.iter().enumerate() {
-            let pool = whitelist_pools[idx % whitelist_pools.len()];
+            let pool = self.dynamic_pools[idx % self.dynamic_pools.len()];
             addresses.push(pool);
 
             let swap_call = IUniswapV2Router02::swapExactTokensForTokensCall {
@@ -207,6 +202,12 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
 
 sol! {
     #[sol(rpc)]
+    contract IUniswapV2Factory {
+        function allPairs(uint256) external view returns (address pair);
+        function allPairsLength() external view returns (uint256);
+    }
+
+    #[sol(rpc)]
     contract IUniswapV2Pair {
         function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
         function token0() external view returns (address);
@@ -231,10 +232,33 @@ sol! {
     }
 }
 
+async fn fetch_dynamic_pools<P>(
+    http_provider: P,
+) -> Result<Vec<Address>, Box<dyn std::error::Error>>
+where
+    P: Provider<Ethereum> + Clone,
+{
+    let factory_address = address!("8909Dc15e40173Ff4699343b6eB8132c65e18eC6");
+    let factory = IUniswapV2Factory::new(factory_address, http_provider);
+
+    let length = factory.allPairsLength().call().await?;
+    let total_pairs = length.to::<u64>();
+    let start_index = if total_pairs > 200 { total_pairs - 200 } else { 0 };
+
+    let mut pool_addresses = Vec::new();
+    for i in start_index..total_pairs {
+        if let Ok(pair_address) = factory.allPairs(U256::from(i)).call().await {
+            pool_addresses.push(pair_address);
+        }
+    }
+
+    Ok(pool_addresses)
+}
+
 async fn fetch_live_market_data<P>(
     http_provider: P,
-    whitelist_pools: &[Address],
-) -> Result<(f64, Address, U256, Address, Address), Box<dyn std::error::Error>>
+    dynamic_pools: &[Address],
+) -> Result<(f64, Address, U256, Address, Address, Vec<Address>), Box<dyn std::error::Error>>
 where
     P: Provider<Ethereum> + Clone,
 {
@@ -248,7 +272,7 @@ where
 
     let mut pool_results = Vec::new();
 
-    for pool_address in whitelist_pools {
+    for pool_address in dynamic_pools {
         let pair_contract = IUniswapV2Pair::new(*pool_address, http_provider.clone());
         if let Ok(reserves) = pair_contract.getReserves().call().await {
             let r0 = reserves.reserve0;
@@ -266,8 +290,8 @@ where
                 }
                 let dynamic_loan_amount = U256::from(r0) / U256::from(100);
 
-                // Preserved individual pool target watch logging
-                println!("   📈 [TARGET WATCH] Pool: {:?}, Price: {:.6}, Token0: {:?}", pool_address, live_price, t0);
+                // Volatile Multi-Asset Logging format
+                println!("   🔥 [DYNAMIC SCAN] Pair Indexed: {:?}, Price Ratio: {:.6}", pool_address, live_price);
 
                 pool_results.push(PoolData {
                     price: live_price,
@@ -281,14 +305,15 @@ where
     }
 
     if pool_results.is_empty() {
-        return Ok((1.0, whitelist_pools[0], U256::from(1000000000000000000u64), whitelist_pools[0], whitelist_pools[0]));
+        let fallback_addr = dynamic_pools.first().copied().unwrap_or_else(|| address!("0000000000000000000000000000000000000000"));
+        return Ok((1.0, fallback_addr, U256::from(1000000000000000000u64), fallback_addr, fallback_addr, vec![]));
     }
 
     let sum_price: f64 = pool_results.iter().map(|p| p.price).sum();
     let avg_market_price = sum_price / pool_results.len() as f64;
 
     let best_pool = pool_results
-        .into_iter()
+        .iter()
         .max_by(|a, b| {
             let dev_a = (a.price - avg_market_price).abs();
             let dev_b = (b.price - avg_market_price).abs();
@@ -296,7 +321,9 @@ where
         })
         .unwrap();
 
-    Ok((best_pool.price, best_pool.token0, best_pool.loan_amount, best_pool.token0, best_pool.token1))
+    let all_discovered_addresses: Vec<Address> = pool_results.iter().map(|p| p.pool_address).collect();
+
+    Ok((best_pool.price, best_pool.token0, best_pool.loan_amount, best_pool.token0, best_pool.token1, all_discovered_addresses))
 }
 
 async fn trigger_on_chain_arbitrage<P>(
@@ -345,7 +372,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Predictive MEV Bot Core via Alloy...");
+    println!("🤖 Initializing Universal Dynamic Token Scanner Core via Alloy...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x5FbDB2315678afecb367f032d93F642f64180aa3".to_string());
@@ -361,15 +388,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let signer: PrivateKeySigner = private_key_str.parse()?;
     let signer_address = signer.address();
     let wallet = EthereumWallet::from(signer);
-
-    let whitelist_pools = vec![
-        address!("cf77A3bA9Aab7D3E44917635033322DF3f564171"),
-        address!("2626664c2603336E57B271c5C0b26F421741e481"),
-        address!("198FEe7650eAC16286848227e24eC0DFA5e51DA5"),
-        address!("327Df1e6de05895D2Ab08513aADD931325260A99"),
-        address!("089A8e0F6fCE8e00138F9b6E7Ff5B2FCC4Ac9D94"),
-        address!("1b81D678ffb9C0263b24A97847620C99d213eB14"),
-    ];
 
     println!("📡 Activating HTTP Connection to: {}", alchemy_http_url);
     let http_provider = ProviderBuilder::new()
@@ -394,8 +412,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let block_num = block.inner.number;
         println!("📦 Live WSS Block Synced: #{} (Internal counter: {})", block_num, block_counter);
 
-        // Explicitly calling fetch_live_market_data on every synced block
-        let (live_market_price, dynamic_token, dynamic_loan, token0, token1) = fetch_live_market_data(http_provider.clone(), &whitelist_pools).await?;
+        // Dynamically fetch the latest 200 pool addresses from the Aerodrome factory on Base
+        let dynamic_pools = match fetch_dynamic_pools(http_provider.clone()).await {
+            Ok(pools) => pools,
+            Err(e) => {
+                println!("❌ Error fetching dynamic factory pools: {:?}", e);
+                continue;
+            }
+        };
+
+        let (live_market_price, dynamic_token, dynamic_loan, token0, token1, scanned_addresses) = 
+            fetch_live_market_data(http_provider.clone(), &dynamic_pools).await?;
         
         println!("   📊 [METRIC FEED] Aggregated Price: {:.6}, Checking Velocity Pivots...", live_market_price);
 
@@ -413,7 +440,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("   ⚛️ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
             }
 
-            let system = CausalCollapseSystem::new(nodes);
+            let system = CausalCollapseSystem::new(nodes, scanned_addresses);
             let optimized_path = system.execute_collapse();
 
             if let Err(e) = trigger_on_chain_arbitrage(http_provider.clone(), contract_address, optimized_path, signer_address, dynamic_token, dynamic_loan).await {

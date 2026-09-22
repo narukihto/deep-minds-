@@ -65,6 +65,8 @@ pub struct QuantumNode {
     pub id: usize,
     pub energy_scale: BigUint,
     pub frequency: f64,
+    pub token0: Address,
+    pub token1: Address,
 }
 
 pub struct CausalCollapseSystem {
@@ -105,7 +107,7 @@ impl CausalCollapseSystem {
         let mut final_path = Vec::new();
         let mut skipped_buffer: Vec<&QuantumNode> = Vec::with_capacity(self.buffer_capacity);
 
-        final_path.push(active_nodes[0].id);
+        final_path.push(active_nodes[0].clone());
 
         let mut cumulative_frequency = active_nodes[0].frequency;
         let mut active_count = 1.0;
@@ -139,7 +141,7 @@ impl CausalCollapseSystem {
             let combined_resonance = pure_dev * scale_factor;
 
             if combined_resonance <= self.threshold_limit {
-                final_path.push(next.id);
+                final_path.push(next.clone());
                 cumulative_frequency += next.frequency;
                 active_count += 1.0;
             } else {
@@ -160,7 +162,7 @@ impl CausalCollapseSystem {
 
             let scale_factor = 1.0 / (buffered_node.energy_scale.to_f64().unwrap_or(1.0) + 1.0);
             if pure_raw_dev * scale_factor <= self.threshold_limit {
-                final_path.push(buffered_node.id);
+                final_path.push(buffered_node.clone());
             }
         }
 
@@ -176,15 +178,15 @@ impl CausalCollapseSystem {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        for (idx, id) in final_path.iter().enumerate() {
+        for (idx, node) in final_path.iter().enumerate() {
             let pool = whitelist_pools[idx % whitelist_pools.len()];
             addresses.push(pool);
 
-            // Real ABI Encoding using Alloy sol! generated contract call structs for Uniswap V2 / V3 routers
+            // Correctly map underlying tokens instead of pool addresses for the router swap path
             let swap_call = IUniswapV2Router02::swapExactTokensForTokensCall {
                 amountIn: U256::from(1000000000000000000u64),
                 amountOutMin: U256::ZERO,
-                path: vec![pool, pool], // Expanded dynamically via market context
+                path: vec![node.token0, node.token1],
                 to: pool,
                 deadline: U256::from(u64::MAX),
             };
@@ -232,13 +234,15 @@ sol! {
 async fn fetch_live_market_data<P>(
     http_provider: P,
     whitelist_pools: &[Address],
-) -> Result<(f64, Address, U256), Box<dyn std::error::Error>>
+) -> Result<(f64, Address, U256, Address, Address), Box<dyn std::error::Error>>
 where
     P: Provider<Http<alloy::transports::http::Client>, Ethereum> + Clone,
 {
     let mut latest_price = 1.0;
-    let mut dynamic_token_to_borrow = whitelist_pools[0]; // Dynamic default initialization from whitelist
+    let mut dynamic_token_to_borrow = whitelist_pools[0];
     let mut dynamic_loan_amount = U256::from(1000000000000000000u64);
+    let mut t0 = whitelist_pools[0];
+    let mut t1 = whitelist_pools[0];
 
     for pool_address in whitelist_pools {
         let pair_contract = IUniswapV2Pair::new(*pool_address, http_provider.clone());
@@ -247,16 +251,20 @@ where
             let r1 = reserves.reserve1;
             if r0 > 0 && r1 > 0 {
                 latest_price = (r1 as f64) / (r0 as f64);
-                if let Ok(t0) = pair_contract.token0().call().await {
-                    dynamic_token_to_borrow = t0._0;
+                if let Ok(token0_res) = pair_contract.token0().call().await {
+                    t0 = token0_res._0;
+                    dynamic_token_to_borrow = t0;
                 }
-                dynamic_loan_amount = U256::from(r0 / 100); // 1% of current reserve depth
+                if let Ok(token1_res) = pair_contract.token1().call().await {
+                    t1 = token1_res._0;
+                }
+                dynamic_loan_amount = U256::from(r0 / 100);
                 break;
             }
         }
     }
 
-    Ok((latest_price, dynamic_token_to_borrow, dynamic_loan_amount))
+    Ok((latest_price, dynamic_token_to_borrow, dynamic_loan_amount, t0, t1))
 }
 
 async fn trigger_on_chain_arbitrage<P>(
@@ -355,16 +363,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let block_num = block.header.number;
         println!("📦 Live WSS Block Synced: #{} (Internal counter: {})", block_num.unwrap_or(0), block_counter);
 
-        // Fetch real market prices and dynamic token parameters from live chain reserves
-        let (live_market_price, dynamic_token, dynamic_loan) = fetch_live_market_data(http_provider.clone(), &whitelist_pools).await?;
+        let (live_market_price, dynamic_token, dynamic_loan, token0, token1) = fetch_live_market_data(http_provider.clone(), &whitelist_pools).await?;
         let (direction, velocity) = radar.update_and_predict(live_market_price);
 
         if direction == Direction::Peak || direction == Direction::Bottom {
             println!("⚡ [RADAR ALERT] Velocity Pivot Discovered: {:.4}", velocity);
             let nodes = vec![
-                QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000usize), frequency: live_market_price },
-                QuantumNode { id: 2, energy_scale: generate_astronomical_number(1000usize), frequency: 0.01 },
-                QuantumNode { id: 3, energy_scale: generate_astronomical_number(1000usize), frequency: 0.015 },
+                QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000usize), frequency: live_market_price, token0, token1 },
+                QuantumNode { id: 2, energy_scale: generate_astronomical_number(1000usize), frequency: 0.01, token0, token1 },
+                QuantumNode { id: 3, energy_scale: generate_astronomical_number(1000usize), frequency: 0.015, token0, token1 },
             ];
             let system = CausalCollapseSystem::new(nodes);
             let optimized_path = system.execute_collapse();

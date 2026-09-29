@@ -276,17 +276,15 @@ where
 
     for pool_address in dynamic_pools {
         let pair_contract = IUniswapV2Pair::new(*pool_address, http_provider.clone());
-        multicall = multicall.add_call_dynamic(pair_contract.getReserves().into_call(false));
-        multicall = multicall.add_call_dynamic(pair_contract.token0().into_call(false));
-        multicall = multicall.add_call_dynamic(pair_contract.token1().into_call(false));
+        multicall = multicall.add_raw(*pool_address, pair_contract.getReserves().abi_encode());
+        multicall = multicall.add_raw(*pool_address, pair_contract.token0().abi_encode());
+        multicall = multicall.add_raw(*pool_address, pair_contract.token1().abi_encode());
     }
 
     let mut pool_results = Vec::new();
 
-    // Single-hit RPC broadcast via Multicall builder aggregate capturing Vec<Bytes>
     match multicall.aggregate().await {
         Ok(results) => {
-            // Results are returned in the exact order calls were added (3 calls per pool)
             for (i, pool_address) in dynamic_pools.iter().enumerate() {
                 let base_idx = i * 3;
                 let reserves_opt = results.get(base_idx).and_then(|v| {
@@ -468,7 +466,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let block_num = block.inner.number;
         println!("📦 Live WSS Block Synced: #{} (Internal counter: {})", block_num, block_counter);
 
-        // Reuse the cached pool list with Multicall optimization instead of querying sequentially
         let (live_market_price, dynamic_token, dynamic_loan, token0, token1, scanned_addresses) = 
             fetch_live_market_data(http_provider.clone(), &cached_pools).await?;
         

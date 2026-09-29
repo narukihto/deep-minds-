@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use std::time::Instant;
 use futures_util::StreamExt;
 use alloy::{
-    providers::{Provider, ProviderBuilder, MulticallBuilder},
+    providers::{Provider, ProviderBuilder, MulticallBuilder, MulticallItem},
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256},
@@ -276,9 +276,9 @@ where
 
     for pool_address in dynamic_pools {
         let pair_contract = IUniswapV2Pair::new(*pool_address, http_provider.clone());
-        multicall = multicall.add_call(pair_contract.getReserves().into_call());
-        multicall = multicall.add_call(pair_contract.token0().into_call());
-        multicall = multicall.add_call(pair_contract.token1().into_call());
+        multicall = multicall.add_call_dynamic(pair_contract.getReserves().into_call(false));
+        multicall = multicall.add_call_dynamic(pair_contract.token0().into_call(false));
+        multicall = multicall.add_call_dynamic(pair_contract.token1().into_call(false));
     }
 
     let mut pool_results = Vec::new();
@@ -389,7 +389,7 @@ where
             println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
         }
         Err(e_balancer) => {
-            println!("⚠️ Balancer Simulation Failed ({:?}). Activating Aave Fallback Route...", e_balancer);
+            println!("⚠️️ Balancer Simulation Failed ({:?}). Activating Aave Fallback Route...", e_balancer);
 
             let aave_builder = contract.triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
                 .from(signer_address);

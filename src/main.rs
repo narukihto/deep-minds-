@@ -10,7 +10,7 @@ use alloy::{
     primitives::{address, Address, U256},
     sol,
     sol_types::SolCall,
-    contract::Multicall,
+    contract::multicall::Multicall,
 };
 
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
@@ -480,7 +480,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ];
 
             for node in &nodes {
-                println!("   ⚛️ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
+                println!("   ⚛️️ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
             }
 
             let system = CausalCollapseSystem::new(nodes, scanned_addresses);

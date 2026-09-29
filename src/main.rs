@@ -4,13 +4,12 @@ use rayon::prelude::*;
 use std::time::Instant;
 use futures_util::StreamExt;
 use alloy::{
-    providers::{Provider, ProviderBuilder},
+    providers::{Provider, ProviderBuilder, MulticallBuilder},
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256},
     sol,
     sol_types::SolCall,
-    contract::multicall::Multicall,
 };
 
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
@@ -273,18 +272,18 @@ where
         pool_address: Address,
     }
 
-    let mut multicall = Multicall::new(http_provider.clone());
+    let mut multicall = http_provider.multicall().dynamic();
 
     for pool_address in dynamic_pools {
         let pair_contract = IUniswapV2Pair::new(*pool_address, http_provider.clone());
-        multicall.add(pair_contract.getReserves());
-        multicall.add(pair_contract.token0());
-        multicall.add(pair_contract.token1());
+        multicall = multicall.add_call(pair_contract.getReserves());
+        multicall = multicall.add_call(pair_contract.token0());
+        multicall = multicall.add_call(pair_contract.token1());
     }
 
     let mut pool_results = Vec::new();
 
-    // Single-hit RPC broadcast via Multicall aggregate constructor
+    // Single-hit RPC broadcast via Multicall builder aggregate
     match multicall.aggregate().await {
         Ok(results) => {
             // Results are returned in the exact order calls were added (3 calls per pool)
@@ -480,7 +479,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ];
 
             for node in &nodes {
-                println!("   ⚛️️ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
+                println!("   ⚛ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
             }
 
             let system = CausalCollapseSystem::new(nodes, scanned_addresses);

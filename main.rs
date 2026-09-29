@@ -4,13 +4,12 @@ use rayon::prelude::*;
 use std::time::Instant;
 use futures_util::StreamExt;
 use alloy::{
-    providers::{Provider, ProviderBuilder},
+    providers::{Provider, ProviderBuilder, MulticallBuilder},
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256},
     sol,
     sol_types::SolCall,
-    contract::Multicall,
 };
 
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
@@ -273,26 +272,32 @@ where
         pool_address: Address,
     }
 
-    let mut multicall = Multicall::new(http_provider.clone());
+    let mut multicall = http_provider.multicall().dynamic();
 
     for pool_address in dynamic_pools {
         let pair_contract = IUniswapV2Pair::new(*pool_address, http_provider.clone());
-        multicall.add(pair_contract.getReserves());
-        multicall.add(pair_contract.token0());
-        multicall.add(pair_contract.token1());
+        multicall = multicall.add_call(pair_contract.getReserves().into_call());
+        multicall = multicall.add_call(pair_contract.token0().into_call());
+        multicall = multicall.add_call(pair_contract.token1().into_call());
     }
 
     let mut pool_results = Vec::new();
 
-    // Single-hit RPC broadcast via Multicall aggregate constructor
+    // Single-hit RPC broadcast via Multicall builder aggregate capturing Vec<Bytes>
     match multicall.aggregate().await {
         Ok(results) => {
             // Results are returned in the exact order calls were added (3 calls per pool)
             for (i, pool_address) in dynamic_pools.iter().enumerate() {
                 let base_idx = i * 3;
-                let reserves_opt = results.get(base_idx).and_then(|v| IUniswapV2Pair::getReservesCall::abi_decode_returns(v).ok());
-                let t0_opt = results.get(base_idx + 1).and_then(|v| IUniswapV2Pair::token0Call::abi_decode_returns(v).ok());
-                let t1_opt = results.get(base_idx + 2).and_then(|v| IUniswapV2Pair::token1Call::abi_decode_returns(v).ok());
+                let reserves_opt = results.get(base_idx).and_then(|v| {
+                    IUniswapV2Pair::getReservesCall::abi_decode_returns(v.as_ref()).ok()
+                });
+                let t0_opt = results.get(base_idx + 1).and_then(|v| {
+                    IUniswapV2Pair::token0Call::abi_decode_returns(v.as_ref()).ok()
+                });
+                let t1_opt = results.get(base_idx + 2).and_then(|v| {
+                    IUniswapV2Pair::token1Call::abi_decode_returns(v.as_ref()).ok()
+                });
 
                 if let (Some(reserves), Some(t0), Some(t1)) = (reserves_opt, t0_opt, t1_opt) {
                     let r0 = reserves.reserve0;
@@ -313,7 +318,7 @@ where
             }
         }
         Err(e) => {
-            println!("⚠️ Multicall batch execution failed: {:?}. Falling back...", e);
+            eprintln!("⚠️ Failed to execute dynamic Multicall batch RPC: {:?}", e);
         }
     }
 
@@ -480,7 +485,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ];
 
             for node in &nodes {
-                println!("   ⚛️ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
+                println!("   ⚛ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
             }
 
             let system = CausalCollapseSystem::new(nodes, scanned_addresses);

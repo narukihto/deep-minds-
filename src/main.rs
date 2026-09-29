@@ -1,3 +1,4 @@
+
 use num_bigint::BigUint;
 use num_traits::{ToPrimitive, One};
 use rayon::prelude::*;
@@ -283,15 +284,21 @@ where
 
     let mut pool_results = Vec::new();
 
-    // Single-hit RPC broadcast via Multicall builder aggregate
+    // Single-hit RPC broadcast via Multicall builder aggregate capturing Vec<Bytes>
     match multicall.aggregate().await {
         Ok(results) => {
             // Results are returned in the exact order calls were added (3 calls per pool)
             for (i, pool_address) in dynamic_pools.iter().enumerate() {
                 let base_idx = i * 3;
-                let reserves_opt = results.get(base_idx).and_then(|v| IUniswapV2Pair::getReservesCall::abi_decode_returns(v).ok());
-                let t0_opt = results.get(base_idx + 1).and_then(|v| IUniswapV2Pair::token0Call::abi_decode_returns(v).ok());
-                let t1_opt = results.get(base_idx + 2).and_then(|v| IUniswapV2Pair::token1Call::abi_decode_returns(v).ok());
+                let reserves_opt = results.get(base_idx).and_then(|v| {
+                    IUniswapV2Pair::getReservesCall::abi_decode_returns(v.as_ref()).ok()
+                });
+                let t0_opt = results.get(base_idx + 1).and_then(|v| {
+                    IUniswapV2Pair::token0Call::abi_decode_returns(v.as_ref()).ok()
+                });
+                let t1_opt = results.get(base_idx + 2).and_then(|v| {
+                    IUniswapV2Pair::token1Call::abi_decode_returns(v.as_ref()).ok()
+                });
 
                 if let (Some(reserves), Some(t0), Some(t1)) = (reserves_opt, t0_opt, t1_opt) {
                     let r0 = reserves.reserve0;
@@ -312,7 +319,7 @@ where
             }
         }
         Err(e) => {
-            println!("⚠️ Multicall batch execution failed: {:?}. Falling back...", e);
+            eprintln!("⚠️ Failed to execute dynamic Multicall batch RPC: {:?}", e);
         }
     }
 

@@ -1,4 +1,3 @@
-
 use num_bigint::BigUint;
 use num_traits::{ToPrimitive, One};
 use rayon::prelude::*;
@@ -273,18 +272,18 @@ where
         pool_address: Address,
     }
 
-    let mut multicall = http_provider.multicall().dynamic();
+    let mut multicall = http_provider.multicall();
 
     for pool_address in dynamic_pools {
         let pair_contract = IUniswapV2Pair::new(*pool_address, http_provider.clone());
-        multicall = multicall.add_call(pair_contract.getReserves());
-        multicall = multicall.add_call(pair_contract.token0());
-        multicall = multicall.add_call(pair_contract.token1());
+        multicall = multicall.add(pair_contract.getReserves());
+        multicall = multicall.add(pair_contract.token0());
+        multicall = multicall.add(pair_contract.token1());
     }
 
     let mut pool_results = Vec::new();
 
-    // Single-hit RPC broadcast via Multicall builder aggregate capturing Vec<Bytes>
+    // Single-hit RPC broadcast via Multicall builder aggregate capturing results
     match multicall.aggregate().await {
         Ok(results) => {
             // Results are returned in the exact order calls were added (3 calls per pool)
@@ -319,7 +318,7 @@ where
             }
         }
         Err(e) => {
-            eprintln!("⚠️ Failed to execute dynamic Multicall batch RPC: {:?}", e);
+            eprintln!("⚠️ Failed to execute Multicall batch RPC: {:?}", e);
         }
     }
 

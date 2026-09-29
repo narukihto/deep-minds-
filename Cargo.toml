@@ -4,21 +4,21 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# إدارة المهام غير المتزامنة بكامل ميزاتها
+# Async runtime with full feature set for HFT environment
 tokio = { version = "1", features = ["full"] }
 
-# إصدار Alloy المستقر والحديث لعام 2026 مع تفعيل حزم الـ RPC والـ WebSockets والـ Signers
-alloy = { version = "2", features = ["full", "pubsub", "signers"] }
+# Alloy v2.5+ configuration ensuring Contract and PubSub/WS engines are explicitly compiled
+alloy = { version = "2.5", features = ["full", "pubsub", "signers", "contract", "providers"] }
 
-# إدارة الأخطاء المرنة المستخدمة في كود البوت الخاص بك
+# Flexible error handling architecture
 eyre = "0.6"
 
-# المكتبات الحسابية لعمليات الـ BigUint والـ f64 الخاصة بالمعادلات الابتكارية
+# Mathematical frameworks for high-precision BigUint calculations
 num-bigint = "0.4"
 num-traits = "0.2"
 
-# معالجة المهام المتوازية الفائقة لتسريع معالجة العقد الحسابية
+# Ultra-fast parallel computing via rayon data-parallelism library
 rayon = "1.10"
 
-# التعامل مع تدفق البيانات والـ Streams القادمة من البلوكشين
+# High-performance stream management for processing blockchain events
 futures-util = "0.3"

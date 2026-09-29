@@ -272,18 +272,18 @@ where
         pool_address: Address,
     }
 
-    let mut multicall = http_provider.multicall();
+    let mut multicall = http_provider.multicall().dynamic();
 
     for pool_address in dynamic_pools {
         let pair_contract = IUniswapV2Pair::new(*pool_address, http_provider.clone());
-        multicall = multicall.add(pair_contract.getReserves());
-        multicall = multicall.add(pair_contract.token0());
-        multicall = multicall.add(pair_contract.token1());
+        multicall = multicall.add_call_dynamic(pair_contract.getReserves());
+        multicall = multicall.add_call_dynamic(pair_contract.token0());
+        multicall = multicall.add_call_dynamic(pair_contract.token1());
     }
 
     let mut pool_results = Vec::new();
 
-    // Single-hit RPC broadcast via Multicall builder aggregate capturing results
+    // Single-hit RPC broadcast via Multicall builder aggregate capturing Vec<Bytes>
     match multicall.aggregate().await {
         Ok(results) => {
             // Results are returned in the exact order calls were added (3 calls per pool)
@@ -318,7 +318,7 @@ where
             }
         }
         Err(e) => {
-            eprintln!("⚠️ Failed to execute Multicall batch RPC: {:?}", e);
+            eprintln!("⚠️ Failed to execute dynamic Multicall batch RPC: {:?}", e);
         }
     }
 
@@ -389,7 +389,7 @@ where
             println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
         }
         Err(e_balancer) => {
-            println!("⚠️ Balancer Simulation Failed ({:?}). Activating Aave Fallback Route...", e_balancer);
+            println!("⚠️️ Balancer Simulation Failed ({:?}). Activating Aave Fallback Route...", e_balancer);
 
             let aave_builder = contract.triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
                 .from(signer_address);

@@ -10,6 +10,7 @@ use alloy::{
     primitives::{address, Address, U256},
     sol,
     sol_types::SolCall,
+    contract::multicall::Multicall,
 };
 
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
@@ -272,34 +273,47 @@ where
         pool_address: Address,
     }
 
-    let mut pool_results = Vec::new();
+    let mut multicall = Multicall::new(http_provider.clone());
 
     for pool_address in dynamic_pools {
         let pair_contract = IUniswapV2Pair::new(*pool_address, http_provider.clone());
-        if let Ok(reserves) = pair_contract.getReserves().call().await {
-            let r0 = reserves.reserve0;
-            let r1 = reserves.reserve1;
-            if r0 > 0 && r1 > 0 {
-                let live_price = r1.to::<u128>() as f64 / r0.to::<u128>() as f64;
-                let mut t0 = *pool_address;
-                let mut t1 = *pool_address;
+        multicall.add(pair_contract.getReserves());
+        multicall.add(pair_contract.token0());
+        multicall.add(pair_contract.token1());
+    }
 
-                if let Ok(token0_res) = pair_contract.token0().call().await {
-                    t0 = token0_res;
-                }
-                if let Ok(token1_res) = pair_contract.token1().call().await {
-                    t1 = token1_res;
-                }
-                let dynamic_loan_amount = U256::from(r0) / U256::from(100);
+    let mut pool_results = Vec::new();
 
-                pool_results.push(PoolData {
-                    price: live_price,
-                    token0: t0,
-                    token1: t1,
-                    loan_amount: dynamic_loan_amount,
-                    pool_address: *pool_address,
-                });
+    // Single-hit RPC broadcast via Multicall aggregate constructor
+    match multicall.aggregate().await {
+        Ok(results) => {
+            // Results are returned in the exact order calls were added (3 calls per pool)
+            for (i, pool_address) in dynamic_pools.iter().enumerate() {
+                let base_idx = i * 3;
+                if let (Ok(reserves), Ok(t0), Ok(t1)) = (
+                    results.get(base_idx).and_then(|v| IUniswapV2Pair::getReservesCall::abi_decode_returns(v, true)),
+                    results.get(base_idx + 1).and_then(|v| IUniswapV2Pair::token0Call::abi_decode_returns(v, true)),
+                    results.get(base_idx + 2).and_then(|v| IUniswapV2Pair::token1Call::abi_decode_returns(v, true)),
+                ) {
+                    let r0 = reserves.reserve0;
+                    let r1 = reserves.reserve1;
+                    if r0 > 0 && r1 > 0 {
+                        let live_price = r1.to::<u128>() as f64 / r0.to::<u128>() as f64;
+                        let dynamic_loan_amount = U256::from(r0) / U256::from(100);
+
+                        pool_results.push(PoolData {
+                            price: live_price,
+                            token0: t0._0,
+                            token1: t1._0,
+                            loan_amount: dynamic_loan_amount,
+                            pool_address: *pool_address,
+                        });
+                    }
+                }
             }
+        }
+        Err(e) => {
+            println!("⚠️ Multicall batch execution failed: {:?}. Falling back...", e);
         }
     }
 
@@ -449,7 +463,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let block_num = block.inner.number;
         println!("📦 Live WSS Block Synced: #{} (Internal counter: {})", block_num, block_counter);
 
-        // Reuse the cached pool list instead of querying factory length on every block
+        // Reuse the cached pool list with Multicall optimization instead of querying sequentially
         let (live_market_price, dynamic_token, dynamic_loan, token0, token1, scanned_addresses) = 
             fetch_live_market_data(http_provider.clone(), &cached_pools).await?;
         

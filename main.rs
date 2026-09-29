@@ -10,7 +10,7 @@ use alloy::{
     primitives::{address, Address, U256},
     sol,
     sol_types::SolCall,
-    contract::multicall::Multicall,
+    contract::Multicall,
 };
 
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
@@ -290,11 +290,11 @@ where
             // Results are returned in the exact order calls were added (3 calls per pool)
             for (i, pool_address) in dynamic_pools.iter().enumerate() {
                 let base_idx = i * 3;
-                if let (Ok(reserves), Ok(t0), Ok(t1)) = (
-                    results.get(base_idx).and_then(|v| IUniswapV2Pair::getReservesCall::abi_decode_returns(v, true)),
-                    results.get(base_idx + 1).and_then(|v| IUniswapV2Pair::token0Call::abi_decode_returns(v, true)),
-                    results.get(base_idx + 2).and_then(|v| IUniswapV2Pair::token1Call::abi_decode_returns(v, true)),
-                ) {
+                let reserves_opt = results.get(base_idx).and_then(|v| IUniswapV2Pair::getReservesCall::abi_decode_returns(v).ok());
+                let t0_opt = results.get(base_idx + 1).and_then(|v| IUniswapV2Pair::token0Call::abi_decode_returns(v).ok());
+                let t1_opt = results.get(base_idx + 2).and_then(|v| IUniswapV2Pair::token1Call::abi_decode_returns(v).ok());
+
+                if let (Some(reserves), Some(t0), Some(t1)) = (reserves_opt, t0_opt, t1_opt) {
                     let r0 = reserves.reserve0;
                     let r1 = reserves.reserve1;
                     if r0 > 0 && r1 > 0 {

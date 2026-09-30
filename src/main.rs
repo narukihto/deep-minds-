@@ -217,6 +217,11 @@ sol! {
     }
 
     #[sol(rpc)]
+    contract IERC20 {
+        function decimals() external view returns (uint8);
+    }
+
+    #[sol(rpc)]
     contract IUniswapV2Router02 {
         function swapExactTokensForTokens(
             uint256 amountIn,
@@ -274,44 +279,49 @@ where
 
     let mut pool_results = Vec::new();
 
-    for chunk in dynamic_pools.chunks(4) {
+    // تقليص الدفعة إلى حوضين (6 استعلامات فقط) لإتاحة المجال لجلب الـ Decimals بدقة دون تجاوز حدود الـ Tuples
+    for chunk in dynamic_pools.chunks(2) {
         if chunk.is_empty() {
             continue;
         }
 
-        let mut batch_pools = [chunk[0]; 4];
+        let mut batch_pools = [chunk[0]; 2];
         for (i, &addr) in chunk.iter().enumerate() {
             batch_pools[i] = addr;
         }
 
         let p0 = IUniswapV2Pair::new(batch_pools[0], http_provider.clone());
         let p1 = IUniswapV2Pair::new(batch_pools[1], http_provider.clone());
-        let p2 = IUniswapV2Pair::new(batch_pools[2], http_provider.clone());
-        let p3 = IUniswapV2Pair::new(batch_pools[3], http_provider.clone());
 
         let multicall = http_provider.multicall()
             .add(p0.getReserves()).add(p0.token0()).add(p0.token1())
-            .add(p1.getReserves()).add(p1.token0()).add(p1.token1())
-            .add(p2.getReserves()).add(p2.token0()).add(p2.token1())
-            .add(p3.getReserves()).add(p3.token0()).add(p3.token1());
+            .add(p1.getReserves()).add(p1.token0()).add(p1.token1());
 
         match multicall.aggregate().await {
             Ok(res) => {
                 let (
                     res0, t0_0, t1_0,
                     res1, t0_1, t1_1,
-                    res2, t0_2, t1_2,
-                    res3, t0_3, t1_3,
                 ) = res;
 
+                let token0_addr_0 = Address::from(t0_0.0);
+                let token1_addr_0 = Address::from(t1_0.0);
+                let token0_addr_1 = Address::from(t0_1.0);
+                let token1_addr_1 = Address::from(t1_1.0);
+
+                // جلب الـ Decimals بشكل آمن لكل توكن
+                let dec0_0 = IERC20::new(token0_addr_0, http_provider.clone()).decimals().call().await.unwrap_or(18);
+                let dec1_0 = IERC20::new(token1_addr_0, http_provider.clone()).decimals().call().await.unwrap_or(18);
+                
+                let dec0_1 = IERC20::new(token0_addr_1, http_provider.clone()).decimals().call().await.unwrap_or(18);
+                let dec1_1 = IERC20::new(token1_addr_1, http_provider.clone()).decimals().call().await.unwrap_or(18);
+
                 let batch_items = [
-                    (batch_pools[0], res0, t0_0, t1_0),
-                    (batch_pools[1], res1, t0_1, t1_1),
-                    (batch_pools[2], res2, t0_2, t1_2),
-                    (batch_pools[3], res3, t0_3, t1_3),
+                    (batch_pools[0], res0, token0_addr_0, token1_addr_0, dec0_0._0, dec1_0._0),
+                    (batch_pools[1], res1, token0_addr_1, token1_addr_1, dec0_1._0, dec1_1._0),
                 ];
 
-                for (idx, (pool_addr, reserves, t0, t1)) in batch_items.iter().enumerate() {
+                for (idx, (pool_addr, reserves, t0, t1, d0, d1)) in batch_items.iter().enumerate() {
                     if idx >= chunk.len() {
                         break; 
                     }
@@ -320,15 +330,16 @@ where
                     let r1_val = U256::from(reserves.reserve1);
 
                     if r0_val > U256::ZERO && r1_val > U256::ZERO {
-                        let r0_f = r0_val.to::<u128>() as f64;
-                        let r1_f = r1_val.to::<u128>() as f64;
-                        let live_price = r1_f / r0_f;
+                        let r0_f = r0_val.to::<f64>().unwrap_or(1.0) / 10f64.powi(*d0 as i32);
+                        let r1_f = r1_val.to::<f64>().unwrap_or(1.0) / 10f64.powi(*d1 as i32);
+                        
+                        let live_price = if r0_f > 0.0 { r1_f / r0_f } else { 0.0 };
                         let dynamic_loan_amount = r0_val / U256::from(100);
 
                         pool_results.push(PoolData {
                             price: live_price,
-                            token0: Address::from(t0.0), // تم التحديث والتحويل السليم هنا
-                            token1: Address::from(t1.0), // تم التحديث والتحويل السليم هنا
+                            token0: *t0,
+                            token1: *t1,
                             loan_amount: dynamic_loan_amount,
                             pool_address: *pool_addr,
                         });

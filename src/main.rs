@@ -78,15 +78,17 @@ pub struct CausalCollapseSystem {
     pub threshold_limit: f64,
     pub buffer_capacity: usize,
     pub dynamic_pools: Vec<Address>,
+    pub contract_address: Address, // ✅ إضافة عنوان العقد الذكي هنا لضبط وجهة الأرباح
 }
 
 impl CausalCollapseSystem {
-    pub fn new(nodes: Vec<QuantumNode>, dynamic_pools: Vec<Address>) -> Self {
+    pub fn new(nodes: Vec<QuantumNode>, dynamic_pools: Vec<Address>, contract_address: Address) -> Self {
         Self {
             nodes,
             threshold_limit: 0.02,
             buffer_capacity: 16,
             dynamic_pools,
+            contract_address,
         }
     }
 
@@ -185,7 +187,7 @@ impl CausalCollapseSystem {
                 amountIn: U256::from(1000000000000000000u64),
                 amountOutMin: U256::ZERO,
                 path: vec![node.token0, node.token1],
-                to: pool,
+                to: self.contract_address, // ✅ توجيه ناتج المبادلة مباشرة إلى عقدك الذكي لتجاوز فشل الإعادة (Revert)
                 deadline: U256::from(u64::MAX),
             };
             payloads.push(swap_call.abi_encode());
@@ -311,7 +313,7 @@ where
 
                 let dec0_0 = IERC20::new(token0_addr_0, http_provider.clone()).decimals().call().await.unwrap_or(18);
                 let dec1_0 = IERC20::new(token1_addr_0, http_provider.clone()).decimals().call().await.unwrap_or(18);
-                
+
                 let dec0_1 = IERC20::new(token0_addr_1, http_provider.clone()).decimals().call().await.unwrap_or(18);
                 let dec1_1 = IERC20::new(token1_addr_1, http_provider.clone()).decimals().call().await.unwrap_or(18);
 
@@ -328,14 +330,14 @@ where
                     let r0_val = U256::from(reserves.reserve0);
                     let r1_val = U256::from(reserves.reserve1);
 
-                    // 🛡️ فحص السيولة الدنيا لتفادي أحواض ميتة تسبب Revert (code: 3)
+                    // 🛡️️ فحص السيولة الدنيا لتفادي أحواض ميتة تسبب Revert (code: 3)
                     if r0_val > U256::from(1000) && r1_val > U256::from(1000) {
                         let r0_f: f64 = r0_val.to_string().parse().unwrap_or(0.0);
                         let r1_f: f64 = r1_val.to_string().parse().unwrap_or(0.0);
 
                         let r0_adjusted = r0_f / 10f64.powi(*d0 as i32);
                         let r1_adjusted = r1_f / 10f64.powi(*d1 as i32);
-                        
+
                         let live_price = if r0_adjusted > 0.0 { r1_adjusted / r0_adjusted } else { 0.0 };
                         let dynamic_loan_amount = r0_val / U256::from(100);
 
@@ -428,7 +430,7 @@ where
         }
         Err(e_balancer) => {
             println!("⚠ Balancer Simulation Failed ({:?}). Activating Aave Fallback Route...", e_balancer);
-            
+
             sleep(Duration::from_millis(150)).await;
 
             let aave_builder = contract.triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
@@ -514,7 +516,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let (live_market_price, dynamic_token, dynamic_loan, token0, token1, scanned_addresses) = 
             fetch_live_market_data(http_provider.clone(), &cached_pools).await?;
-        
+
         println!("   📊 [METRIC FEED] Aggregated Price: {:.6}, Checking Velocity Pivots...", live_market_price);
 
         let (direction, velocity) = radar.update_and_predict(live_market_price);
@@ -522,27 +524,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if direction == Direction::Peak || direction == Direction::Bottom {
             println!("⚡ [RADAR ALERT] Velocity Pivot Discovered: {:.4}", velocity);
             let nodes = vec![
-                QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000usize), frequency: live_market_price, token0, token1 },
-                QuantumNode { id: 2, energy_scale: generate_astronomical_number(1000usize), frequency: 0.01, token0, token1 },
-                QuantumNode { id: 3, energy_scale: generate_astronomical_number(1000usize), frequency: 0.015, token0, token1 },
-            ];
-
-            for node in &nodes {
-                println!("   ⚛️ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
-            }
-
-            let system = CausalCollapseSystem::new(nodes, scanned_addresses);
-            let optimized_path = system.execute_collapse();
-
-            if let Err(e) = trigger_on_chain_arbitrage(http_provider.clone(), contract_address, optimized_path, signer_address, dynamic_token, dynamic_loan).await {
-                println!("❌ Error executing on-chain command: {:?}", e);
-            }
-        }
-
-        // 🛡️ فترة راحة قصيرة بين معالجة البلوكات لتخفيف استهلاك الـ Compute Units
-        sleep(Duration::from_millis(100)).await;
-    }
-
-    println!("🏁 Live stream processing terminated.");
-    Ok(())
-}
+                QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000usize), frequency:

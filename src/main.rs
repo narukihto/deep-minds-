@@ -377,89 +377,134 @@ async fn fetch_live_market_data<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    let pairs_config = vec![
-        (
-            USDC_BASE,
-            address!("B4885Bc4757b22775b47c0b31a24d588865d64c1"),
-            address!("d0b53D9277d7407987AF31b2A31BCCD68F5d7a75"),
-            U256::from(10_000_000_000_000_000u64),
-        ),
-        (
-            CBBTC_BASE,
-            address!("0606B4916aFDb81249bCBF51A18671b26CCf7D6C"),
-            address!("2A1c9966EEb6D649AA3b49F4472d24CE7F99FdAc"),
-            U256::from(1_000_000_000_000_000u64),
-        ),
-        (
-            AERO_BASE,
-            address!("7f670f66e028D139613b482276563c65c69AD752"),
-            address!("16629737119B61E47eDb8095AA508823f9E42Bdf"),
-            U256::from(10_000_000_000_000_000u64),
-        ),
-    ];
-
     let mut opportunities = Vec::new();
     let mut discovered_pools = Vec::new();
 
-    for &(token, aero_pool, v3_pool, loan_amount) in &pairs_config {
-        discovered_pools.push(aero_pool);
-        discovered_pools.push(v3_pool);
+    // 1. USDC / WETH Pair
+    let aero_usdc_pool = address!("B4885Bc4757b22775b47c0b31a24d588865d64c1");
+    let v3_usdc_pool = address!("d0b53D9277d7407987AF31b2A31BCCD68F5d7a75");
+    discovered_pools.push(aero_usdc_pool);
+    discovered_pools.push(v3_usdc_pool);
 
-        // 1. Aerodrome Reserves & Decimal Normalization
-        let aero_pair = IUniswapV2Pair::new(aero_pool, http_provider.clone());
-        let res_aero = aero_pair.getReserves().call().await;
-        let t0_aero = aero_pair.token0().call().await;
-        let t1_aero = aero_pair.token1().call().await;
+    let aero_pair_usdc = IUniswapV2Pair::new(aero_usdc_pool, http_provider.clone());
+    let v3_pool_usdc = IUniswapV3Pool::new(v3_usdc_pool, http_provider.clone());
 
-        let price_aero = if let (Ok(r), Ok(t0), Ok(t1)) = (res_aero, t0_aero, t1_aero) {
-            let r0 = U256::from(r.reserve0);
-            let r1 = U256::from(r.reserve1);
-            if r0 > U256::from(100) && r1 > U256::from(100) {
-                let dec0 = IERC20::new(t0, http_provider.clone()).decimals().call().await.unwrap_or(18);
-                let dec1 = IERC20::new(t1, http_provider.clone()).decimals().call().await.unwrap_or(18);
-                
-                let f0 = r0.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(dec0 as i32);
-                let f1 = r1.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(dec1 as i32);
-                
-                if f0 > 0.0 { f1 / f0 } else { 0.0 }
-            } else { 0.0 }
-        } else { 0.0 };
+    if let (Ok(res_aero), Ok(slot0_v3)) = tokio::try_join!(
+        aero_pair_usdc.getReserves().call(),
+        v3_pool_usdc.slot0().call()
+    ) {
+        let r0 = res_aero.reserve0 as f64;
+        let r1 = res_aero.reserve1 as f64;
+        if r0 > 100.0 && r1 > 100.0 {
+            let f0 = r0 / 1_000_000.0;
+            let f1 = r1 / 1_000_000_000_000_000_000.0;
+            let price_aero = if f0 > 0.0 { f1 / f0 } else { 0.0 };
 
-        // 2. Uniswap V3 slot0 & Decimal Normalization via sqrtPriceX96
-        let v3_pool_contract = IUniswapV3Pool::new(v3_pool, http_provider.clone());
-        let slot0_res = v3_pool_contract.slot0().call().await;
-        let t0_v3 = v3_pool_contract.token0().call().await;
-        let t1_v3 = v3_pool_contract.token1().call().await;
-
-        let price_v3 = if let (Ok(slot0), Ok(t0), Ok(t1)) = (slot0_res, t0_v3, t1_v3) {
-            let sqrt_price_x96 = slot0.sqrtPriceX96;
+            let sqrt_price_x96 = slot0_v3.sqrtPriceX96;
             if U256::from(sqrt_price_x96) > U256::ZERO {
-                let dec0 = IERC20::new(t0, http_provider.clone()).decimals().call().await.unwrap_or(18);
-                let dec1 = IERC20::new(t1, http_provider.clone()).decimals().call().await.unwrap_or(18);
-
                 let raw_v3_ratio = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
-                raw_v3_ratio * 10f64.powi(dec0 as i32 - dec1 as i32)
-            } else { 0.0 }
-        } else { 0.0 };
+                let price_v3 = raw_v3_ratio * 10f64.powi(6 - 18);
 
-        if price_aero > 0.0 && price_v3 > 0.0 {
-            let spread_gap = (price_aero - price_v3).abs();
+                if price_aero > 0.0 && price_v3 > 0.0 {
+                    let spread_gap = (price_aero - price_v3).abs();
+                    opportunities.push(AssetArbitrageOpportunity {
+                        token: USDC_BASE,
+                        _price_aero: price_aero,
+                        _price_v3: price_v3,
+                        spread_gap,
+                        _aero_pool: aero_usdc_pool,
+                        _v3_pool: v3_usdc_pool,
+                        loan_amount: U256::from(10_000_000_000_000_000u64),
+                    });
+                }
+            }
+        }
+    }
 
-            opportunities.push(AssetArbitrageOpportunity {
-                token,
-                _price_aero: price_aero,
-                _price_v3: price_v3,
-                spread_gap,
-                _aero_pool: aero_pool,
-                _v3_pool: v3_pool,
-                loan_amount,
-            });
+    // 2. cbBTC / WETH Pair
+    let aero_cbbtc_pool = address!("0606B4916aFDb81249bCBF51A18671b26CCf7D6C");
+    let v3_cbbtc_pool = address!("2A1c9966EEb6D649AA3b49F4472d24CE7F99FdAc");
+    discovered_pools.push(aero_cbbtc_pool);
+    discovered_pools.push(v3_cbbtc_pool);
+
+    let aero_pair_cbbtc = IUniswapV2Pair::new(aero_cbbtc_pool, http_provider.clone());
+    let v3_pool_cbbtc = IUniswapV3Pool::new(v3_cbbtc_pool, http_provider.clone());
+
+    if let (Ok(res_aero), Ok(slot0_v3)) = tokio::try_join!(
+        aero_pair_cbbtc.getReserves().call(),
+        v3_pool_cbbtc.slot0().call()
+    ) {
+        let r0 = res_aero.reserve0 as f64;
+        let r1 = res_aero.reserve1 as f64;
+        if r0 > 100.0 && r1 > 100.0 {
+            let f0 = r0 / 100_000_000.0;
+            let f1 = r1 / 1_000_000_000_000_000_000.0;
+            let price_aero = if f0 > 0.0 { f1 / f0 } else { 0.0 };
+
+            let sqrt_price_x96 = slot0_v3.sqrtPriceX96;
+            if U256::from(sqrt_price_x96) > U256::ZERO {
+                let raw_v3_ratio = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
+                let price_v3 = raw_v3_ratio * 10f64.powi(8 - 18);
+
+                if price_aero > 0.0 && price_v3 > 0.0 {
+                    let spread_gap = (price_aero - price_v3).abs();
+                    opportunities.push(AssetArbitrageOpportunity {
+                        token: CBBTC_BASE,
+                        _price_aero: price_aero,
+                        _price_v3: price_v3,
+                        spread_gap,
+                        _aero_pool: aero_cbbtc_pool,
+                        _v3_pool: v3_cbbtc_pool,
+                        loan_amount: U256::from(1_000_000_000_000_000u64),
+                    });
+                }
+            }
+        }
+    }
+
+    // 3. AERO / WETH Pair
+    let aero_aero_pool = address!("7f670f66e028D139613b482276563c65c69AD752");
+    let v3_aero_pool = address!("16629737119B61E47eDb8095AA508823f9E42Bdf");
+    discovered_pools.push(aero_aero_pool);
+    discovered_pools.push(v3_aero_pool);
+
+    let aero_pair_aero = IUniswapV2Pair::new(aero_aero_pool, http_provider.clone());
+    let v3_pool_aero = IUniswapV3Pool::new(v3_aero_pool, http_provider.clone());
+
+    if let (Ok(res_aero), Ok(slot0_v3)) = tokio::try_join!(
+        aero_pair_aero.getReserves().call(),
+        v3_pool_aero.slot0().call()
+    ) {
+        let r0 = res_aero.reserve0 as f64;
+        let r1 = res_aero.reserve1 as f64;
+        if r0 > 100.0 && r1 > 100.0 {
+            let f0 = r0 / 1_000_000_000_000_000_000.0;
+            let f1 = r1 / 1_000_000_000_000_000_000.0;
+            let price_aero = if f0 > 0.0 { f1 / f0 } else { 0.0 };
+
+            let sqrt_price_x96 = slot0_v3.sqrtPriceX96;
+            if U256::from(sqrt_price_x96) > U256::ZERO {
+                let raw_v3_ratio = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
+                let price_v3 = raw_v3_ratio * 10f64.powi(18 - 18);
+
+                if price_aero > 0.0 && price_v3 > 0.0 {
+                    let spread_gap = (price_aero - price_v3).abs();
+                    opportunities.push(AssetArbitrageOpportunity {
+                        token: AERO_BASE,
+                        _price_aero: price_aero,
+                        _price_v3: price_v3,
+                        spread_gap,
+                        _aero_pool: aero_aero_pool,
+                        _v3_pool: v3_aero_pool,
+                        loan_amount: U256::from(10_000_000_000_000_000u64),
+                    });
+                }
+            }
         }
     }
 
     if opportunities.is_empty() {
-        println!("⚠ [DEBUG] opportunities is empty. Check pool reserves or token decimals initialization.");
-        println!("⚠ [MARKET SCAN] No active arbitrage spreads detected in current block window.");
+        println!("⚠ [DEBUG] opportunities is empty. All hardcoded pair checks failed or returned zero reserves.");
         let fallback_pool = discovered_pools.first().copied().unwrap_or(Address::ZERO);
         return Ok((0.0, WETH_BASE, U256::ZERO, WETH_BASE, USDC_BASE, vec![fallback_pool]));
     }

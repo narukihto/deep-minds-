@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use std::time::Instant;
 use futures_util::StreamExt;
 use alloy::{
-    providers::{Provider, ProviderBuilder, MulticallBuilder, MulticallItem},
+    providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256},
@@ -272,47 +272,65 @@ where
         pool_address: Address,
     }
 
+    let mut pool_results = Vec::new();
+    
+    // 1. Initialize an untyped dynamic multicall builder compliant with Alloy v2.5
     let mut multicall = http_provider.multicall().dynamic();
 
+    // 2. Encode and push uniform transaction payloads into the pipeline
     for pool_address in dynamic_pools {
-        let pair_contract = IUniswapV2Pair::new(*pool_address, http_provider.clone());
-        
-        let reserves_data = pair_contract.getReserves().calldata().clone();
-        let token0_data = pair_contract.token0().calldata().clone();
-        let token1_data = pair_contract.token1().calldata().clone();
+        let reserves_bytes = IUniswapV2Pair::getReservesCall {}.abi_encode();
+        let token0_bytes = IUniswapV2Pair::token0Call {}.abi_encode();
+        let token1_bytes = IUniswapV2Pair::token1Call {}.abi_encode();
 
-        multicall = multicall.add_call(MulticallItem::new(*pool_address, reserves_data));
-        multicall = multicall.add_call(MulticallItem::new(*pool_address, token0_data));
-        multicall = multicall.add_call(MulticallItem::new(*pool_address, token1_data));
+        let req_reserves = alloy::rpc::types::TransactionRequest::default()
+            .to(*pool_address)
+            .input(alloy::rpc::types::TransactionInput::new(reserves_bytes.into()));
+
+        let req_token0 = alloy::rpc::types::TransactionRequest::default()
+            .to(*pool_address)
+            .input(alloy::rpc::types::TransactionInput::new(token0_bytes.into()));
+
+        let req_token1 = alloy::rpc::types::TransactionRequest::default()
+            .to(*pool_address)
+            .input(alloy::rpc::types::TransactionInput::new(token1_bytes.into()));
+
+        multicall = multicall.add_transaction(req_reserves);
+        multicall = multicall.add_transaction(req_token0);
+        multicall = multicall.add_transaction(req_token1);
     }
 
-    let mut pool_results = Vec::new();
-
+    // 3. Execute the aggregate calls and safely parse the output chunks
     match multicall.aggregate().await {
         Ok(results) => {
             for (i, pool_address) in dynamic_pools.iter().enumerate() {
                 let base_idx = i * 3;
+                
                 let reserves_opt = results.get(base_idx).and_then(|v| {
-                    IUniswapV2Pair::getReservesCall::abi_decode_returns(v.as_ref()).ok()
+                    IUniswapV2Pair::getReservesCall::abi_decode_returns(v.as_ref(), true).ok()
                 });
                 let t0_opt = results.get(base_idx + 1).and_then(|v| {
-                    IUniswapV2Pair::token0Call::abi_decode_returns(v.as_ref()).ok()
+                    IUniswapV2Pair::token0Call::abi_decode_returns(v.as_ref(), true).ok()
                 });
                 let t1_opt = results.get(base_idx + 2).and_then(|v| {
-                    IUniswapV2Pair::token1Call::abi_decode_returns(v.as_ref()).ok()
+                    IUniswapV2Pair::token1Call::abi_decode_returns(v.as_ref(), true).ok()
                 });
 
                 if let (Some(reserves), Some(t0), Some(t1)) = (reserves_opt, t0_opt, t1_opt) {
                     let r0 = reserves.reserve0;
                     let r1 = reserves.reserve1;
-                    if r0 > 0 && r1 > 0 {
-                        let live_price = r1.to::<u128>() as f64 / r0.to::<u128>() as f64;
-                        let dynamic_loan_amount = U256::from(r0) / U256::from(100);
+                    
+                    if r0 > U256::ZERO && r1 > U256::ZERO {
+                        let r0_f = r0.to::<u128>() as f64;
+                        let r1_f = r1.to::<u128>() as f64;
+                        let live_price = r1_f / r0_f;
+                        let dynamic_loan_amount = r0 / U256::from(100);
 
+                        // Alloy v2.5 standard flat tuple/struct assignment
                         pool_results.push(PoolData {
                             price: live_price,
-                            token0: t0._0,
-                            token1: t1._0,
+                            token0: t0.0, 
+                            token1: t1.0,
                             loan_amount: dynamic_loan_amount,
                             pool_address: *pool_address,
                         });

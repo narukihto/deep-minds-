@@ -350,7 +350,6 @@ async fn fetch_dynamic_pools<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    // Bypassed dynamic factory lookups in favor of hardcoded high-performance pools
     Ok(vec![
         address!("B4885Bc4757b22775b47c0b31a24d588865d64c1"),
         address!("d0b53D9277d7407987AF31b2A31BCCD68F5d7a75"),
@@ -406,17 +405,18 @@ where
         discovered_pools.push(aero_pool);
         discovered_pools.push(v3_pool);
 
-        // 1. Pull Aerodrome Reserves directly without factory overhead
+        // 1. Aerodrome Reserves & Decimal Normalization
         let aero_pair = IUniswapV2Pair::new(aero_pool, http_provider.clone());
         let res_aero = aero_pair.getReserves().call().await;
         let t0_aero = aero_pair.token0().call().await;
+        let t1_aero = aero_pair.token1().call().await;
 
-        let price_aero = if let (Ok(r), Ok(t0)) = (res_aero, t0_aero) {
+        let price_aero = if let (Ok(r), Ok(t0), Ok(t1)) = (res_aero, t0_aero, t1_aero) {
             let r0 = U256::from(r.reserve0);
             let r1 = U256::from(r.reserve1);
             if r0 > U256::from(100) && r1 > U256::from(100) {
                 let dec0 = IERC20::new(t0, http_provider.clone()).decimals().call().await.unwrap_or(18);
-                let dec1 = IERC20::new(token, http_provider.clone()).decimals().call().await.unwrap_or(18);
+                let dec1 = IERC20::new(t1, http_provider.clone()).decimals().call().await.unwrap_or(18);
                 
                 let f0 = r0.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(dec0 as i32);
                 let f1 = r1.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(dec1 as i32);
@@ -425,14 +425,20 @@ where
             } else { 0.0 }
         } else { 0.0 };
 
-        // 2. Pull Uniswap V3 Slot0 Price directly via sqrtPriceX96
+        // 2. Uniswap V3 slot0 & Decimal Normalization via sqrtPriceX96
         let v3_pool_contract = IUniswapV3Pool::new(v3_pool, http_provider.clone());
         let slot0_res = v3_pool_contract.slot0().call().await;
-        let price_v3 = if let Ok(slot0) = slot0_res {
+        let t0_v3 = v3_pool_contract.token0().call().await;
+        let t1_v3 = v3_pool_contract.token1().call().await;
+
+        let price_v3 = if let (Ok(slot0), Ok(t0), Ok(t1)) = (slot0_res, t0_v3, t1_v3) {
             let sqrt_price_x96 = slot0.sqrtPriceX96;
             if U256::from(sqrt_price_x96) > U256::ZERO {
-                let price_raw = sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96);
-                price_raw.powi(2)
+                let dec0 = IERC20::new(t0, http_provider.clone()).decimals().call().await.unwrap_or(18);
+                let dec1 = IERC20::new(t1, http_provider.clone()).decimals().call().await.unwrap_or(18);
+
+                let raw_v3_ratio = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
+                raw_v3_ratio * 10f64.powi(dec0 as i32 - dec1 as i32)
             } else { 0.0 }
         } else { 0.0 };
 
@@ -452,6 +458,7 @@ where
     }
 
     if opportunities.is_empty() {
+        println!("⚠ [DEBUG] opportunities is empty. Check pool reserves or token decimals initialization.");
         println!("⚠ [MARKET SCAN] No active arbitrage spreads detected in current block window.");
         let fallback_pool = discovered_pools.first().copied().unwrap_or(Address::ZERO);
         return Ok((0.0, WETH_BASE, U256::ZERO, WETH_BASE, USDC_BASE, vec![fallback_pool]));

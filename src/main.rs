@@ -327,8 +327,8 @@ where
 
                         pool_results.push(PoolData {
                             price: live_price,
-                            token0: t0.0, // تم التحديث هنا بنجاح
-                            token1: t1.0, // تم التحديث هنا بنجاح
+                            token0: Address::from(t0.0), // تم التحديث والتحويل السليم هنا
+                            token1: Address::from(t1.0), // تم التحديث والتحويل السليم هنا
                             loan_amount: dynamic_loan_amount,
                             pool_address: *pool_addr,
                         });

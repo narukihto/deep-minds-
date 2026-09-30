@@ -114,9 +114,15 @@ impl CausalCollapseSystem {
     }
 
     pub fn execute_collapse(&self) -> (Vec<Address>, Vec<Vec<u8>>) {
-        if self.nodes.is_empty() || self.dynamic_pools.is_empty() { 
+        if self.nodes.is_empty() { 
             return (vec![], vec![]); 
         }
+
+        let effective_pools = if self.dynamic_pools.is_empty() {
+            vec![AERODROME_ROUTER]
+        } else {
+            self.dynamic_pools.clone()
+        };
 
         let mut ordered_nodes = self.nodes.clone();
         ordered_nodes.sort_by(|a, b| b.energy_scale.cmp(&a.energy_scale));
@@ -195,7 +201,7 @@ impl CausalCollapseSystem {
         let mut payloads = Vec::new();
 
         for (idx, node) in final_path.iter().enumerate() {
-            let pool = self.dynamic_pools[idx % self.dynamic_pools.len()];
+            let pool = effective_pools[idx % effective_pools.len()];
             addresses.push(pool);
 
             let payload = if pool == UNISWAP_V3_ROUTER {
@@ -338,18 +344,39 @@ where
     P: Provider<Ethereum> + Clone,
 {
     let factory = IUniswapV2Factory::new(AERODROME_FACTORY, http_provider);
-    let length = factory.allPairsLength().call().await?;
+    
+    // Safely wrapped call to prevent boot crashes if factory is uninitialized or reverts on local fork
+    let length = match factory.allPairsLength().call().await {
+        Ok(len) => len,
+        Err(e) => {
+            println!("⚠ [WARNING] Factory allPairsLength() reverted or failed: {:?}. Using empty pool cache fallback.", e);
+            return Ok(vec![]);
+        }
+    };
+
     let total_pairs = length.to::<u64>();
-    let start_index = if total_pairs > 50 { total_pairs - 50 } else { 0 };
+    let start_index = if total_pairs > 20 { total_pairs - 20 } else { 0 };
 
     let mut pool_addresses = Vec::new();
     for i in start_index..total_pairs {
         if let Ok(pair_address) = factory.allPairs(U256::from(i)).call().await {
-            pool_addresses.push(pair_address);
+            if pair_address != Address::ZERO {
+                pool_addresses.push(pair_address);
+            }
         }
     }
 
     Ok(pool_addresses)
+}
+
+struct AssetArbitrageOpportunity {
+    token: Address,
+    _price_aero: f64,
+    _price_v3: f64,
+    spread_gap: f64,
+    _aero_pool: Address,
+    _v3_pool: Address,
+    loan_amount: U256,
 }
 
 async fn fetch_live_market_data<P>(
@@ -359,29 +386,15 @@ async fn fetch_live_market_data<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    let target_tokens = vec![WETH_BASE, USDC_BASE, CBBTC_BASE, USDBC_BASE, AERO_BASE];
+    let target_tokens = vec![USDC_BASE, CBBTC_BASE, USDBC_BASE, AERO_BASE];
     let aero_factory = IUniswapV2Factory::new(AERODROME_FACTORY, http_provider.clone());
     let v3_factory = IUniswapV3Factory::new(UNISWAP_V3_FACTORY, http_provider.clone());
-
-    struct AssetArbitrageOpportunity {
-        token: Address,
-        price_aero: f64,
-        price_v3: f64,
-        spread_gap: f64,
-        aero_pool: Address,
-        v3_pool: Address,
-        loan_amount: U256,
-    }
 
     let mut opportunities = Vec::new();
     let mut discovered_pools = Vec::new();
 
     for &token in &target_tokens {
-        if token == WETH_BASE {
-            continue;
-        }
-
-        // 1. Check Aerodrome Pool (Pair against WETH or USDC)
+        // 1. Check Aerodrome Pool
         let aero_pair_res = aero_factory.getPair(token, WETH_BASE).call().await;
         let aero_pool = match aero_pair_res {
             Ok(addr) if addr != Address::ZERO => addr,
@@ -391,7 +404,7 @@ where
             },
         };
 
-        // 2. Check Uniswap V3 Pool (0.05% fee tier = 500, or 0.3% = 3000)
+        // 2. Check Uniswap V3 Pool
         let v3_pool_res = v3_factory.getPool(token, WETH_BASE, U24::from(500)).call().await;
         let v3_pool = match v3_pool_res {
             Ok(addr) if addr != Address::ZERO => addr,
@@ -412,7 +425,7 @@ where
         let price_aero = if let (Ok(r), Ok(t0)) = (res_aero, t0_aero) {
             let r0 = U256::from(r.reserve0);
             let r1 = U256::from(r.reserve1);
-            if r0 > U256::from(1000) && r1 > U256::from(1000) {
+            if r0 > U256::from(100) && r1 > U256::from(100) {
                 let dec0 = IERC20::new(t0, http_provider.clone()).decimals().call().await.unwrap_or(18);
                 let dec1 = IERC20::new(token, http_provider.clone()).decimals().call().await.unwrap_or(18);
                 let f0 = r0.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(dec0 as i32);
@@ -427,8 +440,7 @@ where
         let price_v3 = if let Ok(slot0) = slot0_res {
             let sqrt_price_x96 = slot0.sqrtPriceX96;
             if U256::from(sqrt_price_x96) > U256::ZERO {
-                let price_q96 = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
-                price_q96
+                (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2)
             } else { 0.0 }
         } else { 0.0 };
 
@@ -442,11 +454,11 @@ where
 
             opportunities.push(AssetArbitrageOpportunity {
                 token,
-                price_aero,
-                price_v3,
+                _price_aero: price_aero,
+                _price_v3: price_v3,
                 spread_gap,
-                aero_pool,
-                v3_pool,
+                _aero_pool: aero_pool,
+                _v3_pool: v3_pool,
                 loan_amount,
             });
         }
@@ -457,7 +469,6 @@ where
         return Ok((0.0015, WETH_BASE, U256::from(10_000_000_000_000_000u64), WETH_BASE, USDC_BASE, vec![fallback_pool]));
     }
 
-    // Sort by highest volatility spread gap
     opportunities.sort_by(|a, b| b.spread_gap.partial_cmp(&a.spread_gap).unwrap_or(std::cmp::Ordering::Equal));
     let best = &opportunities[0];
 
@@ -489,7 +500,6 @@ where
 
     println!("🚀 [BOT -> CONTRACT] Executing Atomic Multi-Swap Command!");
     println!("🔗 Atomic Route Dispatched: Targets: {:?}, Payloads Count: {}", target_path.0, target_path.1.len());
-    println!("🪙 Forced High-Liquidity Borrow Asset: {:?}, Loan Amount: {}", token_to_borrow, loan_amount);
 
     let inner_swap_path_tuple = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(target_path.0.clone().into_iter().map(alloy::dyn_abi::DynSolValue::Address).collect()),
@@ -508,34 +518,29 @@ where
     let balancer_builder = contract.triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
         .from(signer_address);
 
-    println!("🧪 [BALANCER] Running Simulation Call via HTTP Provider...");
     match balancer_builder.call().await {
         Ok(_) => {
             println!("✅ Balancer Simulation Passed Successfully! Dispatching Real Transaction...");
             let pending_tx = balancer_builder.send().await?;
-            println!("⏳ Transaction Sent! TX Hash: {:?}", pending_tx.tx_hash());
             let receipt = pending_tx.get_receipt().await?;
             println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
         }
         Err(e_balancer) => {
             println!("⚠ Balancer Simulation Failed ({:?}). Activating Aave Fallback Route...", e_balancer);
-
             sleep(Duration::from_millis(150)).await;
 
             let aave_builder = contract.triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
                 .from(signer_address);
 
-            println!("🧪 [AAVE] Running Fallback Simulation Call...");
             match aave_builder.call().await {
                 Ok(_) => {
                     println!("✅ Aave Simulation Passed Successfully! Dispatching Real Transaction...");
                     let pending_tx = aave_builder.send().await?;
-                    println!("⏳ Transaction Sent! TX Hash: {:?}", pending_tx.tx_hash());
                     let receipt = pending_tx.get_receipt().await?;
                     println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
                 }
                 Err(e_aave) => {
-                    println!("❌ Both Balancer and Aave Simulations Failed. Balancer Err: {:?}, Aave Err: {:?}. Aborting to save gas.", e_balancer, e_aave);
+                    println!("❌ Both Simulations Failed. Balancer: {:?}, Aave: {:?}", e_balancer, e_aave);
                 }
             }
         }
@@ -585,9 +590,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("✅ Successfully cached {} pool addresses in memory.", pools.len());
             pools
         }
-        Err(e) => {
-            println!("❌ Critical Error fetching initial factory pools: {:?}. Aborting boot.", e);
-            return Err(e);
+        Err(_) => {
+            println!("⚠ Pool cache fetch returned empty or reverted. Proceeding with empty initial cache.");
+            vec![]
         }
     };
 
@@ -616,10 +621,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 QuantumNode { id: 2, energy_scale: generate_astronomical_number(1000usize), frequency: 0.01, token0, token1 },
                 QuantumNode { id: 3, energy_scale: generate_astronomical_number(1000usize), frequency: 0.015, token0, token1 },
             ];
-
-            for node in &nodes {
-                println!("   ⚛️️ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
-            }
 
             let system = CausalCollapseSystem::new(nodes, scanned_addresses, contract_address, dynamic_loan);
             let optimized_path = system.execute_collapse();

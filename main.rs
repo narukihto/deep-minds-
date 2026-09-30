@@ -277,13 +277,13 @@ where
     for pool_address in dynamic_pools {
         let pair_contract = IUniswapV2Pair::new(*pool_address, http_provider.clone());
         
-        let reserves_data = pair_contract.getReserves().request.input.clone().into_input().unwrap_or_default();
-        let token0_data = pair_contract.token0().request.input.clone().into_input().unwrap_or_default();
-        let token1_data = pair_contract.token1().request.input.clone().into_input().unwrap_or_default();
+        let reserves_data = pair_contract.getReserves().calldata().clone();
+        let token0_data = pair_contract.token0().calldata().clone();
+        let token1_data = pair_contract.token1().calldata().clone();
 
-        multicall = multicall.add_custom_call(*pool_address, reserves_data);
-        multicall = multicall.add_custom_call(*pool_address, token0_data);
-        multicall = multicall.add_custom_call(*pool_address, token1_data);
+        multicall = multicall.add_call(&pair_contract.getReserves());
+        multicall = multicall.add_call(&pair_contract.token0());
+        multicall = multicall.add_call(&pair_contract.token1());
     }
 
     let mut pool_results = Vec::new();

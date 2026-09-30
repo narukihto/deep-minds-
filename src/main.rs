@@ -15,10 +15,17 @@ use alloy::{
 
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
 const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
+const CBBTC_BASE: Address = address!("cbB7C7A63551000b48A8503b87936a229a4b3FE3");
+const USDBC_BASE: Address = address!("d9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA");
+const AERO_BASE: Address = address!("940181a94A35A4569E4529A3CDfB74e38FD98631");
 
 // Whitelisted Router Addresses on Base Network
 const UNISWAP_V3_ROUTER: Address = address!("262664982A6941F909fCF2f8358D64E19349e25C");
 const AERODROME_ROUTER: Address = address!("cF77a3Ba9A5CA399B7f97cbf339178ffc51eda8c");
+
+// Factory & Quoter references for multi-DEX price discovery
+const UNISWAP_V3_FACTORY: Address = address!("33128a8fC17869843ccE68212c64714156f52d62");
+const AERODROME_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFECe40Da");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Direction {
@@ -209,7 +216,7 @@ impl CausalCollapseSystem {
                     from: node.token0,
                     to: node.token1,
                     stable: false,
-                    factory: address!("420DD381b31aEf6683db6B902084cB0FFECe40Da"),
+                    factory: AERODROME_FACTORY,
                 };
                 IAerodromeRouter::swapExactTokensForTokensCall {
                     amountIn: self.loan_amount,
@@ -248,11 +255,24 @@ sol! {
     contract IUniswapV2Factory {
         function allPairs(uint256) external view returns (address pair);
         function allPairsLength() external view returns (uint256);
+        function getPair(address tokenA, address tokenB) external view returns (address pair);
+    }
+
+    #[sol(rpc)]
+    contract IUniswapV3Factory {
+        function getPool(address tokenA, address token2, uint24 fee) external view returns (address pool);
     }
 
     #[sol(rpc)]
     contract IUniswapV2Pair {
         function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
+        function token0() external view returns (address);
+        function token1() external view returns (address);
+    }
+
+    #[sol(rpc)]
+    contract IUniswapV3Pool {
+        function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint32 feeProtocol, bool unlocked);
         function token0() external view returns (address);
         function token1() external view returns (address);
     }
@@ -315,12 +335,10 @@ async fn fetch_dynamic_pools<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    let factory_address = address!("8909Dc15e40173Ff4699343b6eB8132c65e18eC6");
-    let factory = IUniswapV2Factory::new(factory_address, http_provider);
-
+    let factory = IUniswapV2Factory::new(AERODROME_FACTORY, http_provider);
     let length = factory.allPairsLength().call().await?;
     let total_pairs = length.to::<u64>();
-    let start_index = if total_pairs > 100 { total_pairs - 100 } else { 0 };
+    let start_index = if total_pairs > 50 { total_pairs - 50 } else { 0 };
 
     let mut pool_addresses = Vec::new();
     for i in start_index..total_pairs {
@@ -334,98 +352,121 @@ where
 
 async fn fetch_live_market_data<P>(
     http_provider: P,
-    dynamic_pools: &[Address],
+    _cached_pools: &[Address],
 ) -> Result<(f64, Address, U256, Address, Address, Vec<Address>), Box<dyn std::error::Error>>
 where
     P: Provider<Ethereum> + Clone,
 {
-    struct PoolData {
-        price: f64,
-        token0: Address,
-        token1: Address,
+    let target_tokens = vec![WETH_BASE, USDC_BASE, CBBTC_BASE, USDBC_BASE, AERO_BASE];
+    let aero_factory = IUniswapV2Factory::new(AERODROME_FACTORY, http_provider.clone());
+    let v3_factory = IUniswapV3Factory::new(UNISWAP_V3_FACTORY, http_provider.clone());
+
+    struct AssetArbitrageOpportunity {
+        token: Address,
+        price_aero: f64,
+        price_v3: f64,
+        spread_gap: f64,
+        aero_pool: Address,
+        v3_pool: Address,
         loan_amount: U256,
-        pool_address: Address,
     }
 
-    let mut pool_results = Vec::new();
+    let mut opportunities = Vec::new();
+    let mut discovered_pools = Vec::new();
 
-    for chunk in dynamic_pools.chunks(20) {
-        if chunk.is_empty() {
+    for &token in &target_tokens {
+        if token == WETH_BASE {
             continue;
         }
 
-        for &pool_addr in chunk {
-            let pair = IUniswapV2Pair::new(pool_addr, http_provider.clone());
-            
-            // Fixed temporary lifetime bug by awaiting individual results cleanly
-            let reserves_res = pair.getReserves().call().await;
-            let t0_res = pair.token0().call().await;
-            let t1_res = pair.token1().call().await;
+        // 1. Check Aerodrome Pool (Pair against WETH or USDC)
+        let aero_pair_res = aero_factory.getPair(token, WETH_BASE).call().await;
+        let aero_pool = match aero_pair_res {
+            Ok(addr) if addr != Address::ZERO => addr,
+            _ => match aero_factory.getPair(token, USDC_BASE).call().await {
+                Ok(addr) if addr != Address::ZERO => addr,
+                _ => continue,
+            },
+        };
 
-            if let (Ok(reserves), Ok(t0), Ok(t1)) = (reserves_res, t0_res, t1_res) {
-                let r0_val = U256::from(reserves.reserve0);
-                let r1_val = U256::from(reserves.reserve1);
+        // 2. Check Uniswap V3 Pool (0.05% fee tier = 500, or 0.3% = 3000)
+        let v3_pool_res = v3_factory.getPool(token, WETH_BASE, 500).call().await;
+        let v3_pool = match v3_pool_res {
+            Ok(addr) if addr != Address::ZERO => addr,
+            _ => match v3_factory.getPool(token, USDC_BASE, 3000).call().await {
+                Ok(addr) if addr != Address::ZERO => addr,
+                _ => continue,
+            },
+        };
 
-                if r0_val > U256::from(100) && r1_val > U256::from(100) {
-                    let dec0 = IERC20::new(t0, http_provider.clone()).decimals().call().await.unwrap_or(18);
-                    let dec1 = IERC20::new(t1, http_provider.clone()).decimals().call().await.unwrap_or(18);
+        discovered_pools.push(aero_pool);
+        discovered_pools.push(v3_pool);
 
-                    let r0_f: f64 = r0_val.to_string().parse().unwrap_or(0.0);
-                    let r1_f: f64 = r1_val.to_string().parse().unwrap_or(0.0);
+        // Pull Aerodrome Reserves
+        let aero_pair = IUniswapV2Pair::new(aero_pool, http_provider.clone());
+        let res_aero = aero_pair.getReserves().call().await;
+        let t0_aero = aero_pair.token0().call().await;
 
-                    let r0_adjusted = r0_f / 10f64.powi(dec0 as i32);
-                    let r1_adjusted = r1_f / 10f64.powi(dec1 as i32);
+        let price_aero = if let (Ok(r), Ok(t0)) = (res_aero, t0_aero) {
+            let r0 = U256::from(r.reserve0);
+            let r1 = U256::from(r.reserve1);
+            if r0 > U256::from(1000) && r1 > U256::from(1000) {
+                let dec0 = IERC20::new(t0, http_provider.clone()).decimals().call().await.unwrap_or(18);
+                let dec1 = IERC20::new(token == t0, http_provider.clone()).decimals().call().await.unwrap_or(18); // simplified token match check
+                let f0 = r0.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(dec0 as i32);
+                let f1 = r1.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(dec1 as i32);
+                if f0 > 0.0 { f1 / f0 } else { 0.0 }
+            } else { 0.0 }
+        } else { 0.0 };
 
-                    let live_price = if r0_adjusted > 0.0 { r1_adjusted / r0_adjusted } else { 0.0 };
+        // Pull Uniswap V3 Slot0 Price via sqrtPriceX96
+        let v3_pool_contract = IUniswapV3Pool::new(v3_pool, http_provider.clone());
+        let slot0_res = v3_pool_contract.slot0().call().await;
+        let price_v3 = if let Ok(slot0) = slot0_res {
+            let sqrt_price_x96 = slot0.sqrtPriceX96;
+            if sqrt_price_x96 > U256::ZERO {
+                let price_q96 = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
+                price_q96
+            } else { 0.0 }
+        } else { 0.0 };
 
-                    if live_price > 0.0 && live_price < 1_000_000.0 {
-                        let safe_loan_amount = if t0 == WETH_BASE || t1 == WETH_BASE {
-                            U256::from(10_000_000_000_000_000u64)
-                        } else {
-                            U256::from(10_000_000u64)
-                        };
+        if price_aero > 0.0 && price_v3 > 0.0 {
+            let spread_gap = (price_aero - price_v3).abs();
+            let loan_amount = if token == CBBTC_BASE {
+                U256::from(1_000_000_000_000_000u64)
+            } else {
+                U256::from(10_000_000_000_000_000u64)
+            };
 
-                        pool_results.push(PoolData {
-                            price: live_price,
-                            token0: t0,
-                            token1: t1,
-                            loan_amount: safe_loan_amount,
-                            pool_address: pool_addr,
-                        });
-                    }
-                }
-            }
+            opportunities.push(AssetArbitrageOpportunity {
+                token,
+                price_aero,
+                price_v3,
+                spread_gap,
+                aero_pool,
+                v3_pool,
+                loan_amount,
+            });
         }
     }
 
-    if pool_results.is_empty() {
-        let fallback_addr = dynamic_pools.first().copied().unwrap_or_else(|| address!("0000000000000000000000000000000000000000"));
-        return Ok((1.0, WETH_BASE, U256::from(10000000000000000u64), fallback_addr, fallback_addr, vec![]));
+    if opportunities.is_empty() {
+        let fallback_pool = discovered_pools.first().copied().unwrap_or(address!("0000000000000000000000000000000000000000"));
+        return Ok((0.0015, WETH_BASE, U256::from(10_000_000_000_000_000u64), WETH_BASE, USDC_BASE, vec![fallback_pool]));
     }
 
-    let sum_price: f64 = pool_results.iter().map(|p| p.price).sum();
-    let avg_market_price = sum_price / pool_results.len() as f64;
+    // Sort by highest volatility spread gap
+    opportunities.sort_by(|a, b| b.spread_gap.partial_cmp(&a.spread_gap).unwrap_or(std::cmp::Ordering::Equal));
+    let best = &opportunities[0];
 
-    let best_pool = pool_results
-        .iter()
-        .max_by(|a, b| {
-            let dev_a = (a.price - avg_market_price).abs();
-            let dev_b = (b.price - avg_market_price).abs();
-            dev_a.partial_cmp(&dev_b).unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .unwrap();
-
-    let borrow_token = if best_pool.token0 == WETH_BASE || best_pool.token0 == USDC_BASE {
-        best_pool.token0
-    } else if best_pool.token1 == WETH_BASE || best_pool.token1 == USDC_BASE {
-        best_pool.token1
-    } else {
-        WETH_BASE
-    };
-
-    let all_discovered_addresses: Vec<Address> = pool_results.iter().map(|p| p.pool_address).collect();
-
-    Ok((best_pool.price, borrow_token, best_pool.loan_amount, best_pool.token0, best_pool.token1, all_discovered_addresses))
+    Ok((
+        best.spread_gap,
+        best.token,
+        best.loan_amount,
+        best.token,
+        WETH_BASE,
+        discovered_pools,
+    ))
 }
 
 async fn trigger_on_chain_arbitrage<P>(
@@ -562,7 +603,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (live_market_price, dynamic_token, dynamic_loan, token0, token1, scanned_addresses) = 
             fetch_live_market_data(http_provider.clone(), &cached_pools).await?;
 
-        println!("   📊 [METRIC FEED] Aggregated Price: {:.6}, Checking Velocity Pivots...", live_market_price);
+        println!("   📊 [METRIC FEED] Cross-DEX Spread Gap: {:.6}, Checking Velocity Pivots...", live_market_price);
 
         let (direction, velocity) = radar.update_and_predict(live_market_price);
 
@@ -590,5 +631,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("🏁 Live stream processing terminated.");
-     Ok(())
+    Ok(())
 }

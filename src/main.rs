@@ -8,7 +8,7 @@ use alloy::{
     providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
-    primitives::{address, Address, U256, Bytes},
+    primitives::{address, Address, U256, U24, Bytes},
     sol,
     sol_types::SolCall,
 };
@@ -390,10 +390,10 @@ where
         };
 
         // 2. Check Uniswap V3 Pool (0.05% fee tier = 500, or 0.3% = 3000)
-        let v3_pool_res = v3_factory.getPool(token, WETH_BASE, 500).call().await;
+        let v3_pool_res = v3_factory.getPool(token, WETH_BASE, U24::from(500)).call().await;
         let v3_pool = match v3_pool_res {
             Ok(addr) if addr != Address::ZERO => addr,
-            _ => match v3_factory.getPool(token, USDC_BASE, 3000).call().await {
+            _ => match v3_factory.getPool(token, USDC_BASE, U24::from(3000)).call().await {
                 Ok(addr) if addr != Address::ZERO => addr,
                 _ => continue,
             },
@@ -412,7 +412,7 @@ where
             let r1 = U256::from(r.reserve1);
             if r0 > U256::from(1000) && r1 > U256::from(1000) {
                 let dec0 = IERC20::new(t0, http_provider.clone()).decimals().call().await.unwrap_or(18);
-                let dec1 = IERC20::new(token == t0, http_provider.clone()).decimals().call().await.unwrap_or(18); // simplified token match check
+                let dec1 = IERC20::new(token, http_provider.clone()).decimals().call().await.unwrap_or(18);
                 let f0 = r0.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(dec0 as i32);
                 let f1 = r1.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(dec1 as i32);
                 if f0 > 0.0 { f1 / f0 } else { 0.0 }
@@ -424,7 +424,7 @@ where
         let slot0_res = v3_pool_contract.slot0().call().await;
         let price_v3 = if let Ok(slot0) = slot0_res {
             let sqrt_price_x96 = slot0.sqrtPriceX96;
-            if sqrt_price_x96 > U256::ZERO {
+            if U256::from(sqrt_price_x96) > U256::ZERO {
                 let price_q96 = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
                 price_q96
             } else { 0.0 }

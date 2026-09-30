@@ -5,7 +5,7 @@ use std::time::Instant;
 use futures_util::StreamExt;
 use tokio::time::{sleep, Duration};
 use alloy::{
-    providers::{Provider, ProviderBuilder},
+    providers::{Provider, ProviderBuilder, RootProvider},
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256},
@@ -184,7 +184,7 @@ impl CausalCollapseSystem {
             addresses.push(pool);
 
             let swap_call = IUniswapV2Router02::swapExactTokensForTokensCall {
-                amountIn: U256::from(1000000000000000000u64), // 1 WETH
+                amountIn: U256::from(1000000000000000000u64),
                 amountOutMin: U256::ZERO,
                 path: vec![node.token0, node.token1],
                 to: self.contract_address,
@@ -339,10 +339,9 @@ where
 
                         let live_price = if r0_adjusted > 0.0 { r1_adjusted / r0_adjusted } else { 0.0 };
 
-                        // 🛡️ فلترة الأسعار غير المنطقية والضخمة جداً لتجنب فشل المحاكاة
+                        // 🛡️ فلترة الأسعار الشاذة والضخمة جداً لمنع فشل المحاكاة والتنفيذ
                         if live_price > 0.0 && live_price < 1_000_000.0 {
-                            // 🛡️ سقف آمن لحجم القرض (مثلاً 0.01 WETH أو ما يعادلها تماماً لتفادي الـ Revert)
-                            let safe_loan_amount = U256::from(10_000_000_000_000_000u64); // 0.01 Token
+                            let safe_loan_amount = U256::from(10_000_000_000_000_000u64); // 0.01 Token آمن ومستقر
 
                             pool_results.push(PoolData {
                                 price: live_price,
@@ -529,6 +528,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 QuantumNode { id: 2, energy_scale: generate_astronomical_number(1000usize), frequency: 0.01, token0, token1 },
                 QuantumNode { id: 3, energy_scale: generate_astronomical_number(1000usize), frequency: 0.015, token0, token1 },
             ];
+
+            for node in &nodes {
+                println!("   ⚛️ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
+            }
 
             let system = CausalCollapseSystem::new(nodes, scanned_addresses, contract_address);
             let optimized_path = system.execute_collapse();

@@ -281,9 +281,9 @@ where
         let token0_data = pair_contract.token0().calldata().clone();
         let token1_data = pair_contract.token1().calldata().clone();
 
-        multicall = multicall.add_call(&pair_contract.getReserves());
-        multicall = multicall.add_call(&pair_contract.token0());
-        multicall = multicall.add_call(&pair_contract.token1());
+        multicall = multicall.add_call(MulticallItem::new(*pool_address, reserves_data));
+        multicall = multicall.add_call(MulticallItem::new(*pool_address, token0_data));
+        multicall = multicall.add_call(MulticallItem::new(*pool_address, token1_data));
     }
 
     let mut pool_results = Vec::new();

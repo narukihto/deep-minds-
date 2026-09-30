@@ -389,9 +389,12 @@ where
     let aero_pair_usdc = IUniswapV2Pair::new(aero_usdc_pool, http_provider.clone());
     let v3_pool_usdc = IUniswapV3Pool::new(v3_usdc_pool, http_provider.clone());
 
+    let aero_fut_usdc = aero_pair_usdc.getReserves().call();
+    let v3_fut_usdc = v3_pool_usdc.slot0().call();
+
     if let Ok((res_aero, slot0_v3)) = tokio::try_join!(
-        aero_pair_usdc.getReserves().call(),
-        v3_pool_usdc.slot0().call()
+        aero_fut_usdc,
+        v3_fut_usdc
     ) {
         let r0 = res_aero.reserve0.to::<u128>() as f64;
         let r1 = res_aero.reserve1.to::<u128>() as f64;
@@ -430,9 +433,12 @@ where
     let aero_pair_cbbtc = IUniswapV2Pair::new(aero_cbbtc_pool, http_provider.clone());
     let v3_pool_cbbtc = IUniswapV3Pool::new(v3_cbbtc_pool, http_provider.clone());
 
+    let aero_fut_cbbtc = aero_pair_cbbtc.getReserves().call();
+    let v3_fut_cbbtc = v3_pool_cbbtc.slot0().call();
+
     if let Ok((res_aero, slot0_v3)) = tokio::try_join!(
-        aero_pair_cbbtc.getReserves().call(),
-        v3_pool_cbbtc.slot0().call()
+        aero_fut_cbbtc,
+        v3_fut_cbbtc
     ) {
         let r0 = res_aero.reserve0.to::<u128>() as f64;
         let r1 = res_aero.reserve1.to::<u128>() as f64;
@@ -471,9 +477,12 @@ where
     let aero_pair_aero = IUniswapV2Pair::new(aero_aero_pool, http_provider.clone());
     let v3_pool_aero = IUniswapV3Pool::new(v3_aero_pool, http_provider.clone());
 
+    let aero_fut_aero = aero_pair_aero.getReserves().call();
+    let v3_fut_aero = v3_pool_aero.slot0().call();
+
     if let Ok((res_aero, slot0_v3)) = tokio::try_join!(
-        aero_pair_aero.getReserves().call(),
-        v3_pool_aero.slot0().call()
+        aero_fut_aero,
+        v3_fut_aero
     ) {
         let r0 = res_aero.reserve0.to::<u128>() as f64;
         let r1 = res_aero.reserve1.to::<u128>() as f64;

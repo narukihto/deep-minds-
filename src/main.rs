@@ -5,7 +5,7 @@ use std::time::Instant;
 use futures_util::StreamExt;
 use tokio::time::{sleep, Duration};
 use alloy::{
-    providers::{Provider, ProviderBuilder, RootProvider},
+    providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256},
@@ -184,7 +184,7 @@ impl CausalCollapseSystem {
             addresses.push(pool);
 
             let swap_call = IUniswapV2Router02::swapExactTokensForTokensCall {
-                amountIn: U256::from(1000000000000000000u64),
+                amountIn: U256::from(1000000000000000000u64), // 1 WETH
                 amountOutMin: U256::ZERO,
                 path: vec![node.token0, node.token1],
                 to: self.contract_address,
@@ -330,7 +330,7 @@ where
                     let r0_val = U256::from(reserves.reserve0);
                     let r1_val = U256::from(reserves.reserve1);
 
-                    if r0_val > U256::from(1000) && r1_val > U256::from(1000) {
+                    if r0_val > U256::from(10000) && r1_val > U256::from(10000) {
                         let r0_f: f64 = r0_val.to_string().parse().unwrap_or(0.0);
                         let r1_f: f64 = r1_val.to_string().parse().unwrap_or(0.0);
 
@@ -338,15 +338,20 @@ where
                         let r1_adjusted = r1_f / 10f64.powi(*d1 as i32);
 
                         let live_price = if r0_adjusted > 0.0 { r1_adjusted / r0_adjusted } else { 0.0 };
-                        let dynamic_loan_amount = r0_val / U256::from(100);
 
-                        pool_results.push(PoolData {
-                            price: live_price,
-                            token0: *t0,
-                            token1: *t1,
-                            loan_amount: dynamic_loan_amount,
-                            pool_address: *pool_addr,
-                        });
+                        // 🛡️ فلترة الأسعار غير المنطقية والضخمة جداً لتجنب فشل المحاكاة
+                        if live_price > 0.0 && live_price < 1_000_000.0 {
+                            // 🛡️ سقف آمن لحجم القرض (مثلاً 0.01 WETH أو ما يعادلها تماماً لتفادي الـ Revert)
+                            let safe_loan_amount = U256::from(10_000_000_000_000_000u64); // 0.01 Token
+
+                            pool_results.push(PoolData {
+                                price: live_price,
+                                token0: *t0,
+                                token1: *t1,
+                                loan_amount: safe_loan_amount,
+                                pool_address: *pool_addr,
+                            });
+                        }
                     }
                 }
             }
@@ -358,7 +363,7 @@ where
 
     if pool_results.is_empty() {
         let fallback_addr = dynamic_pools.first().copied().unwrap_or_else(|| address!("0000000000000000000000000000000000000000"));
-        return Ok((1.0, WETH_BASE, U256::from(1000000000000000000u64), fallback_addr, fallback_addr, vec![]));
+        return Ok((1.0, WETH_BASE, U256::from(10000000000000000u64), fallback_addr, fallback_addr, vec![]));
     }
 
     let sum_price: f64 = pool_results.iter().map(|p| p.price).sum();
@@ -524,10 +529,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 QuantumNode { id: 2, energy_scale: generate_astronomical_number(1000usize), frequency: 0.01, token0, token1 },
                 QuantumNode { id: 3, energy_scale: generate_astronomical_number(1000usize), frequency: 0.015, token0, token1 },
             ];
-
-            for node in &nodes {
-                println!("   ⚛️ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
-            }
 
             let system = CausalCollapseSystem::new(nodes, scanned_addresses, contract_address);
             let optimized_path = system.execute_collapse();

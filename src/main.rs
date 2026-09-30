@@ -260,6 +260,13 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
 
 sol! {
     #[sol(rpc)]
+    contract IAerodromeFactory {
+        function getPool(address tokenA, address tokenB, bool stable) external view returns (address pool);
+        function allPairs(uint256) external view returns (address pair);
+        function allPairsLength() external view returns (uint256);
+    }
+
+    #[sol(rpc)]
     contract IUniswapV2Factory {
         function allPairs(uint256) external view returns (address pair);
         function allPairsLength() external view returns (uint256);
@@ -343,9 +350,8 @@ async fn fetch_dynamic_pools<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    let factory = IUniswapV2Factory::new(AERODROME_FACTORY, http_provider);
-    
-    // Safely wrapped call to prevent boot crashes if factory is uninitialized or reverts on local fork
+    let factory = IAerodromeFactory::new(AERODROME_FACTORY, http_provider);
+
     let length = match factory.allPairsLength().call().await {
         Ok(len) => len,
         Err(e) => {
@@ -387,18 +393,18 @@ where
     P: Provider<Ethereum> + Clone,
 {
     let target_tokens = vec![USDC_BASE, CBBTC_BASE, USDBC_BASE, AERO_BASE];
-    let aero_factory = IUniswapV2Factory::new(AERODROME_FACTORY, http_provider.clone());
+    let aero_factory = IAerodromeFactory::new(AERODROME_FACTORY, http_provider.clone());
     let v3_factory = IUniswapV3Factory::new(UNISWAP_V3_FACTORY, http_provider.clone());
 
     let mut opportunities = Vec::new();
     let mut discovered_pools = Vec::new();
 
     for &token in &target_tokens {
-        // 1. Check Aerodrome Pool
-        let aero_pair_res = aero_factory.getPair(token, WETH_BASE).call().await;
-        let aero_pool = match aero_pair_res {
+        // 1. Check Aerodrome Pool using correct getPool(tokenA, tokenB, stable) signature
+        let aero_pool_res = aero_factory.getPool(token, WETH_BASE, false).call().await;
+        let aero_pool = match aero_pool_res {
             Ok(addr) if addr != Address::ZERO => addr,
-            _ => match aero_factory.getPair(token, USDC_BASE).call().await {
+            _ => match aero_factory.getPool(token, USDC_BASE, false).call().await {
                 Ok(addr) if addr != Address::ZERO => addr,
                 _ => continue,
             },
@@ -417,7 +423,7 @@ where
         discovered_pools.push(aero_pool);
         discovered_pools.push(v3_pool);
 
-        // Pull Aerodrome Reserves
+        // Pull Aerodrome Reserves with precise decimal normalization
         let aero_pair = IUniswapV2Pair::new(aero_pool, http_provider.clone());
         let res_aero = aero_pair.getReserves().call().await;
         let t0_aero = aero_pair.token0().call().await;
@@ -428,19 +434,22 @@ where
             if r0 > U256::from(100) && r1 > U256::from(100) {
                 let dec0 = IERC20::new(t0, http_provider.clone()).decimals().call().await.unwrap_or(18);
                 let dec1 = IERC20::new(token, http_provider.clone()).decimals().call().await.unwrap_or(18);
+                
                 let f0 = r0.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(dec0 as i32);
                 let f1 = r1.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(dec1 as i32);
+                
                 if f0 > 0.0 { f1 / f0 } else { 0.0 }
             } else { 0.0 }
         } else { 0.0 };
 
-        // Pull Uniswap V3 Slot0 Price via sqrtPriceX96
+        // Pull Uniswap V3 Slot0 Price via sqrtPriceX96 with robust precision guard
         let v3_pool_contract = IUniswapV3Pool::new(v3_pool, http_provider.clone());
         let slot0_res = v3_pool_contract.slot0().call().await;
         let price_v3 = if let Ok(slot0) = slot0_res {
             let sqrt_price_x96 = slot0.sqrtPriceX96;
             if U256::from(sqrt_price_x96) > U256::ZERO {
-                (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2)
+                let price_raw = sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96);
+                price_raw.powi(2)
             } else { 0.0 }
         } else { 0.0 };
 
@@ -465,8 +474,9 @@ where
     }
 
     if opportunities.is_empty() {
-        let fallback_pool = discovered_pools.first().copied().unwrap_or(address!("0000000000000000000000000000000000000000"));
-        return Ok((0.0015, WETH_BASE, U256::from(10_000_000_000_000_000u64), WETH_BASE, USDC_BASE, vec![fallback_pool]));
+        println!("⚠ [MARKET SCAN] No active arbitrage spreads detected in current block window.");
+        let fallback_pool = discovered_pools.first().copied().unwrap_or(Address::ZERO);
+        return Ok((0.0, WETH_BASE, U256::ZERO, WETH_BASE, USDC_BASE, vec![fallback_pool]));
     }
 
     opportunities.sort_by(|a, b| b.spread_gap.partial_cmp(&a.spread_gap).unwrap_or(std::cmp::Ordering::Equal));
@@ -612,21 +622,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!("   📊 [METRIC FEED] Cross-DEX Spread Gap: {:.6}, Checking Velocity Pivots...", live_market_price);
 
-        let (direction, velocity) = radar.update_and_predict(live_market_price);
+        if live_market_price > 0.0 {
+            let (direction, velocity) = radar.update_and_predict(live_market_price);
 
-        if direction == Direction::Peak || direction == Direction::Bottom {
-            println!("⚡ [RADAR ALERT] Velocity Pivot Discovered: {:.4}", velocity);
-            let nodes = vec![
-                QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000usize), frequency: live_market_price, token0, token1 },
-                QuantumNode { id: 2, energy_scale: generate_astronomical_number(1000usize), frequency: 0.01, token0, token1 },
-                QuantumNode { id: 3, energy_scale: generate_astronomical_number(1000usize), frequency: 0.015, token0, token1 },
-            ];
+            if direction == Direction::Peak || direction == Direction::Bottom {
+                println!("⚡ [RADAR ALERT] Velocity Pivot Discovered: {:.4}", velocity);
+                let nodes = vec![
+                    QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000usize), frequency: live_market_price, token0, token1 },
+                    QuantumNode { id: 2, energy_scale: generate_astronomical_number(1000usize), frequency: 0.01, token0, token1 },
+                    QuantumNode { id: 3, energy_scale: generate_astronomical_number(1000usize), frequency: 0.015, token0, token1 },
+                ];
 
-            let system = CausalCollapseSystem::new(nodes, scanned_addresses, contract_address, dynamic_loan);
-            let optimized_path = system.execute_collapse();
+                let system = CausalCollapseSystem::new(nodes, scanned_addresses, contract_address, dynamic_loan);
+                let optimized_path = system.execute_collapse();
 
-            if let Err(e) = trigger_on_chain_arbitrage(http_provider.clone(), contract_address, optimized_path, signer_address, dynamic_token, dynamic_loan).await {
-                println!("❌ Error executing on-chain command: {:?}", e);
+                if let Err(e) = trigger_on_chain_arbitrage(http_provider.clone(), contract_address, optimized_path, signer_address, dynamic_token, dynamic_loan).await {
+                    println!("❌ Error executing on-chain command: {:?}", e);
+                }
             }
         }
 

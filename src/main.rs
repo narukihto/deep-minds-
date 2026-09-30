@@ -3,6 +3,7 @@ use num_traits::{ToPrimitive, One};
 use rayon::prelude::*;
 use std::time::Instant;
 use futures_util::StreamExt;
+use tokio::time::{sleep, Duration};
 use alloy::{
     providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
@@ -250,7 +251,7 @@ where
 
     let length = factory.allPairsLength().call().await?;
     let total_pairs = length.to::<u64>();
-    let start_index = if total_pairs > 100 { total_pairs - 100 } else { 0 };
+    let start_index = if total_pairs > 50 { total_pairs - 50 } else { 0 }; // تقليل العدد لتجنب الضغط
 
     let mut pool_addresses = Vec::new();
     for i in start_index..total_pairs {
@@ -279,79 +280,50 @@ where
 
     let mut pool_results = Vec::new();
 
-    for chunk in dynamic_pools.chunks(2) {
+    // تقسيم الدفعات إلى أجزاء أصغر مع مهلة زمنية بينها لمنع أخطاء 429
+    for chunk in dynamic_pools.chunks(1) {
         if chunk.is_empty() {
             continue;
         }
 
-        let mut batch_pools = [chunk[0]; 2];
-        for (i, &addr) in chunk.iter().enumerate() {
-            batch_pools[i] = addr;
-        }
-
-        let p0 = IUniswapV2Pair::new(batch_pools[0], http_provider.clone());
-        let p1 = IUniswapV2Pair::new(batch_pools[1], http_provider.clone());
+        let p0 = IUniswapV2Pair::new(chunk[0], http_provider.clone());
 
         let multicall = http_provider.multicall()
-            .add(p0.getReserves()).add(p0.token0()).add(p0.token1())
-            .add(p1.getReserves()).add(p1.token0()).add(p1.token1());
+            .add(p0.getReserves()).add(p0.token0()).add(p0.token1());
 
         match multicall.aggregate().await {
             Ok(res) => {
-                let (
-                    res0, t0_0, t1_0,
-                    res1, t0_1, t1_1,
-                ) = res;
+                let (res0, t0_0, t1_0) = res;
 
-                let token0_addr_0 = Address::from(t0_0.0);
-                let token1_addr_0 = Address::from(t1_0.0);
-                let token0_addr_1 = Address::from(t0_1.0);
-                let token1_addr_1 = Address::from(t1_1.0);
+                let token0_addr = Address::from(t0_0.0);
+                let token1_addr = Address::from(t1_0.0);
 
-                let dec0_0 = IERC20::new(token0_addr_0, http_provider.clone()).decimals().call().await.unwrap_or(18);
-                let dec1_0 = IERC20::new(token1_addr_0, http_provider.clone()).decimals().call().await.unwrap_or(18);
-                
-                let dec0_1 = IERC20::new(token0_addr_1, http_provider.clone()).decimals().call().await.unwrap_or(18);
-                let dec1_1 = IERC20::new(token1_addr_1, http_provider.clone()).decimals().call().await.unwrap_or(18);
+                let r0_val = U256::from(res0.reserve0);
+                let r1_val = U256::from(res0.reserve1);
 
-                let batch_items = [
-                    (batch_pools[0], res0, token0_addr_0, token1_addr_0, dec0_0, dec1_0),
-                    (batch_pools[1], res1, token0_addr_1, token1_addr_1, dec0_1, dec1_1),
-                ];
+                if r0_val > U256::ZERO && r1_val > U256::ZERO {
+                    let r0_f: f64 = r0_val.to_string().parse().unwrap_or(0.0);
+                    let r1_f: f64 = r1_val.to_string().parse().unwrap_or(0.0);
 
-                for (idx, (pool_addr, reserves, t0, t1, d0, d1)) in batch_items.iter().enumerate() {
-                    if idx >= chunk.len() {
-                        break; 
-                    }
+                    let live_price = if r0_f > 0.0 { r1_f / r0_f } else { 0.0 };
+                    let dynamic_loan_amount = r0_val / U256::from(100);
 
-                    let r0_val = U256::from(reserves.reserve0);
-                    let r1_val = U256::from(reserves.reserve1);
-
-                    if r0_val > U256::ZERO && r1_val > U256::ZERO {
-                        // استخدام التحويل الآمن عبر النص لتجنب الـ Overflow بشكل كامل
-                        let r0_f: f64 = r0_val.to_string().parse().unwrap_or(0.0);
-                        let r1_f: f64 = r1_val.to_string().parse().unwrap_or(0.0);
-
-                        let r0_adjusted = r0_f / 10f64.powi(*d0 as i32);
-                        let r1_adjusted = r1_f / 10f64.powi(*d1 as i32);
-                        
-                        let live_price = if r0_adjusted > 0.0 { r1_adjusted / r0_adjusted } else { 0.0 };
-                        let dynamic_loan_amount = r0_val / U256::from(100);
-
-                        pool_results.push(PoolData {
-                            price: live_price,
-                            token0: *t0,
-                            token1: *t1,
-                            loan_amount: dynamic_loan_amount,
-                            pool_address: *pool_addr,
-                        });
-                    }
+                    pool_results.push(PoolData {
+                        price: live_price,
+                        token0: token0_addr,
+                        token1: token1_addr,
+                        loan_amount: dynamic_loan_amount,
+                        pool_address: chunk[0],
+                    });
                 }
             }
             Err(e) => {
-                eprintln!("⚠ Multicall batch chunk failed: {:?}", e);
+                eprintln!("⚠ Multicall chunk failed (Rate limit guard): {:?}", e);
             }
         }
+
+        // مهلة قصيرة جداً لتجنب ضرب حد الـ CIPS لـ Alchemy
+        sleep(Duration::from_millis(50)).await;
     }
 
     if pool_results.is_empty() {
@@ -395,11 +367,9 @@ async fn trigger_on_chain_arbitrage<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    println!("🚀 [BOT -> CONTRACT] Executing Atomic Multi-Swap Command!");
-    println!("🔗 Atomic Route Dispatched: Targets: {:?}, Payloads Count: {}", target_path.0, target_path.1.len());
-    println!("🪙 Forced High-Liquidity Borrow Asset: {:?}, Loan Amount: {}", token_to_borrow, loan_amount);
-
     if target_path.0.is_empty() { return Ok(()); }
+
+    println!("🚀 [BOT -> CONTRACT] Executing Pre-flight Validated Atomic Multi-Swap...");
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(target_path.0.into_iter().map(alloy::dyn_abi::DynSolValue::Address).collect()),
@@ -411,32 +381,29 @@ where
     let balancer_builder = contract.triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
         .from(signer_address);
 
-    println!("🧪 [BALANCER] Running Simulation Call via HTTP Provider...");
+    println!("🧪 [BALANCER] Running Safe Simulation Call...");
     match balancer_builder.call().await {
         Ok(_) => {
-            println!("✅ Balancer Simulation Passed Successfully! Dispatching Real Transaction...");
+            println!("✅ Balancer Simulation Passed! Sending Transaction...");
             let pending_tx = balancer_builder.send().await?;
-            println!("⏳ Transaction Sent! TX Hash: {:?}", pending_tx.tx_hash());
             let receipt = pending_tx.get_receipt().await?;
             println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
         }
         Err(e_balancer) => {
-            println!("⚠ Balancer Simulation Failed ({:?}). Activating Aave Fallback Route...", e_balancer);
+            println!("⚠ Balancer Simulation Rejected/Failed. Testing Aave Fallback...");
 
             let aave_builder = contract.triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
                 .from(signer_address);
 
-            println!("🧪 [AAVE] Running Fallback Simulation Call...");
             match aave_builder.call().await {
                 Ok(_) => {
-                    println!("✅ Aave Simulation Passed Successfully! Dispatching Real Transaction...");
+                    println!("✅ Aave Fallback Simulation Passed! Sending Transaction...");
                     let pending_tx = aave_builder.send().await?;
-                    println!("⏳ Transaction Sent! TX Hash: {:?}", pending_tx.tx_hash());
                     let receipt = pending_tx.get_receipt().await?;
                     println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
                 }
                 Err(e_aave) => {
-                    println!("❌ Both Balancer and Aave Simulations Failed. Balancer Err: {:?}, Aave Err: {:?}. Aborting to save gas.", e_balancer, e_aave);
+                    println!("❌ Both Simulations Failed cleanly. Aborted safely to protect gas. Balancer: {:?}, Aave: {:?}", e_balancer, e_aave);
                 }
             }
         }
@@ -447,7 +414,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Universal Dynamic Token Scanner Core via Alloy...");
+    println!("🤖 Initializing Optimized MEV Core Engine...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x5FbDB2315678afecb367f032d93F642f64180aa3".to_string());
@@ -464,26 +431,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let signer_address = signer.address();
     let wallet = EthereumWallet::from(signer);
 
-    println!("📡 Activating HTTP Connection to: {}", alchemy_http_url);
     let http_provider = ProviderBuilder::new()
         .wallet(wallet.clone())
         .connect_http(alchemy_http_url.parse()?);
 
-    println!("📡 Activating WebSocket Connection to: {}", alchemy_wss_url);
     let ws = alloy::providers::WsConnect::new(alchemy_wss_url);
     let ws_provider = ProviderBuilder::new()
         .wallet(wallet)
         .connect_ws(ws)
         .await?;
 
-    println!("🔍 [INIT CACHE] Fetching initial active factory pools from Aerodrome factory...");
     let cached_pools = match fetch_dynamic_pools(http_provider.clone()).await {
         Ok(pools) => {
-            println!("✅ Successfully cached {} pool addresses in memory.", pools.len());
+            println!("✅ Successfully cached {} pool addresses with rate-limit protection.", pools.len());
             pools
         }
         Err(e) => {
-            println!("❌ Critical Error fetching initial factory pools: {:?}. Aborting boot.", e);
             return Err(e);
         }
     };
@@ -497,36 +460,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("📦 Live WSS Block Synced: #{} (Internal counter: {})", block_num, block_counter);
+        println!("📦 Live WSS Block Synced: #{} (Counter: {})", block_num, block_counter);
 
         let (live_market_price, dynamic_token, dynamic_loan, token0, token1, scanned_addresses) = 
             fetch_live_market_data(http_provider.clone(), &cached_pools).await?;
         
-        println!("   📊 [METRIC FEED] Aggregated Price: {:.6}, Checking Velocity Pivots...", live_market_price);
-
         let (direction, velocity) = radar.update_and_predict(live_market_price);
 
         if direction == Direction::Peak || direction == Direction::Bottom {
-            println!("⚡ [RADAR ALERT] Velocity Pivot Discovered: {:.4}", velocity);
+            println!("⚡ [RADAR ALERT] Validated Velocity Pivot: {:.4}", velocity);
             let nodes = vec![
                 QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000usize), frequency: live_market_price, token0, token1 },
                 QuantumNode { id: 2, energy_scale: generate_astronomical_number(1000usize), frequency: 0.01, token0, token1 },
                 QuantumNode { id: 3, energy_scale: generate_astronomical_number(1000usize), frequency: 0.015, token0, token1 },
             ];
 
-            for node in &nodes {
-                println!("   ⚛ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
-            }
-
             let system = CausalCollapseSystem::new(nodes, scanned_addresses);
             let optimized_path = system.execute_collapse();
 
             if let Err(e) = trigger_on_chain_arbitrage(http_provider.clone(), contract_address, optimized_path, signer_address, dynamic_token, dynamic_loan).await {
-                println!("❌ Error executing on-chain command: {:?}", e);
+                println!("❌ Execution error: {:?}", e);
             }
         }
+
+        // تهدئة حلقة الاستماع لتجنب إغراق الـ RPC
+        sleep(Duration::from_millis(100)).await;
     }
 
-    println!("🏁 Live stream processing terminated.");
     Ok(())
 }

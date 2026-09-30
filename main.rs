@@ -276,9 +276,14 @@ where
 
     for pool_address in dynamic_pools {
         let pair_contract = IUniswapV2Pair::new(*pool_address, http_provider.clone());
-        multicall = multicall.add_raw(*pool_address, pair_contract.getReserves().abi_encode());
-        multicall = multicall.add_raw(*pool_address, pair_contract.token0().abi_encode());
-        multicall = multicall.add_raw(*pool_address, pair_contract.token1().abi_encode());
+        
+        let reserves_data = pair_contract.getReserves().request.input.clone().into_input().unwrap_or_default();
+        let token0_data = pair_contract.token0().request.input.clone().into_input().unwrap_or_default();
+        let token1_data = pair_contract.token1().request.input.clone().into_input().unwrap_or_default();
+
+        multicall = multicall.add_custom_call(*pool_address, reserves_data);
+        multicall = multicall.add_custom_call(*pool_address, token0_data);
+        multicall = multicall.add_custom_call(*pool_address, token1_data);
     }
 
     let mut pool_results = Vec::new();
@@ -387,7 +392,7 @@ where
             println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
         }
         Err(e_balancer) => {
-            println!("⚠️️ Balancer Simulation Failed ({:?}). Activating Aave Fallback Route...", e_balancer);
+            println!("⚠ Balancer Simulation Failed ({:?}). Activating Aave Fallback Route...", e_balancer);
 
             let aave_builder = contract.triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
                 .from(signer_address);

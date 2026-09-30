@@ -357,12 +357,12 @@ where
         for &pool_addr in chunk {
             let pair = IUniswapV2Pair::new(pool_addr, http_provider.clone());
             
-            // Explicitly await individual calls sequentially to satisfy alloy-contract CallBuilder lifetimes and futures bounds
-            if let (Ok(reserves), Ok(t0), Ok(t1)) = tokio::join!(
-                pair.getReserves().call(),
-                pair.token0().call(),
-                pair.token1().call()
-            ) {
+            // Fixed temporary lifetime bug by awaiting individual results cleanly
+            let reserves_res = pair.getReserves().call().await;
+            let t0_res = pair.token0().call().await;
+            let t1_res = pair.token1().call().await;
+
+            if let (Ok(reserves), Ok(t0), Ok(t1)) = (reserves_res, t0_res, t1_res) {
                 let r0_val = U256::from(reserves.reserve0);
                 let r1_val = U256::from(reserves.reserve1);
 
@@ -590,5 +590,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("🏁 Live stream processing terminated.");
-    Ok(())
+     Ok(())
 }

@@ -5,7 +5,7 @@ use std::time::Instant;
 use futures_util::StreamExt;
 use tokio::time::{sleep, Duration};
 use alloy::{
-    providers::{Provider, ProviderBuilder, RootProvider},
+    providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256, Bytes},
@@ -17,8 +17,8 @@ const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
 const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
 
 // Whitelisted Router Addresses on Base Network
-const UNISWAP_V3_ROUTER: Address = address!("262664982A6941F909fCF2f8358D64E19349e25C"); // Example/Standard V3 Router
-const AERODROME_ROUTER: Address = address!("cF77a3Ba9A5CA399B7f97cbf339178ffc51eda8c");  // Aerodrome Router
+const UNISWAP_V3_ROUTER: Address = address!("262664982A6941F909fCF2f8358D64E19349e25C");
+const AERODROME_ROUTER: Address = address!("cF77a3Ba9A5CA399B7f97cbf339178ffc51eda8c");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Direction {
@@ -189,13 +189,11 @@ impl CausalCollapseSystem {
             let pool = self.dynamic_pools[idx % self.dynamic_pools.len()];
             addresses.push(pool);
 
-            // TASK 3: Conditional Payload Router ABI Generation
             let payload = if pool == UNISWAP_V3_ROUTER {
                 let exact_input_params = IUniswapV3Router::ExactInputParams {
                     path: {
                         let mut packed = Vec::new();
                         packed.extend_from_slice(node.token0.as_slice());
-                        // Standard fee tier placeholder bytes (e.g. 0.3% fee = 3000 -> 3 bytes)
                         packed.extend_from_slice(&[0x00, 0x0b, 0xb8]); 
                         packed.extend_from_slice(node.token1.as_slice());
                         Bytes::from(packed)
@@ -221,7 +219,6 @@ impl CausalCollapseSystem {
                     deadline: U256::from(u64::MAX),
                 }.abi_encode()
             } else {
-                // Default V2 fallback compatibility layout
                 IUniswapV2Router02::swapExactTokensForTokensCall {
                     amountIn: self.loan_amount,
                     amountOutMin: U256::ZERO,
@@ -352,64 +349,52 @@ where
 
     let mut pool_results = Vec::new();
 
-    // TASK 4: Optimized Multicall Chunking (Chunks of 20 pools) and Removed Sleep Overhead
     for chunk in dynamic_pools.chunks(20) {
         if chunk.is_empty() {
             continue;
         }
 
-        let mut multicall = http_provider.multicall();
         for &pool_addr in chunk {
             let pair = IUniswapV2Pair::new(pool_addr, http_provider.clone());
-            multicall = multicall.add(pair.getReserves()).add(pair.token0()).add(pair.token1());
-        }
+            
+            // Explicitly await individual calls sequentially to satisfy alloy-contract CallBuilder lifetimes and futures bounds
+            if let (Ok(reserves), Ok(t0), Ok(t1)) = tokio::join!(
+                pair.getReserves().call(),
+                pair.token0().call(),
+                pair.token1().call()
+            ) {
+                let r0_val = U256::from(reserves.reserve0);
+                let r1_val = U256::from(reserves.reserve1);
 
-        match multicall.aggregate().await {
-            Ok(results_tuple_dyn) => {
-                // Dynamically unpack chunked results safely matching 3 items per pool (reserves, token0, token1)
-                for (i, &pool_addr) in chunk.iter().enumerate() {
-                    let base_idx = i * 3;
-                    // Safely extract from multicall result buffer using robust fallback parsing
-                    let p0 = IUniswapV2Pair::new(pool_addr, http_provider.clone());
-                    
-                    if let (Ok(reserves), Ok(t0), Ok(t1)) = tokio::join!(p0.getReserves(), p0.token0(), p0.token1()) {
-                        let r0_val = U256::from(reserves.reserve0);
-                        let r1_val = U256::from(reserves.reserve1);
+                if r0_val > U256::from(100) && r1_val > U256::from(100) {
+                    let dec0 = IERC20::new(t0, http_provider.clone()).decimals().call().await.unwrap_or(18);
+                    let dec1 = IERC20::new(t1, http_provider.clone()).decimals().call().await.unwrap_or(18);
 
-                        // TASK 5: Refactored Reserve Filtering (Lowered threshold for robust handling of varied token weights)
-                        if r0_val > U256::from(100) && r1_val > U256::from(100) {
-                            let dec0 = IERC20::new(t0, http_provider.clone()).decimals().call().await.unwrap_or(18);
-                            let dec1 = IERC20::new(t1, http_provider.clone()).decimals().call().await.unwrap_or(18);
+                    let r0_f: f64 = r0_val.to_string().parse().unwrap_or(0.0);
+                    let r1_f: f64 = r1_val.to_string().parse().unwrap_or(0.0);
 
-                            let r0_f: f64 = r0_val.to_string().parse().unwrap_or(0.0);
-                            let r1_f: f64 = r1_val.to_string().parse().unwrap_or(0.0);
+                    let r0_adjusted = r0_f / 10f64.powi(dec0 as i32);
+                    let r1_adjusted = r1_f / 10f64.powi(dec1 as i32);
 
-                            let r0_adjusted = r0_f / 10f64.powi(dec0 as i32);
-                            let r1_adjusted = r1_f / 10f64.powi(dec1 as i32);
+                    let live_price = if r0_adjusted > 0.0 { r1_adjusted / r0_adjusted } else { 0.0 };
 
-                            let live_price = if r0_adjusted > 0.0 { r1_adjusted / r0_adjusted } else { 0.0 };
+                    if live_price > 0.0 && live_price < 1_000_000.0 {
+                        let safe_loan_amount = if t0 == WETH_BASE || t1 == WETH_BASE {
+                            U256::from(10_000_000_000_000_000u64)
+                        } else {
+                            U256::from(10_000_000u64)
+                        };
 
-                            if live_price > 0.0 && live_price < 1_000_000.0 {
-                                // Dynamic loan sizing scaled appropriately to decimals
-                                let safe_loan_amount = if t0 == WETH_BASE || t1 == WETH_BASE {
-                                    U256::from(10_000_000_000_000_000u64) // 0.01 WETH
-                                } else {
-                                    U256::from(10_000_000u64)            // 10 USDC (6 decimals)
-                                };
-
-                                pool_results.push(PoolData {
-                                    price: live_price,
-                                    token0: t0,
-                                    token1: t1,
-                                    loan_amount: safe_loan_amount,
-                                    pool_address: pool_addr,
-                                });
-                            }
-                        }
+                        pool_results.push(PoolData {
+                            price: live_price,
+                            token0: t0,
+                            token1: t1,
+                            loan_amount: safe_loan_amount,
+                            pool_address: pool_addr,
+                        });
                     }
                 }
             }
-            Err(_e) => {}
         }
     }
 
@@ -463,19 +448,16 @@ where
     println!("🔗 Atomic Route Dispatched: Targets: {:?}, Payloads Count: {}", target_path.0, target_path.1.len());
     println!("🪙 Forced High-Liquidity Borrow Asset: {:?}, Loan Amount: {}", token_to_borrow, loan_amount);
 
-    // TASK 1: Full Nested ABI Packaging Matching Solidity Decoder Expectations
-    // Solidity: abi.decode(userData, (address, uint256, address, bytes))
-    // Where inner bytes decodes to: abi.decode(realSwapPathData, (address[], bytes[]))
     let inner_swap_path_tuple = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(target_path.0.clone().into_iter().map(alloy::dyn_abi::DynSolValue::Address).collect()),
         alloy::dyn_abi::DynSolValue::Array(target_path.1.into_iter().map(|p| alloy::dyn_abi::DynSolValue::Bytes(p.into())).collect()),
     ]);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
-        alloy::dyn_abi::DynSolValue::Address(signer_address),                     // originalInitiator
-        alloy::dyn_abi::DynSolValue::Uint(loan_amount, 256),                      // exactBalanceBefore placeholder
-        alloy::dyn_abi::DynSolValue::Address(token_to_borrow),                    // tokenToBorrow
-        alloy::dyn_abi::DynSolValue::Bytes(inner_swap_path_tuple.abi_encode()),   // realSwapPathData bytes
+        alloy::dyn_abi::DynSolValue::Address(signer_address),
+        alloy::dyn_abi::DynSolValue::Uint(loan_amount, 256),
+        alloy::dyn_abi::DynSolValue::Address(token_to_borrow),
+        alloy::dyn_abi::DynSolValue::Bytes(inner_swap_path_tuple.abi_encode()),
     ]).abi_encode();
 
     let contract = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
@@ -596,7 +578,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("   ⚛️ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
             }
 
-            // TASK 2: Passed dynamic loan amount into CausalCollapseSystem instantiation
             let system = CausalCollapseSystem::new(nodes, scanned_addresses, contract_address, dynamic_loan);
             let optimized_path = system.execute_collapse();
 

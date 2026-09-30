@@ -25,7 +25,7 @@ const AERO_BASE: Address = address!("940181a94A35A4569E4529A3CDfB74e38FD98631");
 const UNISWAP_V3_ROUTER: Address = address!("262664982A6941F909fCF2f8358D64E19349e25C");
 const AERODROME_ROUTER: Address = address!("cF77a3Ba9A5CA399B7f97cbf339178ffc51eda8c");
 
-// Factory & Quoter references for multi-DEX price discovery
+// Factory references retained for backward compatibility
 const UNISWAP_V3_FACTORY: Address = address!("33128a8fC17869843ccE68212c64714156f52d62");
 const AERODROME_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFECe40Da");
 
@@ -345,34 +345,20 @@ sol! {
 }
 
 async fn fetch_dynamic_pools<P>(
-    http_provider: P,
+    _http_provider: P,
 ) -> Result<Vec<Address>, Box<dyn std::error::Error>>
 where
     P: Provider<Ethereum> + Clone,
 {
-    let factory = IAerodromeFactory::new(AERODROME_FACTORY, http_provider);
-
-    let length = match factory.allPairsLength().call().await {
-        Ok(len) => len,
-        Err(e) => {
-            println!("⚠ [WARNING] Factory allPairsLength() reverted or failed: {:?}. Using empty pool cache fallback.", e);
-            return Ok(vec![]);
-        }
-    };
-
-    let total_pairs = length.to::<u64>();
-    let start_index = if total_pairs > 20 { total_pairs - 20 } else { 0 };
-
-    let mut pool_addresses = Vec::new();
-    for i in start_index..total_pairs {
-        if let Ok(pair_address) = factory.allPairs(U256::from(i)).call().await {
-            if pair_address != Address::ZERO {
-                pool_addresses.push(pair_address);
-            }
-        }
-    }
-
-    Ok(pool_addresses)
+    // Bypassed dynamic factory lookups in favor of hardcoded high-performance pools
+    Ok(vec![
+        address!("B4885Bc4757b22775b47c0b31a24d588865d64c1"),
+        address!("d0b53D9277d7407987AF31b2A31BCCD68F5d7a75"),
+        address!("0606B4916aFDb81249bCBF51A18671b26CCf7D6C"),
+        address!("2A1c9966EEb6D649AA3b49F4472d24CE7F99FdAc"),
+        address!("7f670f66e028D139613b482276563c65c69AD752"),
+        address!("16629737119B61E47eDb8095AA508823f9E42Bdf"),
+    ])
 }
 
 struct AssetArbitrageOpportunity {
@@ -392,38 +378,35 @@ async fn fetch_live_market_data<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    let target_tokens = vec![USDC_BASE, CBBTC_BASE, USDBC_BASE, AERO_BASE];
-    let aero_factory = IAerodromeFactory::new(AERODROME_FACTORY, http_provider.clone());
-    let v3_factory = IUniswapV3Factory::new(UNISWAP_V3_FACTORY, http_provider.clone());
+    let pairs_config = vec![
+        (
+            USDC_BASE,
+            address!("B4885Bc4757b22775b47c0b31a24d588865d64c1"),
+            address!("d0b53D9277d7407987AF31b2A31BCCD68F5d7a75"),
+            U256::from(10_000_000_000_000_000u64),
+        ),
+        (
+            CBBTC_BASE,
+            address!("0606B4916aFDb81249bCBF51A18671b26CCf7D6C"),
+            address!("2A1c9966EEb6D649AA3b49F4472d24CE7F99FdAc"),
+            U256::from(1_000_000_000_000_000u64),
+        ),
+        (
+            AERO_BASE,
+            address!("7f670f66e028D139613b482276563c65c69AD752"),
+            address!("16629737119B61E47eDb8095AA508823f9E42Bdf"),
+            U256::from(10_000_000_000_000_000u64),
+        ),
+    ];
 
     let mut opportunities = Vec::new();
     let mut discovered_pools = Vec::new();
 
-    for &token in &target_tokens {
-        // 1. Check Aerodrome Pool using correct getPool(tokenA, tokenB, stable) signature
-        let aero_pool_res = aero_factory.getPool(token, WETH_BASE, false).call().await;
-        let aero_pool = match aero_pool_res {
-            Ok(addr) if addr != Address::ZERO => addr,
-            _ => match aero_factory.getPool(token, USDC_BASE, false).call().await {
-                Ok(addr) if addr != Address::ZERO => addr,
-                _ => continue,
-            },
-        };
-
-        // 2. Check Uniswap V3 Pool
-        let v3_pool_res = v3_factory.getPool(token, WETH_BASE, U24::from(500)).call().await;
-        let v3_pool = match v3_pool_res {
-            Ok(addr) if addr != Address::ZERO => addr,
-            _ => match v3_factory.getPool(token, USDC_BASE, U24::from(3000)).call().await {
-                Ok(addr) if addr != Address::ZERO => addr,
-                _ => continue,
-            },
-        };
-
+    for &(token, aero_pool, v3_pool, loan_amount) in &pairs_config {
         discovered_pools.push(aero_pool);
         discovered_pools.push(v3_pool);
 
-        // Pull Aerodrome Reserves with precise decimal normalization
+        // 1. Pull Aerodrome Reserves directly without factory overhead
         let aero_pair = IUniswapV2Pair::new(aero_pool, http_provider.clone());
         let res_aero = aero_pair.getReserves().call().await;
         let t0_aero = aero_pair.token0().call().await;
@@ -442,7 +425,7 @@ where
             } else { 0.0 }
         } else { 0.0 };
 
-        // Pull Uniswap V3 Slot0 Price via sqrtPriceX96 with robust precision guard
+        // 2. Pull Uniswap V3 Slot0 Price directly via sqrtPriceX96
         let v3_pool_contract = IUniswapV3Pool::new(v3_pool, http_provider.clone());
         let slot0_res = v3_pool_contract.slot0().call().await;
         let price_v3 = if let Ok(slot0) = slot0_res {
@@ -455,11 +438,6 @@ where
 
         if price_aero > 0.0 && price_v3 > 0.0 {
             let spread_gap = (price_aero - price_v3).abs();
-            let loan_amount = if token == CBBTC_BASE {
-                U256::from(1_000_000_000_000_000u64)
-            } else {
-                U256::from(10_000_000_000_000_000u64)
-            };
 
             opportunities.push(AssetArbitrageOpportunity {
                 token,
@@ -594,14 +572,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect_ws(ws)
         .await?;
 
-    println!("🔍 [INIT CACHE] Fetching initial active factory pools from Aerodrome factory...");
+    println!("🔍 [INIT CACHE] Initializing direct high-performance pool cache...");
     let cached_pools = match fetch_dynamic_pools(http_provider.clone()).await {
         Ok(pools) => {
-            println!("✅ Successfully cached {} pool addresses in memory.", pools.len());
+            println!("✅ Successfully initialized {} direct pool addresses in memory.", pools.len());
             pools
         }
         Err(_) => {
-            println!("⚠ Pool cache fetch returned empty or reverted. Proceeding with empty initial cache.");
             vec![]
         }
     };

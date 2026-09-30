@@ -328,8 +328,9 @@ where
                     let r1_val = U256::from(reserves.reserve1);
 
                     if r0_val > U256::ZERO && r1_val > U256::ZERO {
-                        let r0_f: f64 = r0_val.to::<u64>() as f64;
-                        let r1_f: f64 = r1_val.to::<u64>() as f64;
+                        // استخدام التحويل الآمن عبر النص لتجنب الـ Overflow بشكل كامل
+                        let r0_f: f64 = r0_val.to_string().parse().unwrap_or(0.0);
+                        let r1_f: f64 = r1_val.to_string().parse().unwrap_or(0.0);
 
                         let r0_adjusted = r0_f / 10f64.powi(*d0 as i32);
                         let r1_adjusted = r1_f / 10f64.powi(*d1 as i32);

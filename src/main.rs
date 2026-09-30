@@ -78,7 +78,7 @@ pub struct CausalCollapseSystem {
     pub threshold_limit: f64,
     pub buffer_capacity: usize,
     pub dynamic_pools: Vec<Address>,
-    pub contract_address: Address, // ✅ إضافة عنوان العقد الذكي هنا لضبط وجهة الأرباح
+    pub contract_address: Address,
 }
 
 impl CausalCollapseSystem {
@@ -187,7 +187,7 @@ impl CausalCollapseSystem {
                 amountIn: U256::from(1000000000000000000u64),
                 amountOutMin: U256::ZERO,
                 path: vec![node.token0, node.token1],
-                to: self.contract_address, // ✅ توجيه ناتج المبادلة مباشرة إلى عقدك الذكي لتجاوز فشل الإعادة (Revert)
+                to: self.contract_address,
                 deadline: U256::from(u64::MAX),
             };
             payloads.push(swap_call.abi_encode());
@@ -330,7 +330,6 @@ where
                     let r0_val = U256::from(reserves.reserve0);
                     let r1_val = U256::from(reserves.reserve1);
 
-                    // 🛡️️ فحص السيولة الدنيا لتفادي أحواض ميتة تسبب Revert (code: 3)
                     if r0_val > U256::from(1000) && r1_val > U256::from(1000) {
                         let r0_f: f64 = r0_val.to_string().parse().unwrap_or(0.0);
                         let r1_f: f64 = r1_val.to_string().parse().unwrap_or(0.0);
@@ -354,7 +353,6 @@ where
             Err(_e) => {}
         }
 
-        // زيادة وقت الانتظار قليلاً لمنع أخطاء 429 Rate Limit
         sleep(Duration::from_millis(50)).await;
     }
 
@@ -399,9 +397,8 @@ async fn trigger_on_chain_arbitrage<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    // 🛡️ فحص مسبق لمنع المحاكاة الخاسرة أو الوهمية
     if loan_amount == U256::ZERO || target_path.0.is_empty() {
-        println!("🛡 [PRE-FLIGHT SHIELD] Invalid loan or empty path. Skipping execution to save gas & CUs.");
+        println!("🛡 [PRE-FLIGHT SHIELD] Invalid loan or empty path. Skipping execution.");
         return Ok(());
     }
 
@@ -463,7 +460,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "0x5FbDB2315678afecb367f032d93F642f64180aa3".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
 
-    // 🔄 دعم قائمة مزودات متعددة للتناوب التلقائي (RPC Failover)
     let alchemy_http_urls = vec![
         std::env::var("ALCHEMY_HTTP_URL").unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
         std::env::var("BACKUP_HTTP_URL").unwrap_or_else(|_| "https://mainnet.base.org".to_string()),
@@ -524,4 +520,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if direction == Direction::Peak || direction == Direction::Bottom {
             println!("⚡ [RADAR ALERT] Velocity Pivot Discovered: {:.4}", velocity);
             let nodes = vec![
-                QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000usize), frequency:
+                QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000usize), frequency: live_market_price, token0, token1 },
+                QuantumNode { id: 2, energy_scale: generate_astronomical_number(1000usize), frequency: 0.01, token0, token1 },
+                QuantumNode { id: 3, energy_scale: generate_astronomical_number(1000usize), frequency: 0.015, token0, token1 },
+            ];
+
+            for node in &nodes {
+                println!("   ⚛️ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
+            }
+
+            let system = CausalCollapseSystem::new(nodes, scanned_addresses, contract_address);
+            let optimized_path = system.execute_collapse();
+
+            if let Err(e) = trigger_on_chain_arbitrage(http_provider.clone(), contract_address, optimized_path, signer_address, dynamic_token, dynamic_loan).await {
+                println!("❌ Error executing on-chain command: {:?}", e);
+            }
+        }
+
+        sleep(Duration::from_millis(100)).await;
+    }
+
+    println!("🏁 Live stream processing terminated.");
+    Ok(())
+}

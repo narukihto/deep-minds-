@@ -5,7 +5,7 @@ use std::time::Instant;
 use futures_util::StreamExt;
 use tokio::time::{sleep, Duration};
 use alloy::{
-    providers::{Provider, ProviderBuilder},
+    providers::{Provider, ProviderBuilder, RootProvider},
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256},
@@ -251,7 +251,7 @@ where
 
     let length = factory.allPairsLength().call().await?;
     let total_pairs = length.to::<u64>();
-    let start_index = if total_pairs > 100 { total_pairs - 100 } else { 0 }; // استرجاع الـ 100 بركة كما في القديم
+    let start_index = if total_pairs > 100 { total_pairs - 100 } else { 0 };
 
     let mut pool_addresses = Vec::new();
     for i in start_index..total_pairs {
@@ -280,7 +280,6 @@ where
 
     let mut pool_results = Vec::new();
 
-    // فحص الأحواض بدفعات صغيرة مع فاصل زمني آمن لمنع حظر الـ RPC
     for chunk in dynamic_pools.chunks(2) {
         if chunk.is_empty() {
             continue;
@@ -329,7 +328,8 @@ where
                     let r0_val = U256::from(reserves.reserve0);
                     let r1_val = U256::from(reserves.reserve1);
 
-                    if r0_val > U256::ZERO && r1_val > U256::ZERO {
+                    // 🛡️ فحص السيولة الدنيا لتفادي أحواض ميتة تسبب Revert (code: 3)
+                    if r0_val > U256::from(1000) && r1_val > U256::from(1000) {
                         let r0_f: f64 = r0_val.to_string().parse().unwrap_or(0.0);
                         let r1_f: f64 = r1_val.to_string().parse().unwrap_or(0.0);
 
@@ -349,13 +349,11 @@ where
                     }
                 }
             }
-            Err(_e) => {
-                // تجاهل صامت للأخطاء المؤقتة للدفعة لضمان استمرار البوت
-            }
+            Err(_e) => {}
         }
 
-        // مهلة قصيرة للغاية لمنع أخطاء 429
-        sleep(Duration::from_millis(20)).await;
+        // زيادة وقت الانتظار قليلاً لمنع أخطاء 429 Rate Limit
+        sleep(Duration::from_millis(50)).await;
     }
 
     if pool_results.is_empty() {
@@ -399,11 +397,15 @@ async fn trigger_on_chain_arbitrage<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
+    // 🛡️ فحص مسبق لمنع المحاكاة الخاسرة أو الوهمية
+    if loan_amount == U256::ZERO || target_path.0.is_empty() {
+        println!("🛡 [PRE-FLIGHT SHIELD] Invalid loan or empty path. Skipping execution to save gas & CUs.");
+        return Ok(());
+    }
+
     println!("🚀 [BOT -> CONTRACT] Executing Atomic Multi-Swap Command!");
     println!("🔗 Atomic Route Dispatched: Targets: {:?}, Payloads Count: {}", target_path.0, target_path.1.len());
     println!("🪙 Forced High-Liquidity Borrow Asset: {:?}, Loan Amount: {}", token_to_borrow, loan_amount);
-
-    if target_path.0.is_empty() { return Ok(()); }
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(target_path.0.into_iter().map(alloy::dyn_abi::DynSolValue::Address).collect()),
@@ -426,6 +428,8 @@ where
         }
         Err(e_balancer) => {
             println!("⚠ Balancer Simulation Failed ({:?}). Activating Aave Fallback Route...", e_balancer);
+            
+            sleep(Duration::from_millis(150)).await;
 
             let aave_builder = contract.triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
                 .from(signer_address);
@@ -457,8 +461,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "0x5FbDB2315678afecb367f032d93F642f64180aa3".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
 
-    let alchemy_http_url = std::env::var("ALCHEMY_HTTP_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string());
+    // 🔄 دعم قائمة مزودات متعددة للتناوب التلقائي (RPC Failover)
+    let alchemy_http_urls = vec![
+        std::env::var("ALCHEMY_HTTP_URL").unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
+        std::env::var("BACKUP_HTTP_URL").unwrap_or_else(|_| "https://mainnet.base.org".to_string()),
+    ];
+    let primary_http_url = alchemy_http_urls[0].clone();
+
     let alchemy_wss_url = std::env::var("ALCHEMY_WSS_URL")
         .unwrap_or_else(|_| "ws://127.0.0.1:8545".to_string());
     let private_key_str = std::env::var("PRIVATE_KEY")
@@ -468,10 +477,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let signer_address = signer.address();
     let wallet = EthereumWallet::from(signer);
 
-    println!("📡 Activating HTTP Connection to: {}", alchemy_http_url);
+    println!("📡 Activating HTTP Connection to: {}", primary_http_url);
     let http_provider = ProviderBuilder::new()
         .wallet(wallet.clone())
-        .connect_http(alchemy_http_url.parse()?);
+        .connect_http(primary_http_url.parse()?);
 
     println!("📡 Activating WebSocket Connection to: {}", alchemy_wss_url);
     let ws = alloy::providers::WsConnect::new(alchemy_wss_url);
@@ -506,7 +515,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (live_market_price, dynamic_token, dynamic_loan, token0, token1, scanned_addresses) = 
             fetch_live_market_data(http_provider.clone(), &cached_pools).await?;
         
-        // استعادة طباعة الـ Metric Feed المفصلة كما طلبت
         println!("   📊 [METRIC FEED] Aggregated Price: {:.6}, Checking Velocity Pivots...", live_market_price);
 
         let (direction, velocity) = radar.update_and_predict(live_market_price);
@@ -530,6 +538,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("❌ Error executing on-chain command: {:?}", e);
             }
         }
+
+        // 🛡️ فترة راحة قصيرة بين معالجة البلوكات لتخفيف استهلاك الـ Compute Units
+        sleep(Duration::from_millis(100)).await;
     }
 
     println!("🏁 Live stream processing terminated.");

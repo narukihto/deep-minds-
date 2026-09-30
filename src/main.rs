@@ -274,12 +274,50 @@ where
 
     let mut pool_results = Vec::new();
 
-    for pool_address in dynamic_pools {
-        let pair_inst = IUniswapV2Pair::new(*pool_address, http_provider.clone());
-        
-        if let Ok(reserves) = pair_inst.getReserves().call().await {
-            if let Ok(t0) = pair_inst.token0().call().await {
-                if let Ok(t1) = pair_inst.token1().call().await {
+    // Multicall Optimization with Fixed Chunks of 4 pools (12 calls per batch)
+    // Using smart padding to guarantee zero pool skips and strict Rust Tuple type compatibility.
+    for chunk in dynamic_pools.chunks(4) {
+        if chunk.is_empty() {
+            continue;
+        }
+
+        let mut batch_pools = [chunk[0]; 4];
+        for (i, &addr) in chunk.iter().enumerate() {
+            batch_pools[i] = addr;
+        }
+
+        let p0 = IUniswapV2Pair::new(batch_pools[0], http_provider.clone());
+        let p1 = IUniswapV2Pair::new(batch_pools[1], http_provider.clone());
+        let p2 = IUniswapV2Pair::new(batch_pools[2], http_provider.clone());
+        let p3 = IUniswapV2Pair::new(batch_pools[3], http_provider.clone());
+
+        let multicall = http_provider.multicall()
+            .add(p0.getReserves()).add(p0.token0()).add(p0.token1())
+            .add(p1.getReserves()).add(p1.token0()).add(p1.token1())
+            .add(p2.getReserves()).add(p2.token0()).add(p2.token1())
+            .add(p3.getReserves()).add(p3.token0()).add(p3.token1());
+
+        match multicall.aggregate().await {
+            Ok(res) => {
+                let (
+                    res0, t0_0, t1_0,
+                    res1, t0_1, t1_1,
+                    res2, t0_2, t1_2,
+                    res3, t0_3, t1_3,
+                ) = res;
+
+                let batch_items = [
+                    (batch_pools[0], res0, t0_0, t1_0),
+                    (batch_pools[1], res1, t0_1, t1_1),
+                    (batch_pools[2], res2, t0_2, t1_2),
+                    (batch_pools[3], res3, t0_3, t1_3),
+                ];
+
+                for (idx, (pool_addr, reserves, t0, t1)) in batch_items.iter().enumerate() {
+                    if idx >= chunk.len() {
+                        break; // Skip padding items safely
+                    }
+
                     let r0_val = U256::from(reserves.reserve0);
                     let r1_val = U256::from(reserves.reserve1);
 
@@ -294,10 +332,13 @@ where
                             token0: t0._0, 
                             token1: t1._0,
                             loan_amount: dynamic_loan_amount,
-                            pool_address: *pool_address,
+                            pool_address: *pool_addr,
                         });
                     }
                 }
+            }
+            Err(e) => {
+                eprintln!("⚠️ Multicall batch chunk failed: {:?}", e);
             }
         }
     }

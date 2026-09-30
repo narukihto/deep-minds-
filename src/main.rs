@@ -274,8 +274,6 @@ where
 
     let mut pool_results = Vec::new();
 
-    // Multicall Optimization with Fixed Chunks of 4 pools (12 calls per batch)
-    // Using smart padding to guarantee zero pool skips and strict Rust Tuple type compatibility.
     for chunk in dynamic_pools.chunks(4) {
         if chunk.is_empty() {
             continue;
@@ -315,7 +313,7 @@ where
 
                 for (idx, (pool_addr, reserves, t0, t1)) in batch_items.iter().enumerate() {
                     if idx >= chunk.len() {
-                        break; // Skip padding items safely
+                        break; 
                     }
 
                     let r0_val = U256::from(reserves.reserve0);
@@ -329,8 +327,8 @@ where
 
                         pool_results.push(PoolData {
                             price: live_price,
-                            token0: t0._0, 
-                            token1: t1._0,
+                            token0: t0.0, // تم التحديث هنا بنجاح
+                            token1: t1.0, // تم التحديث هنا بنجاح
                             loan_amount: dynamic_loan_amount,
                             pool_address: *pool_addr,
                         });
@@ -465,7 +463,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect_ws(ws)
         .await?;
 
-    // --- INITIALIZATION CACHING: Fetch Factory Pools Once at Startup ---
     println!("🔍 [INIT CACHE] Fetching initial active factory pools from Aerodrome factory...");
     let cached_pools = match fetch_dynamic_pools(http_provider.clone()).await {
         Ok(pools) => {

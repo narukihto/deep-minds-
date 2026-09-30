@@ -389,8 +389,10 @@ where
     let aero_pair_usdc = IUniswapV2Pair::new(aero_usdc_pool, http_provider.clone());
     let v3_pool_usdc = IUniswapV3Pool::new(v3_usdc_pool, http_provider.clone());
 
-    let aero_fut_usdc = aero_pair_usdc.getReserves().call();
-    let v3_fut_usdc = v3_pool_usdc.slot0().call();
+    let aero_builder_usdc = aero_pair_usdc.getReserves();
+    let v3_builder_usdc = v3_pool_usdc.slot0();
+    let aero_fut_usdc = aero_builder_usdc.call();
+    let v3_fut_usdc = v3_builder_usdc.call();
 
     if let Ok((res_aero, slot0_v3)) = tokio::try_join!(
         aero_fut_usdc,
@@ -433,8 +435,10 @@ where
     let aero_pair_cbbtc = IUniswapV2Pair::new(aero_cbbtc_pool, http_provider.clone());
     let v3_pool_cbbtc = IUniswapV3Pool::new(v3_cbbtc_pool, http_provider.clone());
 
-    let aero_fut_cbbtc = aero_pair_cbbtc.getReserves().call();
-    let v3_fut_cbbtc = v3_pool_cbbtc.slot0().call();
+    let aero_builder_cbbtc = aero_pair_cbbtc.getReserves();
+    let v3_builder_cbbtc = v3_pool_cbbtc.slot0();
+    let aero_fut_cbbtc = aero_builder_cbbtc.call();
+    let v3_fut_cbbtc = v3_builder_cbbtc.call();
 
     if let Ok((res_aero, slot0_v3)) = tokio::try_join!(
         aero_fut_cbbtc,
@@ -477,8 +481,10 @@ where
     let aero_pair_aero = IUniswapV2Pair::new(aero_aero_pool, http_provider.clone());
     let v3_pool_aero = IUniswapV3Pool::new(v3_aero_pool, http_provider.clone());
 
-    let aero_fut_aero = aero_pair_aero.getReserves().call();
-    let v3_fut_aero = v3_pool_aero.slot0().call();
+    let aero_builder_aero = aero_pair_aero.getReserves();
+    let v3_builder_aero = v3_pool_aero.slot0();
+    let aero_fut_aero = aero_builder_aero.call();
+    let v3_fut_aero = v3_builder_aero.call();
 
     if let Ok((res_aero, slot0_v3)) = tokio::try_join!(
         aero_fut_aero,

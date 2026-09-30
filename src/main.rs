@@ -393,8 +393,8 @@ where
         aero_pair_usdc.getReserves().call(),
         v3_pool_usdc.slot0().call()
     ) {
-        let r0 = res_aero.reserve0 as f64;
-        let r1 = res_aero.reserve1 as f64;
+        let r0 = res_aero.reserve0.to::<u128>() as f64;
+        let r1 = res_aero.reserve1.to::<u128>() as f64;
         if r0 > 100.0 && r1 > 100.0 {
             let f0 = r0 / 1_000_000.0;
             let f1 = r1 / 1_000_000_000_000_000_000.0;
@@ -434,8 +434,8 @@ where
         aero_pair_cbbtc.getReserves().call(),
         v3_pool_cbbtc.slot0().call()
     ) {
-        let r0 = res_aero.reserve0 as f64;
-        let r1 = res_aero.reserve1 as f64;
+        let r0 = res_aero.reserve0.to::<u128>() as f64;
+        let r1 = res_aero.reserve1.to::<u128>() as f64;
         if r0 > 100.0 && r1 > 100.0 {
             let f0 = r0 / 100_000_000.0;
             let f1 = r1 / 1_000_000_000_000_000_000.0;
@@ -475,8 +475,8 @@ where
         aero_pair_aero.getReserves().call(),
         v3_pool_aero.slot0().call()
     ) {
-        let r0 = res_aero.reserve0 as f64;
-        let r1 = res_aero.reserve1 as f64;
+        let r0 = res_aero.reserve0.to::<u128>() as f64;
+        let r1 = res_aero.reserve1.to::<u128>() as f64;
         if r0 > 100.0 && r1 > 100.0 {
             let f0 = r0 / 1_000_000_000_000_000_000.0;
             let f1 = r1 / 1_000_000_000_000_000_000.0;

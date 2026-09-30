@@ -8,10 +8,12 @@ use alloy::{
     providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
-    primitives::{address, Address, U256, U24, Bytes},
+    primitives::{address, Address, U256, Bytes, Uint},
     sol,
     sol_types::SolCall,
 };
+
+type U24 = Uint<24, 1>;
 
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
 const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
@@ -616,7 +618,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ];
 
             for node in &nodes {
-                println!("   ⚛️ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
+                println!("   ⚛️️ [QUANTUM NODE EVAL] Node ID: {}, Frequency: {:.6}, Energy Scale Digits: {}", node.id, node.frequency, node.energy_scale.to_string().len());
             }
 
             let system = CausalCollapseSystem::new(nodes, scanned_addresses, contract_address, dynamic_loan);

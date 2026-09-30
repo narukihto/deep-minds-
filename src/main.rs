@@ -273,69 +273,32 @@ where
     }
 
     let mut pool_results = Vec::new();
-    
-    // 1. Initialize a dynamic multicall builder
-    let mut multicall = http_provider.multicall().dynamic();
 
-    // 2. Build uniform raw bytecode calls using the SolCall trait and insert via add_call
     for pool_address in dynamic_pools {
-        let reserves_bytes = IUniswapV2Pair::getReservesCall {}.abi_encode();
-        let token0_bytes = IUniswapV2Pair::token0Call {}.abi_encode();
-        let token1_bytes = IUniswapV2Pair::token1Call {}.abi_encode();
+        let pair_inst = IUniswapV2Pair::new(*pool_address, http_provider.clone());
+        
+        if let Ok(reserves) = pair_inst.getReserves().call().await {
+            if let Ok(t0) = pair_inst.token0().call().await {
+                if let Ok(t1) = pair_inst.token1().call().await {
+                    let r0_val = U256::from(reserves.reserve0);
+                    let r1_val = U256::from(reserves.reserve1);
 
-        let call_reserves = alloy::providers::multicall::RawCall::new(*pool_address, reserves_bytes.into());
-        let call_token0 = alloy::providers::multicall::RawCall::new(*pool_address, token0_bytes.into());
-        let call_token1 = alloy::providers::multicall::RawCall::new(*pool_address, token1_bytes.into());
-
-        multicall = multicall.add_call(call_reserves);
-        multicall = multicall.add_call(call_token0);
-        multicall = multicall.add_call(call_token1);
-    }
-
-    // 3. Execute the aggregate RPC call and decode manually using single-argument functions
-    match multicall.aggregate().await {
-        Ok(results) => {
-            for (i, pool_address) in dynamic_pools.iter().enumerate() {
-                let base_idx = i * 3;
-                
-                // Remove the extra boolean argument from standard abi_decode_returns
-                let reserves_opt = results.get(base_idx).and_then(|v| {
-                    IUniswapV2Pair::getReservesCall::abi_decode_returns(v.as_ref()).ok()
-                });
-                let t0_opt = results.get(base_idx + 1).and_then(|v| {
-                    IUniswapV2Pair::token0Call::abi_decode_returns(v.as_ref()).ok()
-                });
-                let t1_opt = results.get(base_idx + 2).and_then(|v| {
-                    IUniswapV2Pair::token1Call::abi_decode_returns(v.as_ref()).ok()
-                });
-
-                if let (Some(reserves), Some(t0), Some(t1)) = (reserves_opt, t0_opt, t1_opt) {
-                    let r0 = reserves.reserve0; // This is u112
-                    let r1 = reserves.reserve1; // This is u112
-                    
-                    // Compare directly with integer 0 to bypass E0277 type matching restrictions
-                    if r0 > 0 && r1 > 0 {
-                        let r0_f = r0.to::<u128>() as f64;
-                        let r1_f = r1.to::<u128>() as f64;
+                    if r0_val > U256::ZERO && r1_val > U256::ZERO {
+                        let r0_f = r0_val.to::<u128>() as f64;
+                        let r1_f = r1_val.to::<u128>() as f64;
                         let live_price = r1_f / r0_f;
-                        
-                        // Divide by integer 100 directly, then cast the final loan amount up to U256
-                        let loan_u112 = r0 / 100;
-                        let dynamic_loan_amount = U256::from(loan_u112);
+                        let dynamic_loan_amount = r0_val / U256::from(100);
 
                         pool_results.push(PoolData {
                             price: live_price,
-                            token0: t0.0, 
-                            token1: t1.0,
+                            token0: t0._0, 
+                            token1: t1._0,
                             loan_amount: dynamic_loan_amount,
                             pool_address: *pool_address,
                         });
                     }
                 }
             }
-        }
-        Err(e) => {
-            eprintln!("⚠️️ Failed to execute dynamic Multicall batch RPC: {:?}", e);
         }
     }
 

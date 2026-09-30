@@ -279,7 +279,6 @@ where
 
     let mut pool_results = Vec::new();
 
-    // تقليص الدفعة إلى حوضين (6 استعلامات فقط) لإتاحة المجال لجلب الـ Decimals بدقة دون تجاوز حدود الـ Tuples
     for chunk in dynamic_pools.chunks(2) {
         if chunk.is_empty() {
             continue;
@@ -309,7 +308,6 @@ where
                 let token0_addr_1 = Address::from(t0_1.0);
                 let token1_addr_1 = Address::from(t1_1.0);
 
-                // جلب الـ Decimals بشكل آمن لكل توكن
                 let dec0_0 = IERC20::new(token0_addr_0, http_provider.clone()).decimals().call().await.unwrap_or(18);
                 let dec1_0 = IERC20::new(token1_addr_0, http_provider.clone()).decimals().call().await.unwrap_or(18);
                 
@@ -317,8 +315,8 @@ where
                 let dec1_1 = IERC20::new(token1_addr_1, http_provider.clone()).decimals().call().await.unwrap_or(18);
 
                 let batch_items = [
-                    (batch_pools[0], res0, token0_addr_0, token1_addr_0, dec0_0._0, dec1_0._0),
-                    (batch_pools[1], res1, token0_addr_1, token1_addr_1, dec0_1._0, dec1_1._0),
+                    (batch_pools[0], res0, token0_addr_0, token1_addr_0, dec0_0, dec1_0),
+                    (batch_pools[1], res1, token0_addr_1, token1_addr_1, dec0_1, dec1_1),
                 ];
 
                 for (idx, (pool_addr, reserves, t0, t1, d0, d1)) in batch_items.iter().enumerate() {
@@ -330,10 +328,13 @@ where
                     let r1_val = U256::from(reserves.reserve1);
 
                     if r0_val > U256::ZERO && r1_val > U256::ZERO {
-                        let r0_f = r0_val.to::<f64>().unwrap_or(1.0) / 10f64.powi(*d0 as i32);
-                        let r1_f = r1_val.to::<f64>().unwrap_or(1.0) / 10f64.powi(*d1 as i32);
+                        let r0_f: f64 = r0_val.to();
+                        let r1_f: f64 = r1_val.to();
+
+                        let r0_adjusted = r0_f / 10f64.powi(*d0 as i32);
+                        let r1_adjusted = r1_f / 10f64.powi(*d1 as i32);
                         
-                        let live_price = if r0_f > 0.0 { r1_f / r0_f } else { 0.0 };
+                        let live_price = if r0_adjusted > 0.0 { r1_adjusted / r0_adjusted } else { 0.0 };
                         let dynamic_loan_amount = r0_val / U256::from(100);
 
                         pool_results.push(PoolData {
@@ -347,7 +348,7 @@ where
                 }
             }
             Err(e) => {
-                eprintln!("⚠️ Multicall batch chunk failed: {:?}", e);
+                eprintln!("⚠️️ Multicall batch chunk failed: {:?}", e);
             }
         }
     }

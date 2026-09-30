@@ -389,7 +389,7 @@ where
     let aero_pair_usdc = IUniswapV2Pair::new(aero_usdc_pool, http_provider.clone());
     let v3_pool_usdc = IUniswapV3Pool::new(v3_usdc_pool, http_provider.clone());
 
-    if let Ok((Ok(res_aero), Ok(slot0_v3))) = tokio::try_join!(
+    if let Ok((res_aero, slot0_v3)) = tokio::try_join!(
         aero_pair_usdc.getReserves().call(),
         v3_pool_usdc.slot0().call()
     ) {
@@ -430,7 +430,7 @@ where
     let aero_pair_cbbtc = IUniswapV2Pair::new(aero_cbbtc_pool, http_provider.clone());
     let v3_pool_cbbtc = IUniswapV3Pool::new(v3_cbbtc_pool, http_provider.clone());
 
-    if let Ok((Ok(res_aero), Ok(slot0_v3))) = tokio::try_join!(
+    if let Ok((res_aero, slot0_v3)) = tokio::try_join!(
         aero_pair_cbbtc.getReserves().call(),
         v3_pool_cbbtc.slot0().call()
     ) {
@@ -471,7 +471,7 @@ where
     let aero_pair_aero = IUniswapV2Pair::new(aero_aero_pool, http_provider.clone());
     let v3_pool_aero = IUniswapV3Pool::new(v3_aero_pool, http_provider.clone());
 
-    if let Ok((Ok(res_aero), Ok(slot0_v3))) = tokio::try_join!(
+    if let Ok((res_aero, slot0_v3)) = tokio::try_join!(
         aero_pair_aero.getReserves().call(),
         v3_pool_aero.slot0().call()
     ) {

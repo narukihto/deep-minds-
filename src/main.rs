@@ -400,10 +400,8 @@ where
     ) {
         let r0 = res_aero.reserve0.to::<u128>() as f64;
         let r1 = res_aero.reserve1.to::<u128>() as f64;
-        if r0 > 100.0 && r1 > 100.0 {
-            let f0 = r0 / 1_000_000.0;
-            let f1 = r1 / 1_000_000_000_000_000_000.0;
-            let price_aero = if f0 > 0.0 { f1 / f0 } else { 0.0 };
+        if r0 > 0.0 {
+            let price_aero = (r1 / r0) * 10f64.powi(6 - 18);
 
             let sqrt_price_x96 = slot0_v3.sqrtPriceX96;
             if U256::from(sqrt_price_x96) > U256::ZERO {
@@ -446,10 +444,8 @@ where
     ) {
         let r0 = res_aero.reserve0.to::<u128>() as f64;
         let r1 = res_aero.reserve1.to::<u128>() as f64;
-        if r0 > 100.0 && r1 > 100.0 {
-            let f0 = r0 / 100_000_000.0;
-            let f1 = r1 / 1_000_000_000_000_000_000.0;
-            let price_aero = if f0 > 0.0 { f1 / f0 } else { 0.0 };
+        if r0 > 0.0 {
+            let price_aero = (r1 / r0) * 10f64.powi(8 - 18);
 
             let sqrt_price_x96 = slot0_v3.sqrtPriceX96;
             if U256::from(sqrt_price_x96) > U256::ZERO {
@@ -492,15 +488,13 @@ where
     ) {
         let r0 = res_aero.reserve0.to::<u128>() as f64;
         let r1 = res_aero.reserve1.to::<u128>() as f64;
-        if r0 > 100.0 && r1 > 100.0 {
-            let f0 = r0 / 1_000_000_000_000_000_000.0;
-            let f1 = r1 / 1_000_000_000_000_000_000.0;
-            let price_aero = if f0 > 0.0 { f1 / f0 } else { 0.0 };
+        if r0 > 0.0 {
+            let price_aero = r1 / r0;
 
             let sqrt_price_x96 = slot0_v3.sqrtPriceX96;
             if U256::from(sqrt_price_x96) > U256::ZERO {
                 let raw_v3_ratio = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
-                let price_v3 = raw_v3_ratio * 10f64.powi(18 - 18);
+                let price_v3 = raw_v3_ratio;
 
                 if price_aero > 0.0 && price_v3 > 0.0 {
                     let spread_gap = (price_aero - price_v3).abs();

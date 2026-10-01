@@ -398,28 +398,26 @@ where
         aero_fut_usdc,
         v3_fut_usdc
     ) {
-        let r0 = res_aero.reserve0.to::<u128>() as f64;
-        let r1 = res_aero.reserve1.to::<u128>() as f64;
-        if r0 > 0.0 {
-            let price_aero = (r1 / r0) * 10f64.powi(6 - 18);
+        let r0 = res_aero.reserve0.to::<u128>() as f64; // USDC
+        let r1 = res_aero.reserve1.to::<u128>() as f64; // WETH
+        let price_aero = if r0 > 0.0 { (r1 / r0) * 10f64.powi(6 - 18) } else { 0.0 };
 
-            let sqrt_price_x96 = slot0_v3.sqrtPriceX96;
-            if U256::from(sqrt_price_x96) > U256::ZERO {
-                let raw_v3_ratio = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
-                let price_v3 = raw_v3_ratio * 10f64.powi(6 - 18);
+        let sqrt_price_x96 = slot0_v3.sqrtPriceX96;
+        if U256::from(sqrt_price_x96) > U256::ZERO {
+            let raw_ratio = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
+            let price_v3 = raw_ratio * 10f64.powi(6 - 18);
 
-                if price_aero > 0.0 && price_v3 > 0.0 {
-                    let spread_gap = (price_aero - price_v3).abs();
-                    opportunities.push(AssetArbitrageOpportunity {
-                        token: USDC_BASE,
-                        _price_aero: price_aero,
-                        _price_v3: price_v3,
-                        spread_gap,
-                        _aero_pool: aero_usdc_pool,
-                        _v3_pool: v3_usdc_pool,
-                        loan_amount: U256::from(10_000_000_000_000_000u64),
-                    });
-                }
+            if price_aero > 0.0 && price_v3 > 0.0 {
+                let spread_gap = (price_aero - price_v3).abs();
+                opportunities.push(AssetArbitrageOpportunity {
+                    token: USDC_BASE,
+                    _price_aero: price_aero,
+                    _price_v3: price_v3,
+                    spread_gap,
+                    _aero_pool: aero_usdc_pool,
+                    _v3_pool: v3_usdc_pool,
+                    loan_amount: U256::from(10_000_000_000_000_000u64),
+                });
             }
         }
     }
@@ -442,28 +440,26 @@ where
         aero_fut_cbbtc,
         v3_fut_cbbtc
     ) {
-        let r0 = res_aero.reserve0.to::<u128>() as f64;
-        let r1 = res_aero.reserve1.to::<u128>() as f64;
-        if r0 > 0.0 {
-            let price_aero = (r1 / r0) * 10f64.powi(8 - 18);
+        let r0 = res_aero.reserve0.to::<u128>() as f64; // cbBTC
+        let r1 = res_aero.reserve1.to::<u128>() as f64; // WETH
+        let price_aero = if r0 > 0.0 { (r1 / r0) * 10f64.powi(8 - 18) } else { 0.0 };
 
-            let sqrt_price_x96 = slot0_v3.sqrtPriceX96;
-            if U256::from(sqrt_price_x96) > U256::ZERO {
-                let raw_v3_ratio = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
-                let price_v3 = raw_v3_ratio * 10f64.powi(8 - 18);
+        let sqrt_price_x96 = slot0_v3.sqrtPriceX96;
+        if U256::from(sqrt_price_x96) > U256::ZERO {
+            let raw_ratio = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
+            let price_v3 = raw_ratio * 10f64.powi(8 - 18);
 
-                if price_aero > 0.0 && price_v3 > 0.0 {
-                    let spread_gap = (price_aero - price_v3).abs();
-                    opportunities.push(AssetArbitrageOpportunity {
-                        token: CBBTC_BASE,
-                        _price_aero: price_aero,
-                        _price_v3: price_v3,
-                        spread_gap,
-                        _aero_pool: aero_cbbtc_pool,
-                        _v3_pool: v3_cbbtc_pool,
-                        loan_amount: U256::from(1_000_000_000_000_000u64),
-                    });
-                }
+            if price_aero > 0.0 && price_v3 > 0.0 {
+                let spread_gap = (price_aero - price_v3).abs();
+                opportunities.push(AssetArbitrageOpportunity {
+                    token: CBBTC_BASE,
+                    _price_aero: price_aero,
+                    _price_v3: price_v3,
+                    spread_gap,
+                    _aero_pool: aero_cbbtc_pool,
+                    _v3_pool: v3_cbbtc_pool,
+                    loan_amount: U256::from(1_000_000_000_000_000u64),
+                });
             }
         }
     }
@@ -488,26 +484,24 @@ where
     ) {
         let r0 = res_aero.reserve0.to::<u128>() as f64;
         let r1 = res_aero.reserve1.to::<u128>() as f64;
-        if r0 > 0.0 {
-            let price_aero = r1 / r0;
+        let price_aero = if r0 > 0.0 { r1 / r0 } else { 0.0 };
 
-            let sqrt_price_x96 = slot0_v3.sqrtPriceX96;
-            if U256::from(sqrt_price_x96) > U256::ZERO {
-                let raw_v3_ratio = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
-                let price_v3 = raw_v3_ratio;
+        let sqrt_price_x96 = slot0_v3.sqrtPriceX96;
+        if U256::from(sqrt_price_x96) > U256::ZERO {
+            let raw_ratio = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
+            let price_v3 = raw_ratio;
 
-                if price_aero > 0.0 && price_v3 > 0.0 {
-                    let spread_gap = (price_aero - price_v3).abs();
-                    opportunities.push(AssetArbitrageOpportunity {
-                        token: AERO_BASE,
-                        _price_aero: price_aero,
-                        _price_v3: price_v3,
-                        spread_gap,
-                        _aero_pool: aero_aero_pool,
-                        _v3_pool: v3_aero_pool,
-                        loan_amount: U256::from(10_000_000_000_000_000u64),
-                    });
-                }
+            if price_aero > 0.0 && price_v3 > 0.0 {
+                let spread_gap = (price_aero - price_v3).abs();
+                opportunities.push(AssetArbitrageOpportunity {
+                    token: AERO_BASE,
+                    _price_aero: price_aero,
+                    _price_v3: price_v3,
+                    spread_gap,
+                    _aero_pool: aero_aero_pool,
+                    _v3_pool: v3_aero_pool,
+                    loan_amount: U256::from(10_000_000_000_000_000u64),
+                });
             }
         }
     }

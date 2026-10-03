@@ -296,6 +296,13 @@ sol! {
     }
 
     #[sol(rpc)]
+    contract IAerodromeSlipstreamPool {
+        function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, bool unlocked);
+        function token0() external view returns (address);
+        function token1() external view returns (address);
+    }
+
+    #[sol(rpc)]
     contract IERC20 {
         function decimals() external view returns (uint8);
     }
@@ -389,29 +396,31 @@ where
     discovered_pools.push(aero_usdc_pool);
     discovered_pools.push(v3_usdc_pool);
 
-    let aero_pool_usdc = IUniswapV3Pool::new(aero_usdc_pool, http_provider.clone());
+    let aero_pool_usdc = IAerodromeSlipstreamPool::new(aero_usdc_pool, http_provider.clone());
     let v3_pool_usdc = IUniswapV3Pool::new(v3_usdc_pool, http_provider.clone());
 
     let aero_res_usdc = aero_pool_usdc.slot0().call().await;
     match aero_res_usdc {
         Ok(slot0_aero) => {
-            println!("🔍 [BLOCK DEBUG - AERODROME V3] Token: {:?}, Raw SqrtPriceX96: {}", USDC_BASE, slot0_aero.sqrtPriceX96);
+            let (sqrt_price_aero, _, _, _, _, _) = slot0_aero;
+            println!("🔍 [BLOCK DEBUG - AERODROME SLIPSTREAM] Token: {:?}, Raw SqrtPriceX96: {}", USDC_BASE, sqrt_price_aero);
             let v3_res_usdc = v3_pool_usdc.slot0().call().await;
             match v3_res_usdc {
                 Ok(slot0_v3) => {
-                    println!("🔍 [BLOCK DEBUG - UNISWAP V3] Token: {:?}, Raw SqrtPriceX96: {}", USDC_BASE, slot0_v3.sqrtPriceX96);
+                    let (sqrt_price_v3, _, _, _, _, _, _) = slot0_v3;
+                    println!("🔍 [BLOCK DEBUG - UNISWAP V3] Token: {:?}, Raw SqrtPriceX96: {}", USDC_BASE, sqrt_price_v3);
                     
-                    let raw_aero_ratio = (slot0_aero.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
+                    let raw_aero_ratio = (sqrt_price_aero.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
                     let price_aero = raw_aero_ratio * 10f64.powi(6 - 18);
 
-                    let raw_v3_ratio = (slot0_v3.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
+                    let raw_v3_ratio = (sqrt_price_v3.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
                     let price_v3 = raw_v3_ratio * 10f64.powi(6 - 18);
                     
                     let loan_amount = U256::from(10_000_000_000_000_000u64);
 
                     println!("🪙 [PRE-FLIGHT MATH] Token: {:?}, Calculated Price Aero: {:.6}, Price V3: {:.6}, Dynamic Loan: {}", USDC_BASE, price_aero, price_v3, loan_amount);
 
-                    if U256::from(slot0_aero.sqrtPriceX96) > U256::ZERO && U256::from(slot0_v3.sqrtPriceX96) > U256::ZERO && price_aero > 0.0 && price_v3 > 0.0 {
+                    if U256::from(sqrt_price_aero) > U256::ZERO && U256::from(sqrt_price_v3) > U256::ZERO && price_aero > 0.0 && price_v3 > 0.0 {
                         let spread_gap = (price_aero - price_v3).abs();
                         opportunities.push(AssetArbitrageOpportunity {
                             token: USDC_BASE,
@@ -427,7 +436,7 @@ where
                 Err(e) => println!("❌ [RPC ERROR - UNISWAP V3] USDC Pair slot0 failed: {:?}", e),
             }
         }
-        Err(e) => println!("❌ [RPC ERROR - AERODROME V3] USDC Pair slot0 failed: {:?}", e),
+        Err(e) => println!("❌ [RPC ERROR - AERODROME SLIPSTREAM] USDC Pair slot0 failed: {:?}", e),
     }
 
     // 2. cbBTC / WETH Pair
@@ -436,29 +445,31 @@ where
     discovered_pools.push(aero_cbbtc_pool);
     discovered_pools.push(v3_cbbtc_pool);
 
-    let aero_pool_cbbtc = IUniswapV3Pool::new(aero_cbbtc_pool, http_provider.clone());
+    let aero_pool_cbbtc = IAerodromeSlipstreamPool::new(aero_cbbtc_pool, http_provider.clone());
     let v3_pool_cbbtc = IUniswapV3Pool::new(v3_cbbtc_pool, http_provider.clone());
 
     let aero_res_cbbtc = aero_pool_cbbtc.slot0().call().await;
     match aero_res_cbbtc {
         Ok(slot0_aero) => {
-            println!("🔍 [BLOCK DEBUG - AERODROME V3] Token: {:?}, Raw SqrtPriceX96: {}", CBBTC_BASE, slot0_aero.sqrtPriceX96);
+            let (sqrt_price_aero, _, _, _, _, _) = slot0_aero;
+            println!("🔍 [BLOCK DEBUG - AERODROME SLIPSTREAM] Token: {:?}, Raw SqrtPriceX96: {}", CBBTC_BASE, sqrt_price_aero);
             let v3_res_cbbtc = v3_pool_cbbtc.slot0().call().await;
             match v3_res_cbbtc {
                 Ok(slot0_v3) => {
-                    println!("🔍 [BLOCK DEBUG - UNISWAP V3] Token: {:?}, Raw SqrtPriceX96: {}", CBBTC_BASE, slot0_v3.sqrtPriceX96);
+                    let (sqrt_price_v3, _, _, _, _, _, _) = slot0_v3;
+                    println!("🔍 [BLOCK DEBUG - UNISWAP V3] Token: {:?}, Raw SqrtPriceX96: {}", CBBTC_BASE, sqrt_price_v3);
                     
-                    let raw_aero_ratio = (slot0_aero.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
+                    let raw_aero_ratio = (sqrt_price_aero.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
                     let price_aero = raw_aero_ratio * 10f64.powi(8 - 18);
 
-                    let raw_v3_ratio = (slot0_v3.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
+                    let raw_v3_ratio = (sqrt_price_v3.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
                     let price_v3 = raw_v3_ratio * 10f64.powi(8 - 18);
                     
                     let loan_amount = U256::from(1_000_000_000_000_000u64);
 
                     println!("🪙 [PRE-FLIGHT MATH] Token: {:?}, Calculated Price Aero: {:.6}, Price V3: {:.6}, Dynamic Loan: {}", CBBTC_BASE, price_aero, price_v3, loan_amount);
 
-                    if U256::from(slot0_aero.sqrtPriceX96) > U256::ZERO && U256::from(slot0_v3.sqrtPriceX96) > U256::ZERO && price_aero > 0.0 && price_v3 > 0.0 {
+                    if U256::from(sqrt_price_aero) > U256::ZERO && U256::from(sqrt_price_v3) > U256::ZERO && price_aero > 0.0 && price_v3 > 0.0 {
                         let spread_gap = (price_aero - price_v3).abs();
                         opportunities.push(AssetArbitrageOpportunity {
                             token: CBBTC_BASE,
@@ -474,7 +485,7 @@ where
                 Err(e) => println!("❌ [RPC ERROR - UNISWAP V3] cbBTC Pair slot0 failed: {:?}", e),
             }
         }
-        Err(e) => println!("❌ [RPC ERROR - AERODROME V3] cbBTC Pair slot0 failed: {:?}", e),
+        Err(e) => println!("❌ [RPC ERROR - AERODROME SLIPSTREAM] cbBTC Pair slot0 failed: {:?}", e),
     }
 
     // 3. AERO / WETH Pair
@@ -483,29 +494,31 @@ where
     discovered_pools.push(aero_aero_pool);
     discovered_pools.push(v3_aero_pool);
 
-    let aero_pool_aero = IUniswapV3Pool::new(aero_aero_pool, http_provider.clone());
+    let aero_pool_aero = IAerodromeSlipstreamPool::new(aero_aero_pool, http_provider.clone());
     let v3_pool_aero = IUniswapV3Pool::new(v3_aero_pool, http_provider.clone());
 
     let aero_res_aero = aero_pool_aero.slot0().call().await;
     match aero_res_aero {
         Ok(slot0_aero) => {
-            println!("🔍 [BLOCK DEBUG - AERODROME V3] Token: {:?}, Raw SqrtPriceX96: {}", AERO_BASE, slot0_aero.sqrtPriceX96);
+            let (sqrt_price_aero, _, _, _, _, _) = slot0_aero;
+            println!("🔍 [BLOCK DEBUG - AERODROME SLIPSTREAM] Token: {:?}, Raw SqrtPriceX96: {}", AERO_BASE, sqrt_price_aero);
             let v3_res_aero = v3_pool_aero.slot0().call().await;
             match v3_res_aero {
                 Ok(slot0_v3) => {
-                    println!("🔍 [BLOCK DEBUG - UNISWAP V3] Token: {:?}, Raw SqrtPriceX96: {}", AERO_BASE, slot0_v3.sqrtPriceX96);
+                    let (sqrt_price_v3, _, _, _, _, _, _) = slot0_v3;
+                    println!("🔍 [BLOCK DEBUG - UNISWAP V3] Token: {:?}, Raw SqrtPriceX96: {}", AERO_BASE, sqrt_price_v3);
                     
-                    let raw_aero_ratio = (slot0_aero.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
+                    let raw_aero_ratio = (sqrt_price_aero.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
                     let price_aero = raw_aero_ratio;
 
-                    let raw_v3_ratio = (slot0_v3.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
+                    let raw_v3_ratio = (sqrt_price_v3.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
                     let price_v3 = raw_v3_ratio;
                     
                     let loan_amount = U256::from(10_000_000_000_000_000u64);
 
                     println!("🪙 [PRE-FLIGHT MATH] Token: {:?}, Calculated Price Aero: {:.6}, Price V3: {:.6}, Dynamic Loan: {}", AERO_BASE, price_aero, price_v3, loan_amount);
 
-                    if U256::from(slot0_aero.sqrtPriceX96) > U256::ZERO && U256::from(slot0_v3.sqrtPriceX96) > U256::ZERO && price_aero > 0.0 && price_v3 > 0.0 {
+                    if U256::from(sqrt_price_aero) > U256::ZERO && U256::from(sqrt_price_v3) > U256::ZERO && price_aero > 0.0 && price_v3 > 0.0 {
                         let spread_gap = (price_aero - price_v3).abs();
                         opportunities.push(AssetArbitrageOpportunity {
                             token: AERO_BASE,
@@ -521,7 +534,7 @@ where
                 Err(e) => println!("❌ [RPC ERROR - UNISWAP V3] AERO Pair slot0 failed: {:?}", e),
             }
         }
-        Err(e) => println!("❌ [RPC ERROR - AERODROME V3] AERO Pair slot0 failed: {:?}", e),
+        Err(e) => println!("❌ [RPC ERROR - AERODROME SLIPSTREAM] AERO Pair slot0 failed: {:?}", e),
     }
 
     if opportunities.is_empty() {

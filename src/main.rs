@@ -390,8 +390,8 @@ where
     let v3_quote_usdc = v3_quoter.quoteExactInputSingle(USDC_BASE, WETH_BASE, U24::from(500u32), amount_in_usdc, U160::ZERO).call().await;
 
     if let (Ok(out_aero), Ok(out_v3)) = (aero_quote_usdc, v3_quote_usdc) {
-        let price_aero = out_aero._0.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let price_v3 = out_v3._0.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let price_aero = out_aero.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let price_v3 = out_v3.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
         let spread_gap = (price_aero - price_v3).abs();
 
         if price_aero > 0.0 && price_v3 > 0.0 {
@@ -415,8 +415,8 @@ where
     let v3_quote_cbbtc = v3_quoter.quoteExactInputSingle(CBBTC_BASE, WETH_BASE, U24::from(500u32), amount_in_cbbtc, U160::ZERO).call().await;
 
     if let (Ok(out_aero), Ok(out_v3)) = (aero_quote_cbbtc, v3_quote_cbbtc) {
-        let price_aero = out_aero._0.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let price_v3 = out_v3._0.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let price_aero = out_aero.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let price_v3 = out_v3.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
         let spread_gap = (price_aero - price_v3).abs();
 
         if price_aero > 0.0 && price_v3 > 0.0 {
@@ -440,8 +440,8 @@ where
     let v3_quote_aero = v3_quoter.quoteExactInputSingle(AERO_BASE, WETH_BASE, U24::from(3000u32), amount_in_aero, U160::ZERO).call().await;
 
     if let (Ok(out_aero), Ok(out_v3)) = (aero_quote_aero, v3_quote_aero) {
-        let price_aero = out_aero._0.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let price_v3 = out_v3._0.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let price_aero = out_aero.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let price_v3 = out_v3.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
         let spread_gap = (price_aero - price_v3).abs();
 
         if price_aero > 0.0 && price_v3 > 0.0 {
@@ -636,6 +636,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         energy_scale: generate_astronomical_number(1000usize),
                         frequency: 0.015,
                         token0,
+                        token1,
                         token1,
                     },
                 ];

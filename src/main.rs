@@ -1,5 +1,5 @@
 use num_bigint::BigUint;
-use num_traits::{ToPrimitive, One};
+use num_traits::{One, ToPrimitive};
 use rayon::prelude::*;
 use std::time::Instant;
 use futures_util::StreamExt;
@@ -9,8 +9,7 @@ use alloy::{
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256, Bytes, Uint},
-    sol,
-    sol_types::SolCall,
+    sol, sol_types::SolCall,
 };
 
 type U24 = Uint<24, 1>;
@@ -52,13 +51,10 @@ impl MachineMetric {
 
     pub fn update_and_predict(&mut self, current_value: f64) -> (Direction, f64) {
         let now = Instant::now();
-
         if let Some(ref prev) = self.last_state {
             let delta_t = now.duration_since(prev.timestamp).as_secs_f64();
-
             if delta_t > 0.0 {
                 let v_inst = (current_value - prev.value) / delta_t;
-
                 let direction = if v_inst > 1e-9 {
                     Direction::Peak
                 } else if v_inst < -1e-9 {
@@ -66,13 +62,17 @@ impl MachineMetric {
                 } else {
                     Direction::Stable
                 };
-
-                self.last_state = Some(SystemState { value: current_value, timestamp: now });
+                self.last_state = Some(SystemState {
+                    value: current_value,
+                    timestamp: now,
+                });
                 return (direction, v_inst);
             }
         }
-
-        self.last_state = Some(SystemState { value: current_value, timestamp: now });
+        self.last_state = Some(SystemState {
+            value: current_value,
+            timestamp: now,
+        });
         (Direction::Stable, 0.0)
     }
 }
@@ -96,7 +96,12 @@ pub struct CausalCollapseSystem {
 }
 
 impl CausalCollapseSystem {
-    pub fn new(nodes: Vec<QuantumNode>, dynamic_pools: Vec<Address>, contract_address: Address, loan_amount: U256) -> Self {
+    pub fn new(
+        nodes: Vec<QuantumNode>,
+        dynamic_pools: Vec<Address>,
+        contract_address: Address,
+        loan_amount: U256,
+    ) -> Self {
         Self {
             nodes,
             threshold_limit: 0.02,
@@ -114,8 +119,8 @@ impl CausalCollapseSystem {
     }
 
     pub fn execute_collapse(&self) -> (Vec<Address>, Vec<Vec<u8>>) {
-        if self.nodes.is_empty() { 
-            return (vec![], vec![]); 
+        if self.nodes.is_empty() {
+            return (vec![], vec![]);
         }
 
         let effective_pools = if self.dynamic_pools.is_empty() {
@@ -127,19 +132,21 @@ impl CausalCollapseSystem {
         let mut ordered_nodes = self.nodes.clone();
         ordered_nodes.sort_by(|a, b| b.energy_scale.cmp(&a.energy_scale));
 
-        let active_nodes: Vec<QuantumNode> = ordered_nodes.par_iter().map(|node| {
-            let mut triggered = node.clone();
-            if triggered.frequency == 0.0 {
-                triggered.frequency = 0.01;
-            }
-            triggered
-        }).collect();
+        let active_nodes: Vec<QuantumNode> = ordered_nodes
+            .par_iter()
+            .map(|node| {
+                let mut triggered = node.clone();
+                if triggered.frequency == 0.0 {
+                    triggered.frequency = 0.01;
+                }
+                triggered
+            })
+            .collect();
 
         let mut final_path = Vec::new();
         let mut skipped_buffer: Vec<&QuantumNode> = Vec::with_capacity(self.buffer_capacity);
 
         final_path.push(active_nodes[0].clone());
-
         let mut cumulative_frequency = active_nodes[0].frequency;
         let mut active_count = 1.0;
 
@@ -155,9 +162,10 @@ impl CausalCollapseSystem {
                     }
                     continue;
                 }
-
-                let stable_projected = self.project_to_inverse_dimensional_symmetry(current_avg_freq, i - 1);
-                let next_projected = self.project_to_inverse_dimensional_symmetry(next.frequency, i);
+                let stable_projected =
+                    self.project_to_inverse_dimensional_symmetry(current_avg_freq, i - 1);
+                let next_projected =
+                    self.project_to_inverse_dimensional_symmetry(next.frequency, i);
                 let projected_dev = (stable_projected - next_projected).abs();
 
                 if projected_dev > self.threshold_limit {
@@ -183,15 +191,13 @@ impl CausalCollapseSystem {
         }
 
         let final_avg_freq = cumulative_frequency / active_count;
-
         for buffered_node in skipped_buffer {
             let pure_raw_dev = (final_avg_freq - buffered_node.frequency).abs();
-
             if pure_raw_dev > self.threshold_limit * 1.5 {
                 continue;
             }
-
-            let scale_factor = 1.0 / (buffered_node.energy_scale.to_f64().unwrap_or(1.0) + 1.0);
+            let scale_factor =
+                1.0 / (buffered_node.energy_scale.to_f64().unwrap_or(1.0) + 1.0);
             if pure_raw_dev * scale_factor <= self.threshold_limit {
                 final_path.push(buffered_node.clone());
             }
@@ -209,7 +215,7 @@ impl CausalCollapseSystem {
                     path: {
                         let mut packed = Vec::new();
                         packed.extend_from_slice(node.token0.as_slice());
-                        packed.extend_from_slice(&[0x00, 0x0b, 0xb8]); 
+                        packed.extend_from_slice(&[0x00, 0x0b, 0xb8]);
                         packed.extend_from_slice(node.token1.as_slice());
                         Bytes::from(packed)
                     },
@@ -218,7 +224,10 @@ impl CausalCollapseSystem {
                     amountIn: self.loan_amount,
                     amountOutMinimum: U256::ZERO,
                 };
-                IUniswapV3Router::exactInputCall { params: exact_input_params }.abi_encode()
+                IUniswapV3Router::exactInputCall {
+                    params: exact_input_params,
+                }
+                .abi_encode()
             } else if pool == AERODROME_ROUTER {
                 let aero_route = IAerodromeRouter::Route {
                     from: node.token0,
@@ -232,7 +241,8 @@ impl CausalCollapseSystem {
                     routes: vec![aero_route],
                     to: self.contract_address,
                     deadline: U256::from(u64::MAX),
-                }.abi_encode()
+                }
+                .abi_encode()
             } else {
                 IUniswapV2Router02::swapExactTokensForTokensCall {
                     amountIn: self.loan_amount,
@@ -240,9 +250,9 @@ impl CausalCollapseSystem {
                     path: vec![node.token0, node.token1],
                     to: self.contract_address,
                     deadline: U256::from(u64::MAX),
-                }.abi_encode()
+                }
+                .abi_encode()
             };
-
             payloads.push(payload);
         }
 
@@ -389,37 +399,42 @@ where
     let aero_pair_usdc = IUniswapV2Pair::new(aero_usdc_pool, http_provider.clone());
     let v3_pool_usdc = IUniswapV3Pool::new(v3_usdc_pool, http_provider.clone());
 
-    let aero_builder_usdc = aero_pair_usdc.getReserves();
-    let v3_builder_usdc = v3_pool_usdc.slot0();
-    let aero_fut_usdc = aero_builder_usdc.call();
-    let v3_fut_usdc = v3_builder_usdc.call();
+    let aero_res_usdc = aero_pair_usdc.getReserves().call().await;
+    match aero_res_usdc {
+        Ok(res_aero) => {
+            println!("🔍 [BLOCK DEBUG - AERODROME] Token: {:?}, Raw Reserve0: {}, Raw Reserve1: {}", USDC_BASE, res_aero.reserve0, res_aero.reserve1);
+            let v3_res_usdc = v3_pool_usdc.slot0().call().await;
+            match v3_res_usdc {
+                Ok(slot0_v3) => {
+                    println!("🔍 [BLOCK DEBUG - UNISWAP V3] Token: {:?}, Raw SqrtPriceX96: {}", USDC_BASE, slot0_v3.sqrtPriceX96);
+                    let r0 = res_aero.reserve0.to::<u128>() as f64;
+                    let r1 = res_aero.reserve1.to::<u128>() as f64;
+                    let price_aero = if r0 > 0.0 { (r1 / r0) * 10f64.powi(6 - 18) } else { 0.0 };
 
-    if let Ok((res_aero, slot0_v3)) = tokio::try_join!(
-        aero_fut_usdc,
-        v3_fut_usdc
-    ) {
-        let r0 = res_aero.reserve0.to::<u128>() as f64; // USDC
-        let r1 = res_aero.reserve1.to::<u128>() as f64; // WETH
-        let price_aero = if r0 > 0.0 { (r1 / r0) * 10f64.powi(6 - 18) } else { 0.0 };
+                    let sqrt_price_x96 = slot0_v3.sqrtPriceX96;
+                    let raw_ratio = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
+                    let price_v3 = raw_ratio * 10f64.powi(6 - 18);
+                    let loan_amount = U256::from(10_000_000_000_000_000u64);
 
-        let sqrt_price_x96 = slot0_v3.sqrtPriceX96;
-        if U256::from(sqrt_price_x96) > U256::ZERO {
-            let raw_ratio = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
-            let price_v3 = raw_ratio * 10f64.powi(6 - 18);
+                    println!("🪙 [PRE-FLIGHT MATH] Token: {:?}, Calculated Price Aero: {:.6}, Price V3: {:.6}, Dynamic Loan: {}", USDC_BASE, price_aero, price_v3, loan_amount);
 
-            if price_aero > 0.0 && price_v3 > 0.0 {
-                let spread_gap = (price_aero - price_v3).abs();
-                opportunities.push(AssetArbitrageOpportunity {
-                    token: USDC_BASE,
-                    _price_aero: price_aero,
-                    _price_v3: price_v3,
-                    spread_gap,
-                    _aero_pool: aero_usdc_pool,
-                    _v3_pool: v3_usdc_pool,
-                    loan_amount: U256::from(10_000_000_000_000_000u64),
-                });
+                    if U256::from(sqrt_price_x96) > U256::ZERO && price_aero > 0.0 && price_v3 > 0.0 {
+                        let spread_gap = (price_aero - price_v3).abs();
+                        opportunities.push(AssetArbitrageOpportunity {
+                            token: USDC_BASE,
+                            _price_aero: price_aero,
+                            _price_v3: price_v3,
+                            spread_gap,
+                            _aero_pool: aero_usdc_pool,
+                            _v3_pool: v3_usdc_pool,
+                            loan_amount,
+                        });
+                    }
+                }
+                Err(e) => println!("❌ [RPC ERROR - UNISWAP V3] USDC Pair slot0 failed: {:?}", e),
             }
         }
+        Err(e) => println!("❌ [RPC ERROR - AERODROME] USDC Pair getReserves failed: {:?}", e),
     }
 
     // 2. cbBTC / WETH Pair
@@ -431,37 +446,42 @@ where
     let aero_pair_cbbtc = IUniswapV2Pair::new(aero_cbbtc_pool, http_provider.clone());
     let v3_pool_cbbtc = IUniswapV3Pool::new(v3_cbbtc_pool, http_provider.clone());
 
-    let aero_builder_cbbtc = aero_pair_cbbtc.getReserves();
-    let v3_builder_cbbtc = v3_pool_cbbtc.slot0();
-    let aero_fut_cbbtc = aero_builder_cbbtc.call();
-    let v3_fut_cbbtc = v3_builder_cbbtc.call();
+    let aero_res_cbbtc = aero_pair_cbbtc.getReserves().call().await;
+    match aero_res_cbbtc {
+        Ok(res_aero) => {
+            println!("🔍 [BLOCK DEBUG - AERODROME] Token: {:?}, Raw Reserve0: {}, Raw Reserve1: {}", CBBTC_BASE, res_aero.reserve0, res_aero.reserve1);
+            let v3_res_cbbtc = v3_pool_cbbtc.slot0().call().await;
+            match v3_res_cbbtc {
+                Ok(slot0_v3) => {
+                    println!("🔍 [BLOCK DEBUG - UNISWAP V3] Token: {:?}, Raw SqrtPriceX96: {}", CBBTC_BASE, slot0_v3.sqrtPriceX96);
+                    let r0 = res_aero.reserve0.to::<u128>() as f64;
+                    let r1 = res_aero.reserve1.to::<u128>() as f64;
+                    let price_aero = if r0 > 0.0 { (r1 / r0) * 10f64.powi(8 - 18) } else { 0.0 };
 
-    if let Ok((res_aero, slot0_v3)) = tokio::try_join!(
-        aero_fut_cbbtc,
-        v3_fut_cbbtc
-    ) {
-        let r0 = res_aero.reserve0.to::<u128>() as f64; // cbBTC
-        let r1 = res_aero.reserve1.to::<u128>() as f64; // WETH
-        let price_aero = if r0 > 0.0 { (r1 / r0) * 10f64.powi(8 - 18) } else { 0.0 };
+                    let sqrt_price_x96 = slot0_v3.sqrtPriceX96;
+                    let raw_ratio = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
+                    let price_v3 = raw_ratio * 10f64.powi(8 - 18);
+                    let loan_amount = U256::from(1_000_000_000_000_000u64);
 
-        let sqrt_price_x96 = slot0_v3.sqrtPriceX96;
-        if U256::from(sqrt_price_x96) > U256::ZERO {
-            let raw_ratio = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
-            let price_v3 = raw_ratio * 10f64.powi(8 - 18);
+                    println!("🪙 [PRE-FLIGHT MATH] Token: {:?}, Calculated Price Aero: {:.6}, Price V3: {:.6}, Dynamic Loan: {}", CBBTC_BASE, price_aero, price_v3, loan_amount);
 
-            if price_aero > 0.0 && price_v3 > 0.0 {
-                let spread_gap = (price_aero - price_v3).abs();
-                opportunities.push(AssetArbitrageOpportunity {
-                    token: CBBTC_BASE,
-                    _price_aero: price_aero,
-                    _price_v3: price_v3,
-                    spread_gap,
-                    _aero_pool: aero_cbbtc_pool,
-                    _v3_pool: v3_cbbtc_pool,
-                    loan_amount: U256::from(1_000_000_000_000_000u64),
-                });
+                    if U256::from(sqrt_price_x96) > U256::ZERO && price_aero > 0.0 && price_v3 > 0.0 {
+                        let spread_gap = (price_aero - price_v3).abs();
+                        opportunities.push(AssetArbitrageOpportunity {
+                            token: CBBTC_BASE,
+                            _price_aero: price_aero,
+                            _price_v3: price_v3,
+                            spread_gap,
+                            _aero_pool: aero_cbbtc_pool,
+                            _v3_pool: v3_cbbtc_pool,
+                            loan_amount,
+                        });
+                    }
+                }
+                Err(e) => println!("❌ [RPC ERROR - UNISWAP V3] cbBTC Pair slot0 failed: {:?}", e),
             }
         }
+        Err(e) => println!("❌ [RPC ERROR - AERODROME] cbBTC Pair getReserves failed: {:?}", e),
     }
 
     // 3. AERO / WETH Pair
@@ -473,37 +493,42 @@ where
     let aero_pair_aero = IUniswapV2Pair::new(aero_aero_pool, http_provider.clone());
     let v3_pool_aero = IUniswapV3Pool::new(v3_aero_pool, http_provider.clone());
 
-    let aero_builder_aero = aero_pair_aero.getReserves();
-    let v3_builder_aero = v3_pool_aero.slot0();
-    let aero_fut_aero = aero_builder_aero.call();
-    let v3_fut_aero = v3_builder_aero.call();
+    let aero_res_aero = aero_pair_aero.getReserves().call().await;
+    match aero_res_aero {
+        Ok(res_aero) => {
+            println!("🔍 [BLOCK DEBUG - AERODROME] Token: {:?}, Raw Reserve0: {}, Raw Reserve1: {}", AERO_BASE, res_aero.reserve0, res_aero.reserve1);
+            let v3_res_aero = v3_pool_aero.slot0().call().await;
+            match v3_res_aero {
+                Ok(slot0_v3) => {
+                    println!("🔍 [BLOCK DEBUG - UNISWAP V3] Token: {:?}, Raw SqrtPriceX96: {}", AERO_BASE, slot0_v3.sqrtPriceX96);
+                    let r0 = res_aero.reserve0.to::<u128>() as f64;
+                    let r1 = res_aero.reserve1.to::<u128>() as f64;
+                    let price_aero = if r0 > 0.0 { r1 / r0 } else { 0.0 };
 
-    if let Ok((res_aero, slot0_v3)) = tokio::try_join!(
-        aero_fut_aero,
-        v3_fut_aero
-    ) {
-        let r0 = res_aero.reserve0.to::<u128>() as f64;
-        let r1 = res_aero.reserve1.to::<u128>() as f64;
-        let price_aero = if r0 > 0.0 { r1 / r0 } else { 0.0 };
+                    let sqrt_price_x96 = slot0_v3.sqrtPriceX96;
+                    let raw_ratio = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
+                    let price_v3 = raw_ratio;
+                    let loan_amount = U256::from(10_000_000_000_000_000u64);
 
-        let sqrt_price_x96 = slot0_v3.sqrtPriceX96;
-        if U256::from(sqrt_price_x96) > U256::ZERO {
-            let raw_ratio = (sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
-            let price_v3 = raw_ratio;
+                    println!("🪙 [PRE-FLIGHT MATH] Token: {:?}, Calculated Price Aero: {:.6}, Price V3: {:.6}, Dynamic Loan: {}", AERO_BASE, price_aero, price_v3, loan_amount);
 
-            if price_aero > 0.0 && price_v3 > 0.0 {
-                let spread_gap = (price_aero - price_v3).abs();
-                opportunities.push(AssetArbitrageOpportunity {
-                    token: AERO_BASE,
-                    _price_aero: price_aero,
-                    _price_v3: price_v3,
-                    spread_gap,
-                    _aero_pool: aero_aero_pool,
-                    _v3_pool: v3_aero_pool,
-                    loan_amount: U256::from(10_000_000_000_000_000u64),
-                });
+                    if U256::from(sqrt_price_x96) > U256::ZERO && price_aero > 0.0 && price_v3 > 0.0 {
+                        let spread_gap = (price_aero - price_v3).abs();
+                        opportunities.push(AssetArbitrageOpportunity {
+                            token: AERO_BASE,
+                            _price_aero: price_aero,
+                            _price_v3: price_v3,
+                            spread_gap,
+                            _aero_pool: aero_aero_pool,
+                            _v3_pool: v3_aero_pool,
+                            loan_amount,
+                        });
+                    }
+                }
+                Err(e) => println!("❌ [RPC ERROR - UNISWAP V3] AERO Pair slot0 failed: {:?}", e),
             }
         }
+        Err(e) => println!("❌ [RPC ERROR - AERODROME] AERO Pair getReserves failed: {:?}", e),
     }
 
     if opportunities.is_empty() {
@@ -545,8 +570,12 @@ where
     println!("🔗 Atomic Route Dispatched: Targets: {:?}, Payloads Count: {}", target_path.0, target_path.1.len());
 
     let inner_swap_path_tuple = alloy::dyn_abi::DynSolValue::Tuple(vec![
-        alloy::dyn_abi::DynSolValue::Array(target_path.0.clone().into_iter().map(alloy::dyn_abi::DynSolValue::Address).collect()),
-        alloy::dyn_abi::DynSolValue::Array(target_path.1.into_iter().map(|p| alloy::dyn_abi::DynSolValue::Bytes(p.into())).collect()),
+        alloy::dyn_abi::DynSolValue::Array(
+            target_path.0.clone().into_iter().map(alloy::dyn_abi::DynSolValue::Address).collect()
+        ),
+        alloy::dyn_abi::DynSolValue::Array(
+            target_path.1.into_iter().map(|p| alloy::dyn_abi::DynSolValue::Bytes(p.into())).collect()
+        ),
     ]);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
@@ -558,7 +587,8 @@ where
 
     let contract = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
 
-    let balancer_builder = contract.triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
+    let balancer_builder = contract
+        .triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
         .from(signer_address);
 
     match balancer_builder.call().await {
@@ -572,7 +602,8 @@ where
             println!("⚠ Balancer Simulation Failed ({:?}). Activating Aave Fallback Route...", e_balancer);
             sleep(Duration::from_millis(150)).await;
 
-            let aave_builder = contract.triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
+            let aave_builder = contract
+                .triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
                 .from(signer_address);
 
             match aave_builder.call().await {
@@ -601,16 +632,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let contract_address: Address = contract_addr_str.parse()?;
 
     let alchemy_http_urls = vec![
-        std::env::var("ALCHEMY_HTTP_URL").unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
-        std::env::var("BACKUP_HTTP_URL").unwrap_or_else(|_| "https://mainnet.base.org".to_string()),
+        std::env::var("ALCHEMY_HTTP_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
+        std::env::var("BACKUP_HTTP_URL")
+            .unwrap_or_else(|_| "https://mainnet.base.org".to_string()),
     ];
     let primary_http_url = alchemy_http_urls[0].clone();
 
     let alchemy_wss_url = std::env::var("ALCHEMY_WSS_URL")
         .unwrap_or_else(|_| "ws://127.0.0.1:8545".to_string());
+
     let private_key_str = std::env::var("PRIVATE_KEY")
         .unwrap_or_else(|_| "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string());
-
     let signer: PrivateKeySigner = private_key_str.parse()?;
     let signer_address = signer.address();
     let wallet = EthereumWallet::from(signer);
@@ -640,7 +673,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let sub = ws_provider.subscribe_blocks().await?;
     let mut stream = sub.into_stream();
-
     let mut radar = MachineMetric::new();
     let mut block_counter = 0u64;
 
@@ -649,26 +681,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let block_num = block.inner.number;
         println!("📦 Live WSS Block Synced: #{} (Internal counter: {})", block_num, block_counter);
 
-        let (live_market_price, dynamic_token, dynamic_loan, token0, token1, scanned_addresses) = 
+        let (live_market_price, dynamic_token, dynamic_loan, token0, token1, scanned_addresses) =
             fetch_live_market_data(http_provider.clone(), &cached_pools).await?;
 
-        println!("   📊 [METRIC FEED] Cross-DEX Spread Gap: {:.6}, Checking Velocity Pivots...", live_market_price);
+        println!(" 📊 [METRIC FEED] Cross-DEX Spread Gap: {:.6}, Checking Velocity Pivots...", live_market_price);
 
         if live_market_price > 0.0 {
             let (direction, velocity) = radar.update_and_predict(live_market_price);
-
             if direction == Direction::Peak || direction == Direction::Bottom {
                 println!("⚡ [RADAR ALERT] Velocity Pivot Discovered: {:.4}", velocity);
+
                 let nodes = vec![
-                    QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000usize), frequency: live_market_price, token0, token1 },
-                    QuantumNode { id: 2, energy_scale: generate_astronomical_number(1000usize), frequency: 0.01, token0, token1 },
-                    QuantumNode { id: 3, energy_scale: generate_astronomical_number(1000usize), frequency: 0.015, token0, token1 },
+                    QuantumNode {
+                        id: 1,
+                        energy_scale: generate_astronomical_number(1000usize),
+                        frequency: live_market_price,
+                        token0,
+                        token1,
+                    },
+                    QuantumNode {
+                        id: 2,
+                        energy_scale: generate_astronomical_number(1000usize),
+                        frequency: 0.01,
+                        token0,
+                        token1,
+                    },
+                    QuantumNode {
+                        id: 3,
+                        energy_scale: generate_astronomical_number(1000usize),
+                        frequency: 0.015,
+                        token0,
+                        token1,
+                    },
                 ];
 
-                let system = CausalCollapseSystem::new(nodes, scanned_addresses, contract_address, dynamic_loan);
+                let system = CausalCollapseSystem::new(
+                    nodes,
+                    scanned_addresses,
+                    contract_address,
+                    dynamic_loan,
+                );
+
                 let optimized_path = system.execute_collapse();
 
-                if let Err(e) = trigger_on_chain_arbitrage(http_provider.clone(), contract_address, optimized_path, signer_address, dynamic_token, dynamic_loan).await {
+                if let Err(e) = trigger_on_chain_arbitrage(
+                    http_provider.clone(),
+                    contract_address,
+                    optimized_path,
+                    signer_address,
+                    dynamic_token,
+                    dynamic_loan,
+                ).await {
                     println!("❌ Error executing on-chain command: {:?}", e);
                 }
             }
@@ -680,3 +743,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🏁 Live stream processing terminated.");
     Ok(())
 }
+

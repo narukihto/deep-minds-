@@ -637,7 +637,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         frequency: 0.015,
                         token0,
                         token1,
-                        token1,
                     },
                 ];
 

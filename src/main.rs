@@ -402,12 +402,12 @@ where
     let aero_res_usdc = aero_pool_usdc.slot0().call().await;
     match aero_res_usdc {
         Ok(slot0_aero) => {
-            let (sqrt_price_aero, _, _, _, _, _) = slot0_aero;
+            let sqrt_price_aero = slot0_aero.sqrtPriceX96;
             println!("🔍 [BLOCK DEBUG - AERODROME SLIPSTREAM] Token: {:?}, Raw SqrtPriceX96: {}", USDC_BASE, sqrt_price_aero);
             let v3_res_usdc = v3_pool_usdc.slot0().call().await;
             match v3_res_usdc {
                 Ok(slot0_v3) => {
-                    let (sqrt_price_v3, _, _, _, _, _, _) = slot0_v3;
+                    let sqrt_price_v3 = slot0_v3.sqrtPriceX96;
                     println!("🔍 [BLOCK DEBUG - UNISWAP V3] Token: {:?}, Raw SqrtPriceX96: {}", USDC_BASE, sqrt_price_v3);
                     
                     let raw_aero_ratio = (sqrt_price_aero.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
@@ -451,12 +451,12 @@ where
     let aero_res_cbbtc = aero_pool_cbbtc.slot0().call().await;
     match aero_res_cbbtc {
         Ok(slot0_aero) => {
-            let (sqrt_price_aero, _, _, _, _, _) = slot0_aero;
+            let sqrt_price_aero = slot0_aero.sqrtPriceX96;
             println!("🔍 [BLOCK DEBUG - AERODROME SLIPSTREAM] Token: {:?}, Raw SqrtPriceX96: {}", CBBTC_BASE, sqrt_price_aero);
             let v3_res_cbbtc = v3_pool_cbbtc.slot0().call().await;
             match v3_res_cbbtc {
                 Ok(slot0_v3) => {
-                    let (sqrt_price_v3, _, _, _, _, _, _) = slot0_v3;
+                    let sqrt_price_v3 = slot0_v3.sqrtPriceX96;
                     println!("🔍 [BLOCK DEBUG - UNISWAP V3] Token: {:?}, Raw SqrtPriceX96: {}", CBBTC_BASE, sqrt_price_v3);
                     
                     let raw_aero_ratio = (sqrt_price_aero.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
@@ -500,12 +500,12 @@ where
     let aero_res_aero = aero_pool_aero.slot0().call().await;
     match aero_res_aero {
         Ok(slot0_aero) => {
-            let (sqrt_price_aero, _, _, _, _, _) = slot0_aero;
+            let sqrt_price_aero = slot0_aero.sqrtPriceX96;
             println!("🔍 [BLOCK DEBUG - AERODROME SLIPSTREAM] Token: {:?}, Raw SqrtPriceX96: {}", AERO_BASE, sqrt_price_aero);
             let v3_res_aero = v3_pool_aero.slot0().call().await;
             match v3_res_aero {
                 Ok(slot0_v3) => {
-                    let (sqrt_price_v3, _, _, _, _, _, _) = slot0_v3;
+                    let sqrt_price_v3 = slot0_v3.sqrtPriceX96;
                     println!("🔍 [BLOCK DEBUG - UNISWAP V3] Token: {:?}, Raw SqrtPriceX96: {}", AERO_BASE, sqrt_price_v3);
                     
                     let raw_aero_ratio = (sqrt_price_aero.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);

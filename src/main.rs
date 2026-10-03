@@ -17,7 +17,6 @@ type U24 = Uint<24, 1>;
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
 const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
 const CBBTC_BASE: Address = address!("cbB7C7A63551000b48A8503b87936a229a4b3FE3");
-const USDBC_BASE: Address = address!("d9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA");
 const AERO_BASE: Address = address!("940181a94A35A4569E4529A3CDfB74e38FD98631");
 
 // Whitelisted Router Addresses on Base Network
@@ -25,7 +24,6 @@ const UNISWAP_V3_ROUTER: Address = address!("262664982A6941F909fCF2f8358D64E1934
 const AERODROME_ROUTER: Address = address!("cF77a3Ba9A5CA399B7f97cbf339178ffc51eda8c");
 
 // Factory references retained for backward compatibility
-const UNISWAP_V3_FACTORY: Address = address!("33128a8fC17869843ccE68212c64714156f52d62");
 const AERODROME_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFECe40Da");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -270,36 +268,24 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
 
 sol! {
     #[sol(rpc)]
-    contract IAerodromeFactory {
-        function getPool(address tokenA, address tokenB, bool stable) external view returns (address pool);
-        function allPairs(uint256) external view returns (address pair);
-        function allPairsLength() external view returns (uint256);
+    contract IUniswapV3Quoter {
+        function quoteExactInputSingle(
+            address tokenIn,
+            address tokenOut,
+            uint24 fee,
+            uint256 amountIn,
+            uint160 sqrtPriceLimitX96
+        ) external returns (uint256 amountOut);
     }
 
     #[sol(rpc)]
-    contract IUniswapV2Factory {
-        function allPairs(uint256) external view returns (address pair);
-        function allPairsLength() external view returns (uint256);
-        function getPair(address tokenA, address tokenB) external view returns (address pair);
-    }
-
-    #[sol(rpc)]
-    contract IUniswapV3Factory {
-        function getPool(address tokenA, address token2, uint24 fee) external view returns (address pool);
-    }
-
-    #[sol(rpc)]
-    contract IUniswapV3Pool {
-        function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint32 feeProtocol, bool unlocked);
-        function token0() external view returns (address);
-        function token1() external view returns (address);
-    }
-
-    #[sol(rpc)]
-    contract IAerodromeSlipstreamPool {
-        function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, bool unlocked);
-        function token0() external view returns (address);
-        function token1() external view returns (address);
+    contract IAerodromeQuoter {
+        function quoteExactInputSingle(
+            address tokenIn,
+            address tokenOut,
+            bool stable,
+            uint256 amountIn
+        ) external view returns (uint256 amountOut);
     }
 
     #[sol(rpc)]
@@ -361,12 +347,8 @@ where
     P: Provider<Ethereum> + Clone,
 {
     Ok(vec![
-        address!("B4885Bc4757b22775b47c0b31a24d588865d64c1"),
-        address!("d0b53D9277d7407987AF31b2A31BCCD68F5d7a75"),
-        address!("0606B4916aFDb81249bCBF51A18671b26CCf7D6C"),
-        address!("2A1c9966EEb6D649AA3b49F4472d24CE7F99FdAc"),
-        address!("7f670f66e028D139613b482276563c65c69AD752"),
-        address!("16629737119B61E47eDb8095AA508823f9E42Bdf"),
+        address!("3d6110f0195e018617882255755255474c156f52"),
+        address!("cF77a3Ba9A5CA399B7f97cbf339178ffc51eda8c"),
     ])
 }
 
@@ -390,155 +372,91 @@ where
     let mut opportunities = Vec::new();
     let mut discovered_pools = Vec::new();
 
+    const UNISWAP_V3_QUOTER: Address = address!("3d6110f0195e018617882255755255474c156f52");
+    const AERODROME_QUOTER: Address = address!("cF77a3Ba9A5CA399B7f97cbf339178ffc51eda8c");
+
+    discovered_pools.push(UNISWAP_V3_QUOTER);
+    discovered_pools.push(AERODROME_QUOTER);
+
+    let v3_quoter = IUniswapV3Quoter::new(UNISWAP_V3_QUOTER, http_provider.clone());
+    let aero_quoter = IAerodromeQuoter::new(AERODROME_QUOTER, http_provider.clone());
+
     // 1. USDC / WETH Pair
-    let aero_usdc_pool = address!("B4885Bc4757b22775b47c0b31a24d588865d64c1");
-    let v3_usdc_pool = address!("d0b53D9277d7407987AF31b2A31BCCD68F5d7a75");
-    discovered_pools.push(aero_usdc_pool);
-    discovered_pools.push(v3_usdc_pool);
+    let amount_in_usdc = U256::from(1_000_000u64);
+    let loan_amount_usdc = U256::from(10_000_000_000_000_000u64);
 
-    let aero_pool_usdc = IAerodromeSlipstreamPool::new(aero_usdc_pool, http_provider.clone());
-    let v3_pool_usdc = IUniswapV3Pool::new(v3_usdc_pool, http_provider.clone());
+    let aero_quote_usdc = aero_quoter.quoteExactInputSingle(USDC_BASE, WETH_BASE, false, amount_in_usdc).call().await;
+    let v3_quote_usdc = v3_quoter.quoteExactInputSingle(USDC_BASE, WETH_BASE, 500, amount_in_usdc, U256::ZERO).call().await;
 
-    let aero_res_usdc = aero_pool_usdc.slot0().call().await;
-    match aero_res_usdc {
-        Ok(slot0_aero) => {
-            let sqrt_price_aero = slot0_aero.sqrtPriceX96;
-            println!("🔍 [BLOCK DEBUG - AERODROME SLIPSTREAM] Token: {:?}, Raw SqrtPriceX96: {}", USDC_BASE, sqrt_price_aero);
-            let v3_res_usdc = v3_pool_usdc.slot0().call().await;
-            match v3_res_usdc {
-                Ok(slot0_v3) => {
-                    let sqrt_price_v3 = slot0_v3.sqrtPriceX96;
-                    println!("🔍 [BLOCK DEBUG - UNISWAP V3] Token: {:?}, Raw SqrtPriceX96: {}", USDC_BASE, sqrt_price_v3);
-                    
-                    let raw_aero_ratio = (sqrt_price_aero.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
-                    let price_aero = raw_aero_ratio * 10f64.powi(6 - 18);
+    if let (Ok(out_aero), Ok(out_v3)) = (aero_quote_usdc, v3_quote_usdc) {
+        let price_aero = out_aero.amountOut.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let price_v3 = out_v3.amountOut.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let spread_gap = (price_aero - price_v3).abs();
 
-                    let raw_v3_ratio = (sqrt_price_v3.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
-                    let price_v3 = raw_v3_ratio * 10f64.powi(6 - 18);
-                    
-                    let loan_amount = U256::from(10_000_000_000_000_000u64);
-
-                    println!("🪙 [PRE-FLIGHT MATH] Token: {:?}, Calculated Price Aero: {:.6}, Price V3: {:.6}, Dynamic Loan: {}", USDC_BASE, price_aero, price_v3, loan_amount);
-
-                    if U256::from(sqrt_price_aero) > U256::ZERO && U256::from(sqrt_price_v3) > U256::ZERO && price_aero > 0.0 && price_v3 > 0.0 {
-                        let spread_gap = (price_aero - price_v3).abs();
-                        opportunities.push(AssetArbitrageOpportunity {
-                            token: USDC_BASE,
-                            _price_aero: price_aero,
-                            _price_v3: price_v3,
-                            spread_gap,
-                            _aero_pool: aero_usdc_pool,
-                            _v3_pool: v3_usdc_pool,
-                            loan_amount,
-                        });
-                    }
-                }
-                Err(e) => println!("❌ [RPC ERROR - UNISWAP V3] USDC Pair slot0 failed: {:?}", e),
-            }
+        if price_aero > 0.0 && price_v3 > 0.0 {
+            opportunities.push(AssetArbitrageOpportunity {
+                token: USDC_BASE,
+                _price_aero: price_aero,
+                _price_v3: price_v3,
+                spread_gap,
+                _aero_pool: AERODROME_QUOTER,
+                _v3_pool: UNISWAP_V3_QUOTER,
+                loan_amount: loan_amount_usdc,
+            });
         }
-        Err(e) => println!("❌ [RPC ERROR - AERODROME SLIPSTREAM] USDC Pair slot0 failed: {:?}", e),
     }
 
     // 2. cbBTC / WETH Pair
-    let aero_cbbtc_pool = address!("0606B4916aFDb81249bCBF51A18671b26CCf7D6C");
-    let v3_cbbtc_pool = address!("2A1c9966EEb6D649AA3b49F4472d24CE7F99FdAc");
-    discovered_pools.push(aero_cbbtc_pool);
-    discovered_pools.push(v3_cbbtc_pool);
+    let amount_in_cbbtc = U256::from(100_000_000u64);
+    let loan_amount_cbbtc = U256::from(1_000_000_000_000_000u64);
 
-    let aero_pool_cbbtc = IAerodromeSlipstreamPool::new(aero_cbbtc_pool, http_provider.clone());
-    let v3_pool_cbbtc = IUniswapV3Pool::new(v3_cbbtc_pool, http_provider.clone());
+    let aero_quote_cbbtc = aero_quoter.quoteExactInputSingle(CBBTC_BASE, WETH_BASE, false, amount_in_cbbtc).call().await;
+    let v3_quote_cbbtc = v3_quoter.quoteExactInputSingle(CBBTC_BASE, WETH_BASE, 500, amount_in_cbbtc, U256::ZERO).call().await;
 
-    let aero_res_cbbtc = aero_pool_cbbtc.slot0().call().await;
-    match aero_res_cbbtc {
-        Ok(slot0_aero) => {
-            let sqrt_price_aero = slot0_aero.sqrtPriceX96;
-            println!("🔍 [BLOCK DEBUG - AERODROME SLIPSTREAM] Token: {:?}, Raw SqrtPriceX96: {}", CBBTC_BASE, sqrt_price_aero);
-            let v3_res_cbbtc = v3_pool_cbbtc.slot0().call().await;
-            match v3_res_cbbtc {
-                Ok(slot0_v3) => {
-                    let sqrt_price_v3 = slot0_v3.sqrtPriceX96;
-                    println!("🔍 [BLOCK DEBUG - UNISWAP V3] Token: {:?}, Raw SqrtPriceX96: {}", CBBTC_BASE, sqrt_price_v3);
-                    
-                    let raw_aero_ratio = (sqrt_price_aero.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
-                    let price_aero = raw_aero_ratio * 10f64.powi(8 - 18);
+    if let (Ok(out_aero), Ok(out_v3)) = (aero_quote_cbbtc, v3_quote_cbbtc) {
+        let price_aero = out_aero.amountOut.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let price_v3 = out_v3.amountOut.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let spread_gap = (price_aero - price_v3).abs();
 
-                    let raw_v3_ratio = (sqrt_price_v3.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
-                    let price_v3 = raw_v3_ratio * 10f64.powi(8 - 18);
-                    
-                    let loan_amount = U256::from(1_000_000_000_000_000u64);
-
-                    println!("🪙 [PRE-FLIGHT MATH] Token: {:?}, Calculated Price Aero: {:.6}, Price V3: {:.6}, Dynamic Loan: {}", CBBTC_BASE, price_aero, price_v3, loan_amount);
-
-                    if U256::from(sqrt_price_aero) > U256::ZERO && U256::from(sqrt_price_v3) > U256::ZERO && price_aero > 0.0 && price_v3 > 0.0 {
-                        let spread_gap = (price_aero - price_v3).abs();
-                        opportunities.push(AssetArbitrageOpportunity {
-                            token: CBBTC_BASE,
-                            _price_aero: price_aero,
-                            _price_v3: price_v3,
-                            spread_gap,
-                            _aero_pool: aero_cbbtc_pool,
-                            _v3_pool: v3_cbbtc_pool,
-                            loan_amount,
-                        });
-                    }
-                }
-                Err(e) => println!("❌ [RPC ERROR - UNISWAP V3] cbBTC Pair slot0 failed: {:?}", e),
-            }
+        if price_aero > 0.0 && price_v3 > 0.0 {
+            opportunities.push(AssetArbitrageOpportunity {
+                token: CBBTC_BASE,
+                _price_aero: price_aero,
+                _price_v3: price_v3,
+                spread_gap,
+                _aero_pool: AERODROME_QUOTER,
+                _v3_pool: UNISWAP_V3_QUOTER,
+                loan_amount: loan_amount_cbbtc,
+            });
         }
-        Err(e) => println!("❌ [RPC ERROR - AERODROME SLIPSTREAM] cbBTC Pair slot0 failed: {:?}", e),
     }
 
     // 3. AERO / WETH Pair
-    let aero_aero_pool = address!("7f670f66e028D139613b482276563c65c69AD752");
-    let v3_aero_pool = address!("16629737119B61E47eDb8095AA508823f9E42Bdf");
-    discovered_pools.push(aero_aero_pool);
-    discovered_pools.push(v3_aero_pool);
+    let amount_in_aero = U256::from(1_000_000_000_000_000_000u64);
+    let loan_amount_aero = U256::from(10_000_000_000_000_000u64);
 
-    let aero_pool_aero = IAerodromeSlipstreamPool::new(aero_aero_pool, http_provider.clone());
-    let v3_pool_aero = IUniswapV3Pool::new(v3_aero_pool, http_provider.clone());
+    let aero_quote_aero = aero_quoter.quoteExactInputSingle(AERO_BASE, WETH_BASE, false, amount_in_aero).call().await;
+    let v3_quote_aero = v3_quoter.quoteExactInputSingle(AERO_BASE, WETH_BASE, 3000, amount_in_aero, U256::ZERO).call().await;
 
-    let aero_res_aero = aero_pool_aero.slot0().call().await;
-    match aero_res_aero {
-        Ok(slot0_aero) => {
-            let sqrt_price_aero = slot0_aero.sqrtPriceX96;
-            println!("🔍 [BLOCK DEBUG - AERODROME SLIPSTREAM] Token: {:?}, Raw SqrtPriceX96: {}", AERO_BASE, sqrt_price_aero);
-            let v3_res_aero = v3_pool_aero.slot0().call().await;
-            match v3_res_aero {
-                Ok(slot0_v3) => {
-                    let sqrt_price_v3 = slot0_v3.sqrtPriceX96;
-                    println!("🔍 [BLOCK DEBUG - UNISWAP V3] Token: {:?}, Raw SqrtPriceX96: {}", AERO_BASE, sqrt_price_v3);
-                    
-                    let raw_aero_ratio = (sqrt_price_aero.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
-                    let price_aero = raw_aero_ratio;
+    if let (Ok(out_aero), Ok(out_v3)) = (aero_quote_aero, v3_quote_aero) {
+        let price_aero = out_aero.amountOut.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let price_v3 = out_v3.amountOut.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let spread_gap = (price_aero - price_v3).abs();
 
-                    let raw_v3_ratio = (sqrt_price_v3.to_string().parse::<f64>().unwrap_or(0.0) / 2f64.powi(96)).powi(2);
-                    let price_v3 = raw_v3_ratio;
-                    
-                    let loan_amount = U256::from(10_000_000_000_000_000u64);
-
-                    println!("🪙 [PRE-FLIGHT MATH] Token: {:?}, Calculated Price Aero: {:.6}, Price V3: {:.6}, Dynamic Loan: {}", AERO_BASE, price_aero, price_v3, loan_amount);
-
-                    if U256::from(sqrt_price_aero) > U256::ZERO && U256::from(sqrt_price_v3) > U256::ZERO && price_aero > 0.0 && price_v3 > 0.0 {
-                        let spread_gap = (price_aero - price_v3).abs();
-                        opportunities.push(AssetArbitrageOpportunity {
-                            token: AERO_BASE,
-                            _price_aero: price_aero,
-                            _price_v3: price_v3,
-                            spread_gap,
-                            _aero_pool: aero_aero_pool,
-                            _v3_pool: v3_aero_pool,
-                            loan_amount,
-                        });
-                    }
-                }
-                Err(e) => println!("❌ [RPC ERROR - UNISWAP V3] AERO Pair slot0 failed: {:?}", e),
-            }
+        if price_aero > 0.0 && price_v3 > 0.0 {
+            opportunities.push(AssetArbitrageOpportunity {
+                token: AERO_BASE,
+                _price_aero: price_aero,
+                _price_v3: price_v3,
+                spread_gap,
+                _aero_pool: AERODROME_QUOTER,
+                _v3_pool: UNISWAP_V3_QUOTER,
+                loan_amount: loan_amount_aero,
+            });
         }
-        Err(e) => println!("❌ [RPC ERROR - AERODROME SLIPSTREAM] AERO Pair slot0 failed: {:?}", e),
     }
 
     if opportunities.is_empty() {
-        println!("⚠ [DEBUG] opportunities is empty. All hardcoded pair checks failed or returned zero reserves.");
         let fallback_pool = discovered_pools.first().copied().unwrap_or(Address::ZERO);
         return Ok((0.0, WETH_BASE, U256::ZERO, WETH_BASE, USDC_BASE, vec![fallback_pool]));
     }

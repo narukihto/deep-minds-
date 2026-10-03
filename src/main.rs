@@ -13,6 +13,7 @@ use alloy::{
 };
 
 type U24 = Uint<24, 1>;
+type U160 = Uint<160, 3>;
 
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
 const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
@@ -386,11 +387,11 @@ where
     let loan_amount_usdc = U256::from(10_000_000_000_000_000u64);
 
     let aero_quote_usdc = aero_quoter.quoteExactInputSingle(USDC_BASE, WETH_BASE, false, amount_in_usdc).call().await;
-    let v3_quote_usdc = v3_quoter.quoteExactInputSingle(USDC_BASE, WETH_BASE, 500, amount_in_usdc, U256::ZERO).call().await;
+    let v3_quote_usdc = v3_quoter.quoteExactInputSingle(USDC_BASE, WETH_BASE, U24::from(500u32), amount_in_usdc, U160::ZERO).call().await;
 
     if let (Ok(out_aero), Ok(out_v3)) = (aero_quote_usdc, v3_quote_usdc) {
-        let price_aero = out_aero.amountOut.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let price_v3 = out_v3.amountOut.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let price_aero = out_aero._0.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let price_v3 = out_v3._0.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
         let spread_gap = (price_aero - price_v3).abs();
 
         if price_aero > 0.0 && price_v3 > 0.0 {
@@ -411,11 +412,11 @@ where
     let loan_amount_cbbtc = U256::from(1_000_000_000_000_000u64);
 
     let aero_quote_cbbtc = aero_quoter.quoteExactInputSingle(CBBTC_BASE, WETH_BASE, false, amount_in_cbbtc).call().await;
-    let v3_quote_cbbtc = v3_quoter.quoteExactInputSingle(CBBTC_BASE, WETH_BASE, 500, amount_in_cbbtc, U256::ZERO).call().await;
+    let v3_quote_cbbtc = v3_quoter.quoteExactInputSingle(CBBTC_BASE, WETH_BASE, U24::from(500u32), amount_in_cbbtc, U160::ZERO).call().await;
 
     if let (Ok(out_aero), Ok(out_v3)) = (aero_quote_cbbtc, v3_quote_cbbtc) {
-        let price_aero = out_aero.amountOut.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let price_v3 = out_v3.amountOut.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let price_aero = out_aero._0.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let price_v3 = out_v3._0.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
         let spread_gap = (price_aero - price_v3).abs();
 
         if price_aero > 0.0 && price_v3 > 0.0 {
@@ -436,11 +437,11 @@ where
     let loan_amount_aero = U256::from(10_000_000_000_000_000u64);
 
     let aero_quote_aero = aero_quoter.quoteExactInputSingle(AERO_BASE, WETH_BASE, false, amount_in_aero).call().await;
-    let v3_quote_aero = v3_quoter.quoteExactInputSingle(AERO_BASE, WETH_BASE, 3000, amount_in_aero, U256::ZERO).call().await;
+    let v3_quote_aero = v3_quoter.quoteExactInputSingle(AERO_BASE, WETH_BASE, U24::from(3000u32), amount_in_aero, U160::ZERO).call().await;
 
     if let (Ok(out_aero), Ok(out_v3)) = (aero_quote_aero, v3_quote_aero) {
-        let price_aero = out_aero.amountOut.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let price_v3 = out_v3.amountOut.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let price_aero = out_aero._0.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let price_v3 = out_v3._0.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
         let spread_gap = (price_aero - price_v3).abs();
 
         if price_aero > 0.0 && price_v3 > 0.0 {

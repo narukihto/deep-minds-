@@ -20,11 +20,10 @@ const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
 const CBBTC_BASE: Address = address!("cbB7C7A63551000b48A8503b87936a229a4b3FE3");
 const AERO_BASE: Address = address!("940181a94A35A4569E4529A3CDfB74e38FD98631");
 
-// Whitelisted Router Addresses on Base Network
-const UNISWAP_V3_ROUTER: Address = address!("262664982A6941F909fCF2f8358D64E19349e25C");
-const AERODROME_ROUTER: Address = address!("cF77a3Ba9A5CA399B7f97cbf339178ffc51eda8c");
+// --- تم توحيد العناوين 100% لتطابق القائمة البيضاء (Whitelisted Targets) في العقد الذكي ---
+const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
+const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
 
-// Factory references retained for backward compatibility
 const AERODROME_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFECe40Da");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -92,6 +91,7 @@ pub struct CausalCollapseSystem {
     pub dynamic_pools: Vec<Address>,
     pub contract_address: Address,
     pub loan_amount: U256,
+    pub borrowed_token: Address,
 }
 
 impl CausalCollapseSystem {
@@ -100,6 +100,7 @@ impl CausalCollapseSystem {
         dynamic_pools: Vec<Address>,
         contract_address: Address,
         loan_amount: U256,
+        borrowed_token: Address,
     ) -> Self {
         Self {
             nodes,
@@ -108,6 +109,7 @@ impl CausalCollapseSystem {
             dynamic_pools,
             contract_address,
             loan_amount,
+            borrowed_token,
         }
     }
 
@@ -205,17 +207,68 @@ impl CausalCollapseSystem {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        for (idx, node) in final_path.iter().enumerate() {
-            let pool = effective_pools[idx % effective_pools.len()];
-            addresses.push(pool);
+        // الخطوة الأولى: مسار الشراء الأساسي (مثلاً من التوكن المقترض إلى الـ WETH)
+        let primary_node = &final_path[0];
+        let pool = effective_pools[0];
+        addresses.push(pool);
 
-            let payload = if pool == UNISWAP_V3_ROUTER {
-                let exact_input_params = IUniswapV3Router::ExactInputParams {
+        let payload = if pool == UNISWAP_V3_ROUTER {
+            let exact_input_params = IUniswapV3Router::ExactInputParams {
+                path: {
+                    let mut packed = Vec::new();
+                    packed.extend_from_slice(primary_node.token0.as_slice());
+                    packed.extend_from_slice(&[0x00, 0x0b, 0xb8]);
+                    packed.extend_from_slice(primary_node.token1.as_slice());
+                    Bytes::from(packed)
+                },
+                recipient: self.contract_address,
+                deadline: U256::from(u64::MAX),
+                amountIn: self.loan_amount,
+                amountOutMinimum: U256::ZERO,
+            };
+            IUniswapV3Router::exactInputCall {
+                params: exact_input_params,
+            }
+            .abi_encode()
+        } else if pool == AERODROME_ROUTER {
+            let aero_route = IAerodromeRouter::Route {
+                from: primary_node.token0,
+                to: primary_node.token1,
+                stable: false,
+                factory: AERODROME_FACTORY,
+            };
+            IAerodromeRouter::swapExactTokensForTokensCall {
+                amountIn: self.loan_amount,
+                amountOutMin: U256::ZERO,
+                routes: vec![aero_route],
+                to: self.contract_address,
+                deadline: U256::from(u64::MAX),
+            }
+            .abi_encode()
+        } else {
+            IUniswapV2Router02::swapExactTokensForTokensCall {
+                amountIn: self.loan_amount,
+                amountOutMin: U256::ZERO,
+                path: vec![primary_node.token0, primary_node.token1],
+                to: self.contract_address,
+                deadline: U256::from(u64::MAX),
+            }
+            .abi_encode()
+        };
+        payloads.push(payload);
+
+        // الخطوة الثانية: مسار العودة الإجباري (Return Path) لإغلاق الدورة وإعادة العملة المقترضة للعقد
+        if primary_node.token1 != self.borrowed_token {
+            let pool_return = effective_pools[1 % effective_pools.len()];
+            addresses.push(pool_return);
+
+            let return_payload = if pool_return == UNISWAP_V3_ROUTER {
+                let return_params = IUniswapV3Router::ExactInputParams {
                     path: {
                         let mut packed = Vec::new();
-                        packed.extend_from_slice(node.token0.as_slice());
+                        packed.extend_from_slice(primary_node.token1.as_slice());
                         packed.extend_from_slice(&[0x00, 0x0b, 0xb8]);
-                        packed.extend_from_slice(node.token1.as_slice());
+                        packed.extend_from_slice(self.borrowed_token.as_slice());
                         Bytes::from(packed)
                     },
                     recipient: self.contract_address,
@@ -223,36 +276,24 @@ impl CausalCollapseSystem {
                     amountIn: self.loan_amount,
                     amountOutMinimum: U256::ZERO,
                 };
-                IUniswapV3Router::exactInputCall {
-                    params: exact_input_params,
-                }
-                .abi_encode()
-            } else if pool == AERODROME_ROUTER {
-                let aero_route = IAerodromeRouter::Route {
-                    from: node.token0,
-                    to: node.token1,
+                IUniswapV3Router::exactInputCall { params: return_params }.abi_encode()
+            } else {
+                let return_route = IAerodromeRouter::Route {
+                    from: primary_node.token1,
+                    to: self.borrowed_token,
                     stable: false,
                     factory: AERODROME_FACTORY,
                 };
                 IAerodromeRouter::swapExactTokensForTokensCall {
                     amountIn: self.loan_amount,
                     amountOutMin: U256::ZERO,
-                    routes: vec![aero_route],
-                    to: self.contract_address,
-                    deadline: U256::from(u64::MAX),
-                }
-                .abi_encode()
-            } else {
-                IUniswapV2Router02::swapExactTokensForTokensCall {
-                    amountIn: self.loan_amount,
-                    amountOutMin: U256::ZERO,
-                    path: vec![node.token0, node.token1],
+                    routes: vec![return_route],
                     to: self.contract_address,
                     deadline: U256::from(u64::MAX),
                 }
                 .abi_encode()
             };
-            payloads.push(payload);
+            payloads.push(return_payload);
         }
 
         (addresses, payloads)
@@ -348,8 +389,8 @@ where
     P: Provider<Ethereum> + Clone,
 {
     Ok(vec![
-        address!("3d6110f0195e018617882255755255474c156f52"),
-        address!("cF77a3Ba9A5CA399B7f97cbf339178ffc51eda8c"),
+        UNISWAP_V3_ROUTER,
+        AERODROME_ROUTER,
     ])
 }
 
@@ -363,6 +404,25 @@ struct AssetArbitrageOpportunity {
     loan_amount: U256,
 }
 
+// --- حساب رسوم الغاز الديناميكي اللحظي على شبكة Base لضمان ربحية صافية حقيقية ---
+async fn calculate_dynamic_net_profit_threshold<P>(
+    provider: &P,
+    loan_amount: U256,
+) -> Result<f64, Box<dyn std::error::Error>>
+where
+    P: Provider<Ethereum> + Clone,
+{
+    let gas_price = provider.get_gas_price().await.unwrap_or(100_000_000);
+    let estimated_gas_limit: u128 = 350_000;
+    let gas_cost_wei = gas_price * estimated_gas_limit;
+
+    let loan_f64 = loan_amount.to_string().parse::<f64>().unwrap_or(1.0);
+    let flash_fee_estimated = loan_f64 * 0.0009; // 0.09% Aave max fee
+
+    let total_cost_threshold = (gas_cost_wei as f64 + flash_fee_estimated) / loan_f64;
+    Ok(total_cost_threshold + 0.0005)
+}
+
 async fn fetch_live_market_data<P>(
     http_provider: P,
     _cached_pools: &[Address],
@@ -373,18 +433,16 @@ where
     let mut opportunities = Vec::new();
     let mut discovered_pools = Vec::new();
 
-    const UNISWAP_V3_QUOTER: Address = address!("3d6110f0195e018617882255755255474c156f52");
-    const AERODROME_QUOTER: Address = address!("cF77a3Ba9A5CA399B7f97cbf339178ffc51eda8c");
+    discovered_pools.push(UNISWAP_V3_ROUTER);
+    discovered_pools.push(AERODROME_ROUTER);
 
-    discovered_pools.push(UNISWAP_V3_QUOTER);
-    discovered_pools.push(AERODROME_QUOTER);
-
-    let v3_quoter = IUniswapV3Quoter::new(UNISWAP_V3_QUOTER, http_provider.clone());
-    let aero_quoter = IAerodromeQuoter::new(AERODROME_QUOTER, http_provider.clone());
+    let v3_quoter = IUniswapV3Quoter::new(UNISWAP_V3_ROUTER, http_provider.clone());
+    let aero_quoter = IAerodromeQuoter::new(AERODROME_ROUTER, http_provider.clone());
 
     // 1. USDC / WETH Pair
     let amount_in_usdc = U256::from(1_000_000u64);
     let loan_amount_usdc = U256::from(10_000_000_000_000_000u64);
+    let dynamic_threshold = calculate_dynamic_net_profit_threshold(&http_provider, loan_amount_usdc).await.unwrap_or(0.001);
 
     let aero_quote_usdc = aero_quoter.quoteExactInputSingle(USDC_BASE, WETH_BASE, false, amount_in_usdc).call().await;
     let v3_quote_usdc = v3_quoter.quoteExactInputSingle(USDC_BASE, WETH_BASE, U24::from(500u32), amount_in_usdc, U160::ZERO).call().await;
@@ -392,16 +450,16 @@ where
     if let (Ok(out_aero), Ok(out_v3)) = (aero_quote_usdc, v3_quote_usdc) {
         let price_aero = out_aero.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
         let price_v3 = out_v3.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let spread_gap = (price_aero - price_v3).abs();
+        let raw_spread = (price_aero - price_v3).abs();
 
-        if price_aero > 0.0 && price_v3 > 0.0 {
+        if raw_spread > dynamic_threshold && price_aero > 0.0 && price_v3 > 0.0 {
             opportunities.push(AssetArbitrageOpportunity {
                 token: USDC_BASE,
                 _price_aero: price_aero,
                 _price_v3: price_v3,
-                spread_gap,
-                _aero_pool: AERODROME_QUOTER,
-                _v3_pool: UNISWAP_V3_QUOTER,
+                spread_gap: raw_spread,
+                _aero_pool: AERODROME_ROUTER,
+                _v3_pool: UNISWAP_V3_ROUTER,
                 loan_amount: loan_amount_usdc,
             });
         }
@@ -417,16 +475,16 @@ where
     if let (Ok(out_aero), Ok(out_v3)) = (aero_quote_cbbtc, v3_quote_cbbtc) {
         let price_aero = out_aero.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
         let price_v3 = out_v3.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let spread_gap = (price_aero - price_v3).abs();
+        let raw_spread = (price_aero - price_v3).abs();
 
-        if price_aero > 0.0 && price_v3 > 0.0 {
+        if raw_spread > dynamic_threshold && price_aero > 0.0 && price_v3 > 0.0 {
             opportunities.push(AssetArbitrageOpportunity {
                 token: CBBTC_BASE,
                 _price_aero: price_aero,
                 _price_v3: price_v3,
-                spread_gap,
-                _aero_pool: AERODROME_QUOTER,
-                _v3_pool: UNISWAP_V3_QUOTER,
+                spread_gap: raw_spread,
+                _aero_pool: AERODROME_ROUTER,
+                _v3_pool: UNISWAP_V3_ROUTER,
                 loan_amount: loan_amount_cbbtc,
             });
         }
@@ -442,16 +500,16 @@ where
     if let (Ok(out_aero), Ok(out_v3)) = (aero_quote_aero, v3_quote_aero) {
         let price_aero = out_aero.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
         let price_v3 = out_v3.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let spread_gap = (price_aero - price_v3).abs();
+        let raw_spread = (price_aero - price_v3).abs();
 
-        if price_aero > 0.0 && price_v3 > 0.0 {
+        if raw_spread > dynamic_threshold && price_aero > 0.0 && price_v3 > 0.0 {
             opportunities.push(AssetArbitrageOpportunity {
                 token: AERO_BASE,
                 _price_aero: price_aero,
                 _price_v3: price_v3,
-                spread_gap,
-                _aero_pool: AERODROME_QUOTER,
-                _v3_pool: UNISWAP_V3_QUOTER,
+                spread_gap: raw_spread,
+                _aero_pool: AERODROME_ROUTER,
+                _v3_pool: UNISWAP_V3_ROUTER,
                 loan_amount: loan_amount_aero,
             });
         }
@@ -524,7 +582,7 @@ where
             println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
         }
         Err(e_balancer) => {
-            println!("⚠ Balancer Simulation Failed ({:?}). Activating Aave Fallback Route...", e_balancer);
+            println!("⚠ Balancer Simulation Failed. Reason details: {:?}. Activating Aave Fallback Route...", e_balancer);
             sleep(Duration::from_millis(150)).await;
 
             let aave_builder = contract
@@ -539,7 +597,7 @@ where
                     println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
                 }
                 Err(e_aave) => {
-                    println!("❌ Both Simulations Failed. Balancer: {:?}, Aave: {:?}", e_balancer, e_aave);
+                    println!("❌ Both Simulations Failed. Balancer Revert: {:?}, Aave Revert: {:?}", e_balancer, e_aave);
                 }
             }
         }
@@ -645,6 +703,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     scanned_addresses,
                     contract_address,
                     dynamic_loan,
+                    dynamic_token,
                 );
 
                 let optimized_path = system.execute_collapse();

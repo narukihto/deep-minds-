@@ -422,7 +422,7 @@ where
     Ok((
         spread_gap,
         USDC_BASE,
-        U256::from(1_000_000_000u64), // 1,000 USDC Loan
+        U256::from(50_000_000_000u64), // تم التحديث: 50,000 USDC Loan
         USDC_BASE,
         WETH_BASE,
         discovered_pools,
@@ -482,7 +482,6 @@ where
         .from(signer_address)
         .gas(1_500_000);
 
-    // 🛡️ فحص المحاكاة المحلية أولاً لتوفير رسوم الغاز
     match balancer_builder.call().await {
         Ok(_) => {
             println!("✅ Local Simulation Passed Successfully! Dispatching Real Transaction to Blockchain...");
@@ -503,7 +502,7 @@ where
                 }
             }
         }
-        Err(e_sim) => {
+        Err(_e_sim) => {
             println!("🛡 [SIMULATION REVERTED SAFELY]: الصفقة غير مربحة أو ستفشل محلياً، تم منع إرسالها لتوفير رسوم الغاز.");
         }
     }

@@ -22,9 +22,9 @@ const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3
 const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
 const AERODROME_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFECe40Da");
 
-// --- أحواض السيولة النشطة المباشرة على شبكة Base ---
-const AERO_POOL_USDC_WETH: Address = address!("6cDcb1C4A4D1C3C6d054b27AC5a77d843F2bA964");
-const UNISWAP_V3_POOL_USDC_WETH: Address = address!("d0b53D9277642d139eA168853AEC068C654a1073");
+// --- عناوين الأحواض النشطة الحقيقية والمحققة على شبكة Base ---
+const AERO_POOL_USDC_WETH: Address = address!("cdac0d6c6c59727a65f871236188350531885c43");
+const UNISWAP_V3_POOL_USDC_WETH: Address = address!("d0b53d9277642d139ea168853aec068c654a1073");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Direction {
@@ -356,7 +356,7 @@ where
     ])
 }
 
-// --- قراءة الأسعار المباشرة عبر أحواض السيولة المباشرة لتجنب أخطاء Quoter ---
+// --- قراءة الأسعار اللحظية من الأحواض الرسمية ---
 async fn fetch_live_market_data<P>(
     http_provider: P,
     cached_pools: &[Address],
@@ -380,7 +380,7 @@ where
         let sqrt_price_x96 = slot0.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0);
         if sqrt_price_x96 > 0.0 {
             let price_raw = (sqrt_price_x96 / (2.0f64.powi(96))).powi(2);
-            price_v3 = price_raw * 10f64.powi(12);
+            price_v3 = (1.0 / price_raw) * 10f64.powi(12);
         }
     }
 

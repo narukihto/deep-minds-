@@ -417,12 +417,19 @@ async fn trigger_on_chain_arbitrage<P>(
     signer_address: Address,
     token_to_borrow: Address,
     loan_amount: U256,
+    spread_gap: f64,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     P: Provider<Ethereum> + Clone,
 {
     if loan_amount == U256::ZERO || target_path.0.is_empty() {
         println!("🛡 [PRE-FLIGHT SHIELD] Invalid loan or empty path. Skipping execution.");
+        return Ok(());
+    }
+
+    // شرط الفلترة: لا ترسل المعاملة إلا إذا كانت الفجوة السعرية أكبر من 0.50 دولار لضمان تغطية الرسوم
+    if spread_gap < 0.50 {
+        println!("🛡 [PROFIT SHIELD] Gap (${:.4}) is below profitability threshold ($0.50). Skipping execution to prevent revert.", spread_gap);
         return Ok(());
     }
 
@@ -453,9 +460,8 @@ where
             println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
         }
         Err(e_balancer) => {
-            // طباعة تفصيلية كاملة ومباشرة لهيكل الخطأ الخام من مكتبة Alloy
             println!("❌ [RAW DETAILED BALANCER ERROR]: {:#?}", e_balancer);
-            
+
             sleep(Duration::from_millis(150)).await;
 
             let aave_builder = contract
@@ -485,7 +491,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🤖 Initializing Universal Dynamic Token Scanner Core via Alloy...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
-        .unwrap_or_else(|_| "0x5FbDB2315678afecb367f032d93F642f64180aa3".to_string());
+        .unwrap_or_else(|_| "0x60aED4271427A2d8e09f10e59E6C977A589eF46E".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
 
     let alchemy_http_urls = vec![
@@ -581,6 +587,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     signer_address,
                     dynamic_token,
                     dynamic_loan,
+                    live_market_price,
                 ).await {
                     println!("❌ Error executing on-chain command: {:?}", e);
                 }

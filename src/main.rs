@@ -17,15 +17,14 @@ type U160 = Uint<160, 3>;
 
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
 const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
-const CBBTC_BASE: Address = address!("cbB7C7A63551000b48A8503b87936a229a4b3FE3");
-const AERO_BASE: Address = address!("940181a94A35A4569E4529A3CDfB74e38FD98631");
 
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
 const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
 const AERODROME_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFECe40Da");
 
-const UNISWAP_V3_QUOTER: Address = address!("3d6110f0195e018617882255755255474c156f52");
-const AERODROME_QUOTER: Address = address!("cF77a3Ba9A5CA399B7f97cbf339178ffc51eda8c");
+// --- أحواض السيولة النشطة المباشرة على شبكة Base ---
+const AERO_POOL_USDC_WETH: Address = address!("6cDcb1C4A4D1C3C6d054b27AC5a77d843F2bA964");
+const UNISWAP_V3_POOL_USDC_WETH: Address = address!("d0b53D9277642d139eA168853AEC068C654a1073");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Direction {
@@ -300,30 +299,13 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
 
 sol! {
     #[sol(rpc)]
-    contract IUniswapV2Factory {
-        function allPairs(uint256) external view returns (address pair);
-        function allPairsLength() external view returns (uint256);
+    contract IUniswapV2Pair {
+        function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
     }
 
     #[sol(rpc)]
-    contract IUniswapV3Quoter {
-        function quoteExactInputSingle(
-            address tokenIn,
-            address tokenOut,
-            uint24 fee,
-            uint256 amountIn,
-            uint160 sqrtPriceLimitX96
-        ) external returns (uint256 amountOut);
-    }
-
-    #[sol(rpc)]
-    contract IAerodromeQuoter {
-        function quoteExactInputSingle(
-            address tokenIn,
-            address tokenOut,
-            bool stable,
-            uint256 amountIn
-        ) external view returns (uint256 amountOut);
+    contract IUniswapV3Pool {
+        function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked);
     }
 
     #[sol(rpc)]
@@ -363,38 +345,18 @@ sol! {
 }
 
 async fn fetch_dynamic_pools<P>(
-    http_provider: P,
+    _http_provider: P,
 ) -> Result<Vec<Address>, Box<dyn std::error::Error>>
 where
     P: Provider<Ethereum> + Clone,
 {
-    let factory = IUniswapV2Factory::new(AERODROME_FACTORY, http_provider);
-    let length = factory.allPairsLength().call().await?;
-    let total_pairs = length.to::<u64>();
-    let start_index = if total_pairs > 20 { total_pairs - 20 } else { 0 };
-
-    let mut pool_addresses = Vec::new();
-    for i in start_index..total_pairs {
-        if let Ok(pair_address) = factory.allPairs(U256::from(i)).call().await {
-            pool_addresses.push(pair_address);
-        }
-    }
-
-    if pool_addresses.is_empty() {
-        pool_addresses.push(UNISWAP_V3_ROUTER);
-        pool_addresses.push(AERODROME_ROUTER);
-    }
-
-    Ok(pool_addresses)
+    Ok(vec![
+        UNISWAP_V3_ROUTER,
+        AERODROME_ROUTER,
+    ])
 }
 
-struct AssetArbitrageOpportunity {
-    token: Address,
-    spread_gap: f64,
-    loan_amount: U256,
-}
-
-// --- جلب الأسعار المباشرة مع طباعة تفصيلية لكل استعلام للتأكد من الرصد الفعلي ---
+// --- قراءة الأسعار المباشرة عبر أحواض السيولة المباشرة لتجنب أخطاء Quoter ---
 async fn fetch_live_market_data<P>(
     http_provider: P,
     cached_pools: &[Address],
@@ -402,70 +364,28 @@ async fn fetch_live_market_data<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    let mut opportunities = Vec::new();
-    let v3_quoter = IUniswapV3Quoter::new(UNISWAP_V3_QUOTER, http_provider.clone());
-    let aero_quoter = IAerodromeQuoter::new(AERODROME_QUOTER, http_provider.clone());
-
-    // 1. فحص زوج USDC / WETH
-    let amount_in_usdc = U256::from(1_000_000u64); 
-    let loan_usdc = U256::from(10_000_000_000u64); 
-
-    let out_aero_usdc = aero_quoter.quoteExactInputSingle(USDC_BASE, WETH_BASE, false, amount_in_usdc).call().await;
-    let out_v3_usdc = v3_quoter.quoteExactInputSingle(USDC_BASE, WETH_BASE, U24::from(500u32), amount_in_usdc, U160::ZERO).call().await;
-
-    if let (Ok(aero_val), Ok(v3_val)) = (&out_aero_usdc, &out_v3_usdc) {
-        let p_aero = aero_val.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let p_v3 = v3_val.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let gap = (p_aero - p_v3).abs();
-        println!(" 🔎 [USDC CHECK] Aero: {:.6} | V3: {:.6} | Gap: {:.6}", p_aero, p_v3, gap);
-        if p_aero > 0.0 && p_v3 > 0.0 {
-            opportunities.push(AssetArbitrageOpportunity { token: USDC_BASE, spread_gap: gap, loan_amount: loan_usdc });
-        }
-    } else {
-        println!(" ⚠ [USDC CHECK] Quoter call failed or returned empty. Aero: {:?}, V3: {:?}", out_aero_usdc, out_v3_usdc);
-    }
-
-    // 2. فحص زوج CBBTC / WETH
-    let amount_in_cbbtc = U256::from(100_000_000u64);
-    let loan_cbbtc = U256::from(1_000_000_000_000_000u64);
-
-    let out_aero_cbbtc = aero_quoter.quoteExactInputSingle(CBBTC_BASE, WETH_BASE, false, amount_in_cbbtc).call().await;
-    let out_v3_cbbtc = v3_quoter.quoteExactInputSingle(CBBTC_BASE, WETH_BASE, U24::from(500u32), amount_in_cbbtc, U160::ZERO).call().await;
-
-    if let (Ok(aero_val), Ok(v3_val)) = (&out_aero_cbbtc, &out_v3_cbbtc) {
-        let p_aero = aero_val.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let p_v3 = v3_val.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let gap = (p_aero - p_v3).abs();
-        println!(" 🔎 [CBBTC CHECK] Aero: {:.6} | V3: {:.6} | Gap: {:.6}", p_aero, p_v3, gap);
-        if p_aero > 0.0 && p_v3 > 0.0 {
-            opportunities.push(AssetArbitrageOpportunity { token: CBBTC_BASE, spread_gap: gap, loan_amount: loan_cbbtc });
+    let aero_pair = IUniswapV2Pair::new(AERO_POOL_USDC_WETH, http_provider.clone());
+    let mut price_aero = 0.0;
+    if let Ok(res) = aero_pair.getReserves().call().await {
+        let r0 = res.reserve0.to::<u128>() as f64 / 10f64.powi(6);  // USDC
+        let r1 = res.reserve1.to::<u128>() as f64 / 10f64.powi(18); // WETH
+        if r1 > 0.0 {
+            price_aero = r0 / r1;
         }
     }
 
-    // 3. فحص زوج AERO / WETH
-    let amount_in_aero = U256::from(1_000_000_000_000_000_000u64);
-    let loan_aero = U256::from(10_000_000_000_000_000u64);
-
-    let out_aero_aero = aero_quoter.quoteExactInputSingle(AERO_BASE, WETH_BASE, false, amount_in_aero).call().await;
-    let out_v3_aero = v3_quoter.quoteExactInputSingle(AERO_BASE, WETH_BASE, U24::from(3000u32), amount_in_aero, U160::ZERO).call().await;
-
-    if let (Ok(aero_val), Ok(v3_val)) = (&out_aero_aero, &out_v3_aero) {
-        let p_aero = aero_val.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let p_v3 = v3_val.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let gap = (p_aero - p_v3).abs();
-        println!(" 🔎 [AERO CHECK] Aero: {:.6} | V3: {:.6} | Gap: {:.6}", p_aero, p_v3, gap);
-        if p_aero > 0.0 && p_v3 > 0.0 {
-            opportunities.push(AssetArbitrageOpportunity { token: AERO_BASE, spread_gap: gap, loan_amount: loan_aero });
+    let v3_pool = IUniswapV3Pool::new(UNISWAP_V3_POOL_USDC_WETH, http_provider.clone());
+    let mut price_v3 = 0.0;
+    if let Ok(slot0) = v3_pool.slot0().call().await {
+        let sqrt_price_x96 = slot0.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0);
+        if sqrt_price_x96 > 0.0 {
+            let price_raw = (sqrt_price_x96 / (2.0f64.powi(96))).powi(2);
+            price_v3 = price_raw * 10f64.powi(12);
         }
     }
 
-    let best_spread = if !opportunities.is_empty() {
-        opportunities.sort_by(|a, b| b.spread_gap.partial_cmp(&a.spread_gap).unwrap_or(std::cmp::Ordering::Equal));
-        println!(" 📊 [QUOTER FEED] Active Asset: {:?} | Best Spread Gap: {:.6}", opportunities[0].token, opportunities[0].spread_gap);
-        opportunities[0].spread_gap
-    } else {
-        0.0
-    };
+    let spread_gap = (price_aero - price_v3).abs();
+    println!(" 📈 [REALTIME PRICES] Aerodrome ETH: ${:.2} | Uniswap V3 ETH: ${:.2} | Gap: ${:.4}", price_aero, price_v3, spread_gap);
 
     let discovered_pools = if cached_pools.is_empty() {
         vec![UNISWAP_V3_ROUTER, AERODROME_ROUTER]
@@ -474,9 +394,9 @@ where
     };
 
     Ok((
-        best_spread,
+        spread_gap,
         USDC_BASE,
-        U256::from(10_000_000_000u64),
+        U256::from(10_000_000_000u64), // 10,000 USDC
         USDC_BASE,
         WETH_BASE,
         discovered_pools,

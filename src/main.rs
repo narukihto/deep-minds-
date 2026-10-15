@@ -360,7 +360,7 @@ where
     ])
 }
 
-// --- جلب الأسعار المباشرة والأكيدة عبر القراءة المباشرة لاحتياطيات الحوض وحساب السعر بالدولار الحقيقي ---
+// --- جلب الأسعار المباشرة والأكيدة بعد إصلاح تحويل الأنواع (.to::<u128>()) ---
 async fn fetch_live_market_data<P>(
     http_provider: P,
     _cached_pools: &[Address],
@@ -374,8 +374,8 @@ where
     let aero_pair = IUniswapV2Pair::new(AERO_POOL_USDC_WETH, http_provider.clone());
     let mut price_aero = 0.0;
     if let Ok(res) = aero_pair.getReserves().call().await {
-        let r0 = res.reserve0 as f64 / 10f64.powi(6);  // USDC (6 Decimals)
-        let r1 = res.reserve1 as f64 / 10f64.powi(18); // WETH (18 Decimals)
+        let r0 = res.reserve0.to::<u128>() as f64 / 10f64.powi(6);  // USDC (6 Decimals)
+        let r1 = res.reserve1.to::<u128>() as f64 / 10f64.powi(18); // WETH (18 Decimals)
         if r1 > 0.0 {
             price_aero = r0 / r1; // سعر ETH بالدولار على Aerodrome
         }
@@ -388,14 +388,12 @@ where
         let sqrt_price_x96 = slot0.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0);
         if sqrt_price_x96 > 0.0 {
             let price_raw = (sqrt_price_x96 / (2.0f64.powi(96))).powi(2);
-            // ضبط الـ Decimals بالنسبة لـ USDC (6) / WETH (18)
             price_v3 = price_raw * 10f64.powi(12); // سعر ETH بالدولار على Uniswap v3
         }
     }
 
     let spread_gap = (price_aero - price_v3).abs();
 
-    // طباعة السعر الحقيقي لكل المنصتين لمراقبة جلب البيانات بدقة
     if price_aero > 0.0 || price_v3 > 0.0 {
         println!(" 📈 [REALTIME PRICES] Aerodrome ETH: ${:.2} | Uniswap V3 ETH: ${:.2} | Gap: ${:.4}", price_aero, price_v3, spread_gap);
     }
@@ -542,7 +540,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!(" 📊 [METRIC FEED] Cross-DEX Spread Gap: ${:.4}, Checking Velocity Pivots...", live_market_price);
 
-        if live_market_price > 0.05 { // تنفيذ عندما يكون فارق السعر أكثر من 5 سنتات
+        if live_market_price > 0.05 {
             let (direction, velocity) = radar.update_and_predict(live_market_price);
             if direction == Direction::Peak || direction == Direction::Bottom {
                 println!("⚡ [RADAR ALERT] Velocity Pivot Discovered: {:.4}", velocity);

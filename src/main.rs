@@ -124,46 +124,166 @@ impl CausalCollapseSystem {
             return (vec![], vec![]);
         }
 
+        let effective_pools = if self.dynamic_pools.is_empty() {
+            vec![AERODROME_ROUTER]
+        } else {
+            self.dynamic_pools.clone()
+        };
+
+        let mut ordered_nodes = self.nodes.clone();
+        ordered_nodes.sort_by(|a, b| b.energy_scale.cmp(&a.energy_scale));
+
+        let active_nodes: Vec<QuantumNode> = ordered_nodes
+            .par_iter()
+            .map(|node| {
+                let mut triggered = node.clone();
+                if triggered.frequency == 0.0 {
+                    triggered.frequency = 0.01;
+                }
+                triggered
+            })
+            .collect();
+
+        let mut final_path = Vec::new();
+        let mut skipped_buffer: Vec<&QuantumNode> = Vec::with_capacity(self.buffer_capacity);
+
+        final_path.push(active_nodes[0].clone());
+        let mut cumulative_frequency = active_nodes[0].frequency;
+        let mut active_count = 1.0;
+
+        for i in 1..active_nodes.len() {
+            let next = &active_nodes[i];
+            let current_avg_freq = cumulative_frequency / active_count;
+            let pure_dev = (current_avg_freq - next.frequency).abs();
+
+            if pure_dev > self.threshold_limit {
+                if pure_dev > self.threshold_limit * 3.0 {
+                    if skipped_buffer.len() < self.buffer_capacity {
+                        skipped_buffer.push(next);
+                    }
+                    continue;
+                }
+                let stable_projected =
+                    self.project_to_inverse_dimensional_symmetry(current_avg_freq, i - 1);
+                let next_projected =
+                    self.project_to_inverse_dimensional_symmetry(next.frequency, i);
+                let projected_dev = (stable_projected - next_projected).abs();
+
+                if projected_dev > self.threshold_limit {
+                    if skipped_buffer.len() < self.buffer_capacity {
+                        skipped_buffer.push(next);
+                    }
+                    continue;
+                }
+            }
+
+            let scale_factor = 1.0 / (next.energy_scale.to_f64().unwrap_or(1.0) + 1.0);
+            let combined_resonance = pure_dev * scale_factor;
+
+            if combined_resonance <= self.threshold_limit {
+                final_path.push(next.clone());
+                cumulative_frequency += next.frequency;
+                active_count += 1.0;
+            } else {
+                if skipped_buffer.len() < self.buffer_capacity {
+                    skipped_buffer.push(next);
+                }
+            }
+        }
+
+        let final_avg_freq = cumulative_frequency / active_count;
+        for buffered_node in skipped_buffer {
+            let pure_raw_dev = (final_avg_freq - buffered_node.frequency).abs();
+            if pure_raw_dev > self.threshold_limit * 1.5 {
+                continue;
+            }
+            let scale_factor =
+                1.0 / (buffered_node.energy_scale.to_f64().unwrap_or(1.0) + 1.0);
+            if pure_raw_dev * scale_factor <= self.threshold_limit {
+                final_path.push(buffered_node.clone());
+            }
+        }
+
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        // 1. المبادلة الأولى: Uniswap V3 (USDC -> WETH)
-        addresses.push(UNISWAP_V3_ROUTER);
-        let mut packed_path_1 = Vec::new();
-        packed_path_1.extend_from_slice(USDC_BASE.as_slice());
-        packed_path_1.extend_from_slice(&[0x00, 0x01, 0xf4]); // 500 = 0.05% fee tier
-        packed_path_1.extend_from_slice(WETH_BASE.as_slice());
+        let primary_node = &final_path[0];
+        let pool = effective_pools[0];
+        addresses.push(pool);
 
-        let uniswap_params = IUniswapV3Router::ExactInputParams {
-            path: Bytes::from(packed_path_1),
-            recipient: self.contract_address,
-            deadline: U256::from(u64::MAX),
-            amountIn: self.loan_amount,
-            amountOutMinimum: U256::from(1u64),
+        let payload = if pool == UNISWAP_V3_ROUTER {
+            let exact_input_params = IUniswapV3Router::ExactInputParams {
+                path: {
+                    let mut packed = Vec::new();
+                    packed.extend_from_slice(primary_node.token0.as_slice());
+                    packed.extend_from_slice(&[0x00, 0x01, 0xf4]); // 500 fee tier
+                    packed.extend_from_slice(primary_node.token1.as_slice());
+                    Bytes::from(packed)
+                },
+                recipient: self.contract_address,
+                deadline: U256::from(u64::MAX),
+                amountIn: self.loan_amount,
+                amountOutMinimum: U256::from(1u64),
+            };
+            IUniswapV3Router::exactInputCall {
+                params: exact_input_params,
+            }
+            .abi_encode()
+        } else {
+            let aero_route = IAerodromeRouter::Route {
+                from: primary_node.token0,
+                to: primary_node.token1,
+                stable: false,
+                factory: AERODROME_FACTORY,
+            };
+            IAerodromeRouter::swapExactTokensForTokensCall {
+                amountIn: self.loan_amount,
+                amountOutMin: U256::from(1u64),
+                routes: vec![aero_route],
+                to: self.contract_address,
+                deadline: U256::from(u64::MAX),
+            }
+            .abi_encode()
         };
+        payloads.push(payload);
 
-        let uniswap_payload = IUniswapV3Router::exactInputCall {
-            params: uniswap_params,
-        }.abi_encode();
-        payloads.push(uniswap_payload);
+        if primary_node.token1 != self.borrowed_token {
+            let pool_return = effective_pools[1 % effective_pools.len()];
+            addresses.push(pool_return);
 
-        // 2. المبادلة الثانية: Aerodrome Router (WETH -> USDC)
-        addresses.push(AERODROME_ROUTER);
-        let aero_route = IAerodromeRouter::Route {
-            from: WETH_BASE,
-            to: USDC_BASE,
-            stable: false,
-            factory: AERODROME_FACTORY,
-        };
-
-        let aero_payload = IAerodromeRouter::swapExactTokensForTokensCall {
-            amountIn: U256::ZERO, // العقد سيستخدم كامل رصيد WETH الموجود لديه تلقائياً
-            amountOutMin: U256::from(1u64),
-            routes: vec![aero_route],
-            to: self.contract_address,
-            deadline: U256::from(u64::MAX),
-        }.abi_encode();
-        payloads.push(aero_payload);
+            let return_payload = if pool_return == UNISWAP_V3_ROUTER {
+                let return_params = IUniswapV3Router::ExactInputParams {
+                    path: {
+                        let mut packed = Vec::new();
+                        packed.extend_from_slice(primary_node.token1.as_slice());
+                        packed.extend_from_slice(&[0x00, 0x01, 0xf4]);
+                        packed.extend_from_slice(self.borrowed_token.as_slice());
+                        Bytes::from(packed)
+                    },
+                    recipient: self.contract_address,
+                    deadline: U256::from(u64::MAX),
+                    amountIn: self.loan_amount,
+                    amountOutMinimum: U256::from(1u64),
+                };
+                IUniswapV3Router::exactInputCall { params: return_params }.abi_encode()
+            } else {
+                let return_route = IAerodromeRouter::Route {
+                    from: primary_node.token1,
+                    to: self.borrowed_token,
+                    stable: false,
+                    factory: AERODROME_FACTORY,
+                };
+                IAerodromeRouter::swapExactTokensForTokensCall {
+                    amountIn: self.loan_amount,
+                    amountOutMin: U256::from(1u64),
+                    routes: vec![return_route],
+                    to: self.contract_address,
+                    deadline: U256::from(u64::MAX),
+                }
+                .abi_encode()
+            };
+            payloads.push(return_payload);
+        }
 
         (addresses, payloads)
     }
@@ -283,7 +403,7 @@ where
     Ok((
         spread_gap,
         USDC_BASE,
-        U256::from(100_000_000u64), // 100 USDC القرض
+        U256::from(100_000_000u64), // 100 USDC loan amount
         USDC_BASE,
         WETH_BASE,
         discovered_pools,
@@ -430,6 +550,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         id: 1,
                         energy_scale: generate_astronomical_number(1000usize),
                         frequency: live_market_price,
+                        token0,
+                        token1,
+                    },
+                    QuantumNode {
+                        id: 2,
+                        energy_scale: generate_astronomical_number(1000usize),
+                        frequency: 0.01,
+                        token0,
+                        token1,
+                    },
+                    QuantumNode {
+                        id: 3,
+                        energy_scale: generate_astronomical_number(1000usize),
+                        frequency: 0.015,
                         token0,
                         token1,
                     },

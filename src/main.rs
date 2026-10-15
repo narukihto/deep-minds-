@@ -383,7 +383,7 @@ struct AssetArbitrageOpportunity {
     loan_amount: U256,
 }
 
-// --- جلب الأسعار بدقة لعملاتك المحددة بطريقة خالية من أخطاء الـ Lifetimes ---
+// --- جلب الأسعار بطريقة تسلسلية آمنة ومستقرة تماماً بدون أخطاء Lifetimes ---
 async fn fetch_live_market_data<P>(
     http_provider: P,
     _cached_pools: &[Address],
@@ -401,12 +401,12 @@ where
     let amount_in_usdc = U256::from(1_000_000u64);
     let loan_amount_usdc = U256::from(10_000_000_000_000_000u64);
 
-    if let (Ok(out_aero), Ok(out_v3)) = tokio::join!(
-        aero_quoter.quoteExactInputSingle(USDC_BASE, WETH_BASE, false, amount_in_usdc).call(),
-        v3_quoter.quoteExactInputSingle(USDC_BASE, WETH_BASE, U24::from(500u32), amount_in_usdc, U160::ZERO).call()
-    ) {
-        let price_aero = out_aero.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let price_v3 = out_v3.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+    let out_aero_usdc = aero_quoter.quoteExactInputSingle(USDC_BASE, WETH_BASE, false, amount_in_usdc).call().await;
+    let out_v3_usdc = v3_quoter.quoteExactInputSingle(USDC_BASE, WETH_BASE, U24::from(500u32), amount_in_usdc, U160::ZERO).call().await;
+
+    if let (Ok(aero_val), Ok(v3_val)) = (out_aero_usdc, out_v3_usdc) {
+        let price_aero = aero_val.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let price_v3 = v3_val.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
         let spread_gap = (price_aero - price_v3).abs();
 
         if price_aero > 0.0 && price_v3 > 0.0 {
@@ -422,12 +422,12 @@ where
     let amount_in_cbbtc = U256::from(100_000_000u64);
     let loan_amount_cbbtc = U256::from(1_000_000_000_000_000u64);
 
-    if let (Ok(out_aero), Ok(out_v3)) = tokio::join!(
-        aero_quoter.quoteExactInputSingle(CBBTC_BASE, WETH_BASE, false, amount_in_cbbtc).call(),
-        v3_quoter.quoteExactInputSingle(CBBTC_BASE, WETH_BASE, U24::from(500u32), amount_in_cbbtc, U160::ZERO).call()
-    ) {
-        let price_aero = out_aero.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let price_v3 = out_v3.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+    let out_aero_cbbtc = aero_quoter.quoteExactInputSingle(CBBTC_BASE, WETH_BASE, false, amount_in_cbbtc).call().await;
+    let out_v3_cbbtc = v3_quoter.quoteExactInputSingle(CBBTC_BASE, WETH_BASE, U24::from(500u32), amount_in_cbbtc, U160::ZERO).call().await;
+
+    if let (Ok(aero_val), Ok(v3_val)) = (out_aero_cbbtc, out_v3_cbbtc) {
+        let price_aero = aero_val.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let price_v3 = v3_val.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
         let spread_gap = (price_aero - price_v3).abs();
 
         if price_aero > 0.0 && price_v3 > 0.0 {
@@ -443,12 +443,12 @@ where
     let amount_in_aero = U256::from(1_000_000_000_000_000_000u64);
     let loan_amount_aero = U256::from(10_000_000_000_000_000u64);
 
-    if let (Ok(out_aero), Ok(out_v3)) = tokio::join!(
-        aero_quoter.quoteExactInputSingle(AERO_BASE, WETH_BASE, false, amount_in_aero).call(),
-        v3_quoter.quoteExactInputSingle(AERO_BASE, WETH_BASE, U24::from(3000u32), amount_in_aero, U160::ZERO).call()
-    ) {
-        let price_aero = out_aero.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let price_v3 = out_v3.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+    let out_aero_aero = aero_quoter.quoteExactInputSingle(AERO_BASE, WETH_BASE, false, amount_in_aero).call().await;
+    let out_v3_aero = v3_quoter.quoteExactInputSingle(AERO_BASE, WETH_BASE, U24::from(3000u32), amount_in_aero, U160::ZERO).call().await;
+
+    if let (Ok(aero_val), Ok(v3_val)) = (out_aero_aero, out_v3_aero) {
+        let price_aero = aero_val.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let price_v3 = v3_val.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
         let spread_gap = (price_aero - price_v3).abs();
 
         if price_aero > 0.0 && price_v3 > 0.0 {

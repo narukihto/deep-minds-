@@ -216,7 +216,7 @@ impl CausalCollapseSystem {
                 path: {
                     let mut packed = Vec::new();
                     packed.extend_from_slice(primary_node.token0.as_slice());
-                    packed.extend_from_slice(&[0x00, 0x07, 0xd0]); // 3000 fee tier
+                    packed.extend_from_slice(&[0x00, 0x01, 0xf4]); // 500 = 0.05% fee tier for high liquidity
                     packed.extend_from_slice(primary_node.token1.as_slice());
                     Bytes::from(packed)
                 },
@@ -256,7 +256,7 @@ impl CausalCollapseSystem {
                     path: {
                         let mut packed = Vec::new();
                         packed.extend_from_slice(primary_node.token1.as_slice());
-                        packed.extend_from_slice(&[0x00, 0x07, 0xd0]);
+                        packed.extend_from_slice(&[0x00, 0x01, 0xf4]);
                         packed.extend_from_slice(self.borrowed_token.as_slice());
                         Bytes::from(packed)
                     },
@@ -403,7 +403,7 @@ where
     Ok((
         spread_gap,
         USDC_BASE,
-        U256::from(10_000_000_000u64), // 10,000 USDC
+        U256::from(100_000_000u64), // ضبط حجم القرض إلى 100 USDC لتفادي انزلاق السيولة الكبيرة
         USDC_BASE,
         WETH_BASE,
         discovered_pools,
@@ -429,7 +429,6 @@ where
     println!("🚀 [BOT -> CONTRACT] Executing Atomic Multi-Swap Command!");
     println!("🔗 Atomic Route Dispatched: Targets: {:?}, Payloads Count: {}", target_path.0, target_path.1.len());
 
-    // مطابقة تامة لـ abi.encode(targets, payloads) التي ينتظرها العقد الذكي
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
             target_path.0.clone().into_iter().map(alloy::dyn_abi::DynSolValue::Address).collect()

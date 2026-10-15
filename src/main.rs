@@ -422,14 +422,13 @@ where
     Ok((
         spread_gap,
         USDC_BASE,
-        U256::from(100_000_000u64),
+        U256::from(10_000_000_000u64), // 🚀 تم رفع القرض إلى 10,000 USDC
         USDC_BASE,
         WETH_BASE,
         discovered_pools,
     ))
 }
 
-// 🔍 دالة فحص وتفسير أسباب الفشل بالتفصيل الممل وطباعتها
 fn parse_and_print_detailed_error<T: std::fmt::Debug>(err: &T) {
     let err_str = format!("{:?}", err);
     println!("❌ [DETAILED REVERT INSPECTION]: {}", err_str);
@@ -445,7 +444,7 @@ fn parse_and_print_detailed_error<T: std::fmt::Debug>(err: &T) {
     } else if err_str.contains("ExternalCallFailed") {
         println!("🚨 [ROOT CAUSE]: فشل تنفيذ المبادلة الخارجية داخل مجمع السيولة (ExternalCallFailed / Slippage too high).");
     } else {
-        println!("⚠️ [ROOT CAUSE]: خطأ غير مصنف أو فلان (راجع بايتات الـ RPC أعلاه للتفاصيل الدقيقة).");
+        println!("⚠️ [ROOT CAUSE]: خطأ غير مصنف (راجع بايتات الـ RPC أعلاه للتفاصيل الدقيقة).");
     }
 }
 
@@ -479,7 +478,7 @@ where
         return Ok(());
     }
 
-    println!("🚀 [BOT -> CONTRACT] Executing Atomic Multi-Swap Command!");
+    println!("🚀 [BOT -> CONTRACT] Executing Atomic Multi-Swap Command with 10,000 USDC Loan!");
     println!("🔗 Atomic Route Dispatched: Targets: {:?}, Payloads Count: {}", target_path.0, target_path.1.len());
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![

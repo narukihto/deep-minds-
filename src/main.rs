@@ -1,3 +1,4 @@
+
 use num_bigint::BigUint;
 use num_traits::{One, ToPrimitive};
 use rayon::prelude::*;
@@ -454,7 +455,6 @@ where
         return Ok(());
     }
 
-    // 🚀 التحديث: رفع عتبة الأرباح إلى $2.00 لتجاوز الرسوم والانزلاق الحقيقي
     if spread_gap < 2.00 {
         println!("🛡 [PROFIT SHIELD] Gap (${:.4}) is below profitability threshold ($2.00). Skipping execution.", spread_gap);
         return Ok(());
@@ -487,9 +487,9 @@ where
             println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
         }
         Err(e_balancer) => {
-            // 🔍 فك تشفير الخطأ المخصص بدقة بدلاً من ظهور data: None المبهمة
+            // 🔍 استخدام as_decoded_error المتوافقة مع Alloy v2.5.0
             println!("❌ [BALANCER SIMULATION REVERTED]:");
-            if let Some(err_data) = e_balancer.as_decoded_error_abi::<BaseAtomicArbitrage::BaseAtomicArbitrageErrors>() {
+            if let Some(err_data) = e_balancer.as_decoded_error::<BaseAtomicArbitrage::BaseAtomicArbitrageErrors>() {
                 println!("🔍 [DECODED CONTRACT ERROR]: {:#?}", err_data);
             } else {
                 println!("🔍 [RAW ERROR REVERT]: {:#?}", e_balancer);
@@ -511,7 +511,7 @@ where
                 }
                 Err(e_aave) => {
                     println!("❌ [AAVE SIMULATION REVERTED]:");
-                    if let Some(err_data) = e_aave.as_decoded_error_abi::<BaseAtomicArbitrage::BaseAtomicArbitrageErrors>() {
+                    if let Some(err_data) = e_aave.as_decoded_error::<BaseAtomicArbitrage::BaseAtomicArbitrageErrors>() {
                         println!("🔍 [DECODED CONTRACT ERROR]: {:#?}", err_data);
                     } else {
                         println!("🔍 [RAW ERROR REVERT]: {:#?}", e_aave);

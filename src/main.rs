@@ -422,7 +422,7 @@ where
     Ok((
         spread_gap,
         USDC_BASE,
-        U256::from(1_000_000_000u64), // 🚀 تعديل القرض مؤقتاً إلى 1,000 USDC لاختبار السيولة والانزلاق
+        U256::from(1_000_000_000u64), // 1,000 USDC Loan
         USDC_BASE,
         WETH_BASE,
         discovered_pools,
@@ -464,7 +464,7 @@ where
         return Ok(());
     }
 
-    println!("🚀 [BOT -> CONTRACT] Executing Atomic Multi-Swap Command with 1,000 USDC Loan...");
+    println!("🚀 [BOT -> CONTRACT] Simulating Atomic Multi-Swap Command locally...");
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -482,20 +482,29 @@ where
         .from(signer_address)
         .gas(1_500_000);
 
-    match balancer_builder.send().await {
-        Ok(pending_tx) => {
-            println!("✅ Transaction Dispatched! Tx Hash: {:?}", pending_tx.tx_hash());
-            match pending_tx.get_receipt().await {
-                Ok(receipt) => {
-                    println!("📦 Transaction Mined In Block: {:?} | Status: {:?}", receipt.block_number, receipt.status());
+    // 🛡️ فحص المحاكاة المحلية أولاً لتوفير رسوم الغاز
+    match balancer_builder.call().await {
+        Ok(_) => {
+            println!("✅ Local Simulation Passed Successfully! Dispatching Real Transaction to Blockchain...");
+            match balancer_builder.send().await {
+                Ok(pending_tx) => {
+                    println!("✅ Transaction Dispatched! Tx Hash: {:?}", pending_tx.tx_hash());
+                    match pending_tx.get_receipt().await {
+                        Ok(receipt) => {
+                            println!("📦 Transaction Mined In Block: {:?} | Status: {:?}", receipt.block_number, receipt.status());
+                        }
+                        Err(e) => {
+                            println!("❌ [TRANSACTION RECEIPT FAILED]: {:#?}", e);
+                        }
+                    }
                 }
-                Err(e) => {
-                    println!("❌ [TRANSACTION RECEIPT FAILED]: {:#?}", e);
+                Err(e_send) => {
+                    println!("❌ [SEND TRANSACTION FAILED]: {:#?}", e_send);
                 }
             }
         }
-        Err(e_balancer) => {
-            println!("❌ [LIVE TX REVERTED DIRECTLY]: {:#?}", e_balancer);
+        Err(e_sim) => {
+            println!("🛡 [SIMULATION REVERTED SAFELY]: الصفقة غير مربحة أو ستفشل محلياً، تم منع إرسالها لتوفير رسوم الغاز.");
         }
     }
 
@@ -560,7 +569,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if live_market_price > 0.00001 {
             let (direction, velocity) = radar.update_and_predict(live_market_price);
             if direction == Direction::Peak || direction == Direction::Bottom {
-                println!("⚡ [RADار ALERT] Velocity Pivot Discovered: {:.4}", velocity);
+                println!("⚡ [RADAR ALERT] Velocity Pivot Discovered: {:.4}", velocity);
 
                 let nodes = vec![
                     QuantumNode {

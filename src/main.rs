@@ -216,7 +216,7 @@ impl CausalCollapseSystem {
                 path: {
                     let mut packed = Vec::new();
                     packed.extend_from_slice(primary_node.token0.as_slice());
-                    packed.extend_from_slice(&[0x00, 0x01, 0xf4]); // 500 = 0.05% fee tier
+                    packed.extend_from_slice(&[0x00, 0x01, 0xf4]); // 500 fee tier
                     packed.extend_from_slice(primary_node.token1.as_slice());
                     Bytes::from(packed)
                 },
@@ -452,8 +452,7 @@ where
             println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
         }
         Err(e_balancer) => {
-            println!("⚠ Balancer Simulation Failed with detailed diagnostic:");
-            print_contract_revert_reason(&e_balancer);
+            println!("⚠ Balancer Simulation Failed: {:?}", e_balancer);
             
             sleep(Duration::from_millis(150)).await;
 
@@ -469,34 +468,13 @@ where
                     println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
                 }
                 Err(e_aave) => {
-                    println!("❌ Aave Simulation Failed with detailed diagnostic:");
-                    print_contract_revert_reason(&e_aave);
+                    println!("❌ Aave Simulation Failed: {:?}", e_aave);
                 }
             }
         }
     }
 
     Ok(())
-}
-
-fn print_contract_revert_reason(err: &alloy::contract::Error) {
-    match err {
-        alloy::contract::Error::Transport(transport_err) => {
-            println!("   - Transport Error: {:?}", transport_err);
-            if let Some(err_resp) = transport_err.as_error_resp() {
-                println!("   - RPC Error Code: {}", err_resp.code);
-                println!("   - RPC Message: {}", err_resp.message);
-                if let Some(data) = &err_resp.data {
-                    println!("   - Detailed Revert Data Bytes: {}", data);
-                } else {
-                    println!("   - Detailed Revert Data Bytes: None (Reverted due to external call failure or profitability requirement check)");
-                }
-            }
-        }
-        _ => {
-            println!("   - Contract/ABI Error: {:?}", err);
-        }
-    }
 }
 
 #[tokio::main]

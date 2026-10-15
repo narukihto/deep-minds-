@@ -1,3 +1,4 @@
+
 use num_bigint::BigUint;
 use num_traits::{One, ToPrimitive};
 use rayon::prelude::*;
@@ -216,7 +217,7 @@ impl CausalCollapseSystem {
                 path: {
                     let mut packed = Vec::new();
                     packed.extend_from_slice(primary_node.token0.as_slice());
-                    packed.extend_from_slice(&[0x00, 0x0b, 0xb8]);
+                    packed.extend_from_slice(&[0x00, 0x01, 0xf4]); // 500 = 0.05%
                     packed.extend_from_slice(primary_node.token1.as_slice());
                     Bytes::from(packed)
                 },
@@ -256,7 +257,7 @@ impl CausalCollapseSystem {
                     path: {
                         let mut packed = Vec::new();
                         packed.extend_from_slice(primary_node.token1.as_slice());
-                        packed.extend_from_slice(&[0x00, 0x0b, 0xb8]);
+                        packed.extend_from_slice(&[0x00, 0x01, 0xf4]);
                         packed.extend_from_slice(self.borrowed_token.as_slice());
                         Bytes::from(packed)
                     },
@@ -356,7 +357,7 @@ where
     ])
 }
 
-// --- قراءة الأسعار اللحظية من الأحواض الرسمية ---
+// --- قراءة وصقل الأسعار المباشرة من الأحواض بشكل موثوق وسليم ---
 async fn fetch_live_market_data<P>(
     http_provider: P,
     cached_pools: &[Address],
@@ -367,10 +368,10 @@ where
     let aero_pair = IUniswapV2Pair::new(AERO_POOL_USDC_WETH, http_provider.clone());
     let mut price_aero = 0.0;
     if let Ok(res) = aero_pair.getReserves().call().await {
-        let r0 = res.reserve0.to::<u128>() as f64 / 10f64.powi(6);  // USDC
-        let r1 = res.reserve1.to::<u128>() as f64 / 10f64.powi(18); // WETH
-        if r1 > 0.0 {
-            price_aero = r0 / r1;
+        let r0 = res.reserve0.to::<u128>() as f64 / 10f64.powi(18); // WETH (Token0)
+        let r1 = res.reserve1.to::<u128>() as f64 / 10f64.powi(6);  // USDC (Token1)
+        if r0 > 0.0 {
+            price_aero = r1 / r0;
         }
     }
 
@@ -379,8 +380,10 @@ where
     if let Ok(slot0) = v3_pool.slot0().call().await {
         let sqrt_price_x96 = slot0.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0);
         if sqrt_price_x96 > 0.0 {
-            let price_raw = (sqrt_price_x96 / (2.0f64.powi(96))).powi(2);
-            price_v3 = (1.0 / price_raw) * 10f64.powi(12);
+            let ratio = sqrt_price_x96 / (2.0f64.powi(96));
+            let raw_price = ratio * ratio;
+            // USDC decimals = 6, WETH decimals = 18 -> 10^(18-6) = 10^12
+            price_v3 = raw_price * 10f64.powi(12);
         }
     }
 
@@ -427,7 +430,7 @@ where
             target_path.0.clone().into_iter().map(alloy::dyn_abi::DynSolValue::Address).collect()
         ),
         alloy::dyn_abi::DynSolValue::Array(
-            target_path.1.into_iter().map(|p| alloy::dyn_abi::DynSolValue::Bytes(p.into())).collect()
+            target_path.1.into_iter().map(|p| alloy::dyn_abi::DynSolValue::Bytes(p)).collect()
         ),
     ]);
 

@@ -1,4 +1,3 @@
-
 use num_bigint::BigUint;
 use num_traits::{One, ToPrimitive};
 use rayon::prelude::*;
@@ -211,14 +210,14 @@ impl CausalCollapseSystem {
         let pool = effective_pools[0];
         addresses.push(pool);
 
-        let min_amount_out = self.loan_amount * U256::from(995) / U256::from(1000); // 0.5% Slippage Tolerance
+        let min_amount_out = self.loan_amount * U256::from(995) / U256::from(1000);
 
         let payload = if pool == UNISWAP_V3_ROUTER {
             let exact_input_params = IUniswapV3Router::ExactInputParams {
                 path: {
                     let mut packed = Vec::new();
                     packed.extend_from_slice(primary_node.token0.as_slice());
-                    packed.extend_from_slice(&[0x00, 0x01, 0xf4]); // 500 fee tier
+                    packed.extend_from_slice(&[0x00, 0x01, 0xf4]);
                     packed.extend_from_slice(primary_node.token1.as_slice());
                     Bytes::from(packed)
                 },
@@ -423,11 +422,31 @@ where
     Ok((
         spread_gap,
         USDC_BASE,
-        U256::from(100_000_000u64), // 100 USDC loan amount
+        U256::from(100_000_000u64),
         USDC_BASE,
         WETH_BASE,
         discovered_pools,
     ))
+}
+
+// 🔍 دالة فحص وتفسير أسباب الفشل بالتفصيل الممل وطباعتها
+fn parse_and_print_detailed_error<T: std::fmt::Debug>(err: &T) {
+    let err_str = format!("{:?}", err);
+    println!("❌ [DETAILED REVERT INSPECTION]: {}", err_str);
+
+    if err_str.contains("NotAuthorized") || err_str.contains("0x82b42900") {
+        println!("🚨 [ROOT CAUSE]: خطأ صلاحيات! عنوان البوت غير مخول داخل العقد (NotAuthorized أو NotOwner).");
+    } else if err_str.contains("UntrustedInitiator") || err_str.contains("UntrustedOriginalInitiator") {
+        println!("🚨 [ROOT CAUSE]: خطأ في محفظة المُطلق (Initiator)! محفظة البوت لا تطابق المسجلة في العقد.");
+    } else if err_str.contains("ArbitrageUnprofitable") || err_str.contains("0x7c73a436") {
+        println!("🚨 [ROOT CAUSE]: الصفقة غير مربحة بعد خصم رسوم الفلاش لون والـ Swaps (ArbitrageUnprofitable). العقد يحميك من الخسارة!");
+    } else if err_str.contains("TargetUnauthorized") {
+        println!("🚨 [ROOT CAUSE]: محاولة التداول عبر Router أو Pool غير موجود في القائمة البيضاء (Whitelist) للعقد!");
+    } else if err_str.contains("ExternalCallFailed") {
+        println!("🚨 [ROOT CAUSE]: فشل تنفيذ المبادلة الخارجية داخل مجمع السيولة (ExternalCallFailed / Slippage too high).");
+    } else {
+        println!("⚠️ [ROOT CAUSE]: خطأ غير مصنف أو فلان (راجع بايتات الـ RPC أعلاه للتفاصيل الدقيقة).");
+    }
 }
 
 async fn trigger_on_chain_arbitrage<P>(
@@ -487,13 +506,8 @@ where
             println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
         }
         Err(e_balancer) => {
-            // 🔍 استخدام as_decoded_error المتوافقة مع Alloy v2.5.0
             println!("❌ [BALANCER SIMULATION REVERTED]:");
-            if let Some(err_data) = e_balancer.as_decoded_error::<BaseAtomicArbitrage::BaseAtomicArbitrageErrors>() {
-                println!("🔍 [DECODED CONTRACT ERROR]: {:#?}", err_data);
-            } else {
-                println!("🔍 [RAW ERROR REVERT]: {:#?}", e_balancer);
-            }
+            parse_and_print_detailed_error(&e_balancer);
 
             sleep(Duration::from_millis(100)).await;
 
@@ -511,11 +525,7 @@ where
                 }
                 Err(e_aave) => {
                     println!("❌ [AAVE SIMULATION REVERTED]:");
-                    if let Some(err_data) = e_aave.as_decoded_error::<BaseAtomicArbitrage::BaseAtomicArbitrageErrors>() {
-                        println!("🔍 [DECODED CONTRACT ERROR]: {:#?}", err_data);
-                    } else {
-                        println!("🔍 [RAW ERROR REVERT]: {:#?}", e_aave);
-                    }
+                    parse_and_print_detailed_error(&e_aave);
                 }
             }
         }

@@ -210,7 +210,7 @@ impl CausalCollapseSystem {
         let pool = effective_pools[0];
         addresses.push(pool);
 
-        let min_amount_out = self.loan_amount * U256::from(995) / U256::from(1000);
+        let min_amount_out = self.loan_amount * U256::from(985) / U256::from(1000);
 
         let payload = if pool == UNISWAP_V3_ROUTER {
             let exact_input_params = IUniswapV3Router::ExactInputParams {
@@ -422,7 +422,7 @@ where
     Ok((
         spread_gap,
         USDC_BASE,
-        U256::from(10_000_000_000u64),
+        U256::from(1_000_000_000u64), // 🚀 تعديل القرض مؤقتاً إلى 1,000 USDC لاختبار السيولة والانزلاق
         USDC_BASE,
         WETH_BASE,
         discovered_pools,
@@ -464,7 +464,7 @@ where
         return Ok(());
     }
 
-    println!("🚀 [BOT -> CONTRACT] Dispatching Direct On-Chain Transaction (Bypassing Simulation)...");
+    println!("🚀 [BOT -> CONTRACT] Executing Atomic Multi-Swap Command with 1,000 USDC Loan...");
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -482,7 +482,6 @@ where
         .from(signer_address)
         .gas(1_500_000);
 
-    // 🚀 إرسال المعاملة المباشرة على البلوكتشين لإجبار العقد على تسجيل الخطأ الحقيقي
     match balancer_builder.send().await {
         Ok(pending_tx) => {
             println!("✅ Transaction Dispatched! Tx Hash: {:?}", pending_tx.tx_hash());
@@ -561,7 +560,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if live_market_price > 0.00001 {
             let (direction, velocity) = radar.update_and_predict(live_market_price);
             if direction == Direction::Peak || direction == Direction::Bottom {
-                println!("⚡ [RADAR ALERT] Velocity Pivot Discovered: {:.4}", velocity);
+                println!("⚡ [RADار ALERT] Velocity Pivot Discovered: {:.4}", velocity);
 
                 let nodes = vec![
                     QuantumNode {

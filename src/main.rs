@@ -440,11 +440,10 @@ where
 
     let contract = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
 
-    // إضافة حدود غاز محددة لطلب المحاكاة من المزود لإرجاع البيانات كاملة
     let balancer_builder = contract
         .triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
         .from(signer_address)
-        .gas(500_000);
+        .gas(1_000_000);
 
     match balancer_builder.call().await {
         Ok(_) => {
@@ -454,21 +453,15 @@ where
             println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
         }
         Err(e_balancer) => {
-            let err_msg = format!("{:?}", e_balancer);
-            if err_msg.contains("Arbitrage unprofitable") {
-                println!("💡 [REASON DETECTED]: Contract Reverted -> 'Arbitrage unprofitable' (Profit shield active).");
-            } else if err_msg.contains("Target unauthorized") {
-                println!("💡 [REASON DETECTED]: Contract Reverted -> Target Address Not Whitelisted.");
-            } else {
-                println!("⚠ Balancer Simulation Reverted: {}", err_msg);
-            }
+            // طباعة تفصيلية كاملة ومباشرة لهيكل الخطأ الخام من مكتبة Alloy
+            println!("❌ [RAW DETAILED BALANCER ERROR]: {:#?}", e_balancer);
             
             sleep(Duration::from_millis(150)).await;
 
             let aave_builder = contract
                 .triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
                 .from(signer_address)
-                .gas(500_000);
+                .gas(1_000_000);
 
             match aave_builder.call().await {
                 Ok(_) => {
@@ -478,12 +471,7 @@ where
                     println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
                 }
                 Err(e_aave) => {
-                    let err_msg_aave = format!("{:?}", e_aave);
-                    if err_msg_aave.contains("Arbitrage unprofitable") {
-                        println!("💡 [REASON DETECTED]: Aave Contract Reverted -> 'Arbitrage unprofitable'.");
-                    } else {
-                        println!("❌ Aave Simulation Reverted: {}", err_msg_aave);
-                    }
+                    println!("❌ [RAW DETAILED AAVE ERROR]: {:#?}", e_aave);
                 }
             }
         }

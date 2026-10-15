@@ -132,7 +132,7 @@ impl CausalCollapseSystem {
         let mut ordered_nodes = self.nodes.clone();
         ordered_nodes.sort_by(|a, b| b.energy_scale.cmp(&a.energy_scale));
 
-        let active_nodes: Vec<QuantumNode> = ordered_nodes
+        let _active_nodes: Vec<QuantumNode> = ordered_nodes
             .par_iter()
             .map(|node| {
                 let mut triggered = node.clone();
@@ -143,20 +143,17 @@ impl CausalCollapseSystem {
             })
             .collect();
 
-        let primary_node = &active_nodes[0];
-        
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        // الساق الأولى: الشراء من Aerodrome (مثلاً اقتراض USDC لشراء WETH)
+        // الساق الأولى: الشراء من Aerodrome (اقتراض USDC لشراء WETH)
         addresses.push(AERODROME_ROUTER);
         
-        // حساب الحد الأدنى بدقة لتقليل الانزلاق (0.3% فقط انزلاق مسموح لحماية الربح)
         let min_amount_out_leg1 = self.loan_amount * U256::from(997) / U256::from(1000);
 
         let aero_route_1 = IAerodromeRouter::Route {
-            from: self.borrowed_token, // USDC
-            to: WETH_BASE,            // WETH
+            from: self.borrowed_token,
+            to: WETH_BASE,
             stable: false,
             factory: AERODROME_FACTORY,
         };
@@ -175,13 +172,12 @@ impl CausalCollapseSystem {
         // الساق الثانية: البيع في Uniswap V3 لإغلاق الدائرة واسترجاع USDC بربح
         addresses.push(UNISWAP_V3_ROUTER);
 
-        // حساب كمية WETH الناتجة تقريبياً لبيعها بالكامل
         let estimated_weth_received = min_amount_out_leg1; 
-        let min_amount_out_leg2 = self.loan_amount * U256::from(1001) / U256::from(1000); // يجب أن تغطي أصل القرض + هامش ربح طفيف
+        let min_amount_out_leg2 = self.loan_amount * U256::from(1001) / U256::from(1000);
 
         let mut path_bytes = Vec::new();
         path_bytes.extend_from_slice(WETH_BASE.as_slice());
-        path_bytes.extend_from_slice(&[0x00, 0x01, 0xf4]); // 0.3% fee tier
+        path_bytes.extend_from_slice(&[0x00, 0x01, 0xf4]);
         path_bytes.extend_from_slice(self.borrowed_token.as_slice());
 
         let exact_input_params = IUniswapV3Router::ExactInputParams {

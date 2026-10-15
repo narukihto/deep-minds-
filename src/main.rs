@@ -386,7 +386,7 @@ sol! {
     }
 }
 
-// --- استكشاف الأحواض الديناميكية (من الكود القديم الفعال) ---
+// --- استكشاف الأحواض الديناميكية مع حماية من ضغط الـ RPC ---
 async fn fetch_dynamic_pools<P>(
     http_provider: P,
 ) -> Result<Vec<Address>, Box<dyn std::error::Error>>
@@ -398,13 +398,15 @@ where
 
     let length = factory.allPairsLength().call().await?;
     let total_pairs = length.to::<u64>();
-    let start_index = if total_pairs > 100 { total_pairs - 100 } else { 0 };
+    let start_index = if total_pairs > 50 { total_pairs - 50 } else { 0 };
 
     let mut pool_addresses = Vec::new();
     for i in start_index..total_pairs {
         if let Ok(pair_address) = factory.allPairs(U256::from(i)).call().await {
             pool_addresses.push(pair_address);
         }
+        // تأخير زمني صغير لمنع تجاوز الحد المسموح لـ Alchemy (Rate Limit 429)
+        sleep(Duration::from_millis(10)).await;
     }
 
     if pool_addresses.is_empty() {
@@ -428,13 +430,13 @@ where
     let gas_cost_wei = gas_price * estimated_gas_limit;
 
     let loan_f64 = loan_amount.to_string().parse::<f64>().unwrap_or(1.0);
-    let flash_fee_estimated = loan_f64 * 0.0009;
+    let flash_fee_estimated = loan_f64 * 0.0009; // 0.09% Balancer/Aave flash fee
 
     let total_cost_threshold = (gas_cost_wei as f64 + flash_fee_estimated) / loan_f64;
-    Ok(total_cost_threshold + 0.0005)
+    Ok(total_cost_threshold + 0.002) // هامش ربح إضافي صارم لمنع خطأ BAL#528
 }
 
-// --- جلب الأسعار والبيانات الحية المدمجة (Factory pools + Quoters) ---
+// --- جلب الأسعار والبيانات الحية مع تصفية الأخطاء ومنع ضغط الـ RPC ---
 async fn fetch_live_market_data<P>(
     http_provider: P,
     cached_pools: &[Address],
@@ -452,7 +454,8 @@ where
 
     let mut pool_results = Vec::new();
 
-    for pool_address in cached_pools.iter().take(20) {
+    // فحص أفضل 15 حوضاً نشطاً فقط لتجنب استنفاد وحدة الحوسبة في Alchemy
+    for pool_address in cached_pools.iter().take(15) {
         let pair_contract = IUniswapV2Pair::new(*pool_address, http_provider.clone());
         if let Ok(reserves) = pair_contract.getReserves().call().await {
             let r0 = reserves.reserve0;
@@ -468,7 +471,7 @@ where
                 if let Ok(token1_res) = pair_contract.token1().call().await {
                     t1 = token1_res;
                 }
-                let dynamic_loan_amount = U256::from(r0) / U256::from(100);
+                let dynamic_loan_amount = U256::from(r0) / U256::from(50);
 
                 pool_results.push(PoolData {
                     price: live_price,
@@ -479,6 +482,8 @@ where
                 });
             }
         }
+        // تأخير زمني خفيف بين قراءة الاحتياطيات
+        sleep(Duration::from_millis(20)).await;
     }
 
     let aggregated_price = if !pool_results.is_empty() {
@@ -551,8 +556,8 @@ where
             println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
         }
         Err(e_balancer) => {
-            println!("⚠ Balancer Simulation Failed. Reason details: {:?}. Activating Aave Fallback Route...", e_balancer);
-            sleep(Duration::from_millis(150)).await;
+            println!("⚠ Balancer Simulation Failed (Likely BAL#528 or Profit/Gas check). Reason: {:?}. Activating Aave Fallback Route...", e_balancer);
+            sleep(Duration::from_millis(200)).await;
 
             let aave_builder = contract
                 .triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
@@ -690,7 +695,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        sleep(Duration::from_millis(100)).await;
+        // فاصل زمني بين البلوكات لتجنب تجاوز حد الطلبات المسموح للرابط
+        sleep(Duration::from_millis(150)).await;
     }
 
     println!("🏁 Live stream processing terminated.");

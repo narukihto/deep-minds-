@@ -454,8 +454,9 @@ where
         return Ok(());
     }
 
-    if spread_gap < 0.50 {
-        println!("🛡 [PROFIT SHIELD] Gap (${:.4}) is below profitability threshold ($0.50). Skipping execution.", spread_gap);
+    // 🚀 التحديث: رفع عتبة الأرباح إلى $2.00 لتجاوز الرسوم والانزلاق الحقيقي
+    if spread_gap < 2.00 {
+        println!("🛡 [PROFIT SHIELD] Gap (${:.4}) is below profitability threshold ($2.00). Skipping execution.", spread_gap);
         return Ok(());
     }
 
@@ -486,12 +487,12 @@ where
             println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
         }
         Err(e_balancer) => {
-            println!("❌ [BALANCER SIMULATION REVERTED]: {:#?}", e_balancer);
-            
-            // محاولة تحليل فك الـ Error Selector من الخطأ الراجع
-            let err_string = format!("{:?}", e_balancer);
-            if err_string.contains("0x") {
-                println!("🔍 [RAW REVERT HINT FOUND IN ERROR DATA]");
+            // 🔍 فك تشفير الخطأ المخصص بدقة بدلاً من ظهور data: None المبهمة
+            println!("❌ [BALANCER SIMULATION REVERTED]:");
+            if let Some(err_data) = e_balancer.as_decoded_error_abi::<BaseAtomicArbitrage::BaseAtomicArbitrageErrors>() {
+                println!("🔍 [DECODED CONTRACT ERROR]: {:#?}", err_data);
+            } else {
+                println!("🔍 [RAW ERROR REVERT]: {:#?}", e_balancer);
             }
 
             sleep(Duration::from_millis(100)).await;
@@ -509,7 +510,12 @@ where
                     println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
                 }
                 Err(e_aave) => {
-                    println!("❌ [AAVE SIMULATION REVERTED]: {:#?}", e_aave);
+                    println!("❌ [AAVE SIMULATION REVERTED]:");
+                    if let Some(err_data) = e_aave.as_decoded_error_abi::<BaseAtomicArbitrage::BaseAtomicArbitrageErrors>() {
+                        println!("🔍 [DECODED CONTRACT ERROR]: {:#?}", err_data);
+                    } else {
+                        println!("🔍 [RAW ERROR REVERT]: {:#?}", e_aave);
+                    }
                 }
             }
         }

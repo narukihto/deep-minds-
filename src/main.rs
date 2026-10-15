@@ -22,7 +22,6 @@ const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3
 const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
 const AERODROME_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFECe40Da");
 
-// --- عناوين الأحواض النشطة الحقيقية والمحققة على شبكة Base ---
 const AERO_POOL_USDC_WETH: Address = address!("cdac0d6c6c59727a65f871236188350531885c43");
 const UNISWAP_V3_POOL_USDC_WETH: Address = address!("0x6c561b446416e1a00e8e93e221854d6ea4171372");
 
@@ -211,6 +210,8 @@ impl CausalCollapseSystem {
         let pool = effective_pools[0];
         addresses.push(pool);
 
+        let min_amount_out = self.loan_amount * U256::from(995) / U256::from(1000); // 0.5% Slippage Tolerance
+
         let payload = if pool == UNISWAP_V3_ROUTER {
             let exact_input_params = IUniswapV3Router::ExactInputParams {
                 path: {
@@ -223,7 +224,7 @@ impl CausalCollapseSystem {
                 recipient: self.contract_address,
                 deadline: U256::from(u64::MAX),
                 amountIn: self.loan_amount,
-                amountOutMinimum: U256::from(1u64),
+                amountOutMinimum: min_amount_out,
             };
             IUniswapV3Router::exactInputCall {
                 params: exact_input_params,
@@ -238,7 +239,7 @@ impl CausalCollapseSystem {
             };
             IAerodromeRouter::swapExactTokensForTokensCall {
                 amountIn: self.loan_amount,
-                amountOutMin: U256::from(1u64),
+                amountOutMin: min_amount_out,
                 routes: vec![aero_route],
                 to: self.contract_address,
                 deadline: U256::from(u64::MAX),
@@ -263,7 +264,7 @@ impl CausalCollapseSystem {
                     recipient: self.contract_address,
                     deadline: U256::from(u64::MAX),
                     amountIn: self.loan_amount,
-                    amountOutMinimum: U256::from(1u64),
+                    amountOutMinimum: min_amount_out,
                 };
                 IUniswapV3Router::exactInputCall { params: return_params }.abi_encode()
             } else {
@@ -275,7 +276,7 @@ impl CausalCollapseSystem {
                 };
                 IAerodromeRouter::swapExactTokensForTokensCall {
                     amountIn: self.loan_amount,
-                    amountOutMin: U256::from(1u64),
+                    amountOutMin: min_amount_out,
                     routes: vec![return_route],
                     to: self.contract_address,
                     deadline: U256::from(u64::MAX),
@@ -339,6 +340,24 @@ sol! {
 
     #[sol(rpc)]
     contract BaseAtomicArbitrage {
+        error NotAuthorized();
+        error NotOwner();
+        error UntrustedLender();
+        error UntrustedInitiator();
+        error UntrustedOriginalInitiator();
+        error UntrustedAavePool();
+        error LengthMismatch();
+        error SelfCallBlocked();
+        error TargetUnauthorized(address target);
+        error ExternalCallFailed(bytes reason);
+        error ArbitrageUnprofitable(uint256 required, uint256 actual);
+        error BalancerRepaymentFailed();
+        error AaveApproveFailed();
+        error NoBalance();
+        error NoEthBalance();
+        error TransferFailed();
+        error EthTransferFailed();
+
         function triggerBalancerArbitrage(address tokenToBorrow, uint256 loanAmount, bytes calldata swapPathData) external;
         function triggerAaveArbitrage(address tokenToBorrow, uint256 loanAmount, bytes calldata swapPathData) external;
     }
@@ -427,8 +446,17 @@ where
         return Ok(());
     }
 
+    // Dynamic Flash Loan Fee (Aave = 0.05%)
+    let aave_fee = loan_amount * U256::from(5) / U256::from(10000); // 0.05%
+    let estimated_gross_profit = U256::from((spread_gap * 1000000.0) as u64); // USDC 6 decimals
+
+    if estimated_gross_profit <= aave_fee {
+        println!("🛡 [PROFIT SHIELD] Gross profit is lower than Flash Loan Premium. Skipping...");
+        return Ok(());
+    }
+
     if spread_gap < 0.50 {
-        println!("🛡 [PROFIT SHIELD] Gap (${:.4}) is below profitability threshold ($0.50). Skipping execution to prevent revert.", spread_gap);
+        println!("🛡 [PROFIT SHIELD] Gap (${:.4}) is below profitability threshold ($0.50). Skipping execution.", spread_gap);
         return Ok(());
     }
 
@@ -459,9 +487,9 @@ where
             println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
         }
         Err(e_balancer) => {
-            println!("❌ [RAW DETAILED BALANCER ERROR]: {:#?}", e_balancer);
+            println!("❌ [BALANCER SIMULATION REVERTED]: {:?}", e_balancer);
 
-            sleep(Duration::from_millis(150)).await;
+            sleep(Duration::from_millis(100)).await;
 
             let aave_builder = contract
                 .triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
@@ -476,7 +504,7 @@ where
                     println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
                 }
                 Err(e_aave) => {
-                    println!("❌ [RAW DETAILED AAVE ERROR]: {:#?}", e_aave);
+                    println!("❌ [AAVE SIMULATION REVERTED]: {:?}", e_aave);
                 }
             }
         }
@@ -489,8 +517,9 @@ where
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🤖 Initializing Universal Dynamic Token Scanner Core via Alloy...");
 
+    // العنوان الجديد المعين للعقد الذي تم نشره
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
-        .unwrap_or_else(|_| "0x60aED4271427A2d8e09f10e59E6C977A589eF46E".to_string());
+        .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
 
     let alchemy_http_urls = vec![

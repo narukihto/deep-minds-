@@ -422,30 +422,11 @@ where
     Ok((
         spread_gap,
         USDC_BASE,
-        U256::from(10_000_000_000u64), // 10,000 USDC Loan
+        U256::from(10_000_000_000u64),
         USDC_BASE,
         WETH_BASE,
         discovered_pools,
     ))
-}
-
-fn parse_and_print_detailed_error<T: std::fmt::Debug>(err: &T) {
-    let err_str = format!("{:?}", err);
-    println!("❌ [DETAILED REVERT INSPECTION]: {}", err_str);
-
-    if err_str.contains("NotAuthorized") || err_str.contains("0x82b42900") {
-        println!("🚨 [ROOT CAUSE]: خطأ صلاحيات! عنوان البوت غير مخول داخل العقد (NotAuthorized أو NotOwner).");
-    } else if err_str.contains("UntrustedInitiator") || err_str.contains("UntrustedOriginalInitiator") {
-        println!("🚨 [ROOT CAUSE]: خطأ في محفظة المُطلق (Initiator)! محفظة البوت لا تطابق المسجلة في العقد.");
-    } else if err_str.contains("ArbitrageUnprofitable") || err_str.contains("0x7c73a436") {
-        println!("🚨 [ROOT CAUSE]: الصفقة غير مربحة بعد خصم رسوم الفلاش لون والـ Swaps (ArbitrageUnprofitable). العقد يحميك من الخسارة!");
-    } else if err_str.contains("TargetUnauthorized") {
-        println!("🚨 [ROOT CAUSE]: محاولة التداول عبر Router أو Pool غير موجود في القائمة البيضاء (Whitelist) للعقد!");
-    } else if err_str.contains("ExternalCallFailed") {
-        println!("🚨 [ROOT CAUSE]: فشل تنفيذ المبادلة الخارجية داخل مجمع السيولة (ExternalCallFailed / Slippage too high).");
-    } else {
-        println!("⚠️ [ROOT CAUSE]: خطأ غير مصنف (راجع بايتات الـ RPC أعلاه للتفاصيل الدقيقة).");
-    }
 }
 
 async fn trigger_on_chain_arbitrage<P>(
@@ -465,28 +446,25 @@ where
         return Ok(());
     }
 
-    // 🚀 تصحيح معادلة حساب الربح المقدر وقيم العمولات
     let eth_price = 2429.0;
     let profit_ratio = spread_gap / eth_price;
     let loan_f64 = loan_amount.to::<u128>() as f64;
     let gross_profit_units = loan_f64 * profit_ratio;
     
-    let aave_fee = loan_amount * U256::from(5) / U256::from(10000); // 0.05%
+    let aave_fee = loan_amount * U256::from(5) / U256::from(10000); 
     let aave_fee_units = aave_fee.to::<u128>() as f64;
 
     if gross_profit_units <= aave_fee_units {
-        println!("🛡 [PROFIT SHIELD] Estimated profit (${:.2}) <= Flash Loan Fee (${:.2}). Skipping...", gross_profit_units / 1_000_000.0, aave_fee_units / 1_000_000.0);
+        println!("🛡 [PROFIT SHIELD] Estimated profit <= Flash Loan Fee. Skipping...");
         return Ok(());
     }
 
-    // 🚀 خفض العتبة إلى 0.50 ليتناسب مع الفروقات الحالية في السوق
     if spread_gap < 0.50 {
-        println!("🛡 [PROFIT SHIELD] Gap (${:.4}) is below threshold ($0.50). Skipping execution.", spread_gap);
+        println!("🛡 [PROFIT SHIELD] Gap is below threshold. Skipping execution.");
         return Ok(());
     }
 
-    println!("🚀 [BOT -> CONTRACT] Executing Atomic Multi-Swap Command!");
-    println!("🔗 Atomic Route Dispatched: Targets: {:?}, Payloads Count: {}", target_path.0, target_path.1.len());
+    println!("🚀 [BOT -> CONTRACT] Dispatching Direct On-Chain Transaction (Bypassing Simulation)...");
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -504,36 +482,21 @@ where
         .from(signer_address)
         .gas(1_500_000);
 
-    match balancer_builder.call().await {
-        Ok(_) => {
-            println!("✅ Balancer Simulation Passed Successfully! Dispatching Real Transaction...");
-            let pending_tx = balancer_builder.send().await?;
-            let receipt = pending_tx.get_receipt().await?;
-            println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
-        }
-        Err(e_balancer) => {
-            println!("❌ [BALANCER SIMULATION REVERTED]:");
-            parse_and_print_detailed_error(&e_balancer);
-
-            sleep(Duration::from_millis(100)).await;
-
-            let aave_builder = contract
-                .triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
-                .from(signer_address)
-                .gas(1_500_000);
-
-            match aave_builder.call().await {
-                Ok(_) => {
-                    println!("✅ Aave Simulation Passed Successfully! Dispatching Real Transaction...");
-                    let pending_tx = aave_builder.send().await?;
-                    let receipt = pending_tx.get_receipt().await?;
-                    println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
+    // 🚀 إرسال المعاملة المباشرة على البلوكتشين لإجبار العقد على تسجيل الخطأ الحقيقي
+    match balancer_builder.send().await {
+        Ok(pending_tx) => {
+            println!("✅ Transaction Dispatched! Tx Hash: {:?}", pending_tx.tx_hash());
+            match pending_tx.get_receipt().await {
+                Ok(receipt) => {
+                    println!("📦 Transaction Mined In Block: {:?} | Status: {:?}", receipt.block_number, receipt.status());
                 }
-                Err(e_aave) => {
-                    println!("❌ [AAVE SIMULATION REVERTED]:");
-                    parse_and_print_detailed_error(&e_aave);
+                Err(e) => {
+                    println!("❌ [TRANSACTION RECEIPT FAILED]: {:#?}", e);
                 }
             }
+        }
+        Err(e_balancer) => {
+            println!("❌ [LIVE TX REVERTED DIRECTLY]: {:#?}", e_balancer);
         }
     }
 

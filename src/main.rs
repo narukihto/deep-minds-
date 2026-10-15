@@ -422,7 +422,7 @@ where
     Ok((
         spread_gap,
         USDC_BASE,
-        U256::from(10_000_000_000u64), // 🚀 تم رفع القرض إلى 10,000 USDC
+        U256::from(10_000_000_000u64), // 10,000 USDC Loan
         USDC_BASE,
         WETH_BASE,
         discovered_pools,
@@ -465,20 +465,27 @@ where
         return Ok(());
     }
 
-    let aave_fee = loan_amount * U256::from(5) / U256::from(10000); 
-    let estimated_gross_profit = U256::from((spread_gap * 1000000.0) as u64);
+    // 🚀 تصحيح معادلة حساب الربح المقدر وقيم العمولات
+    let eth_price = 2429.0;
+    let profit_ratio = spread_gap / eth_price;
+    let loan_f64 = loan_amount.to::<u128>() as f64;
+    let gross_profit_units = loan_f64 * profit_ratio;
+    
+    let aave_fee = loan_amount * U256::from(5) / U256::from(10000); // 0.05%
+    let aave_fee_units = aave_fee.to::<u128>() as f64;
 
-    if estimated_gross_profit <= aave_fee {
-        println!("🛡 [PROFIT SHIELD] Gross profit is lower than Flash Loan Premium. Skipping...");
+    if gross_profit_units <= aave_fee_units {
+        println!("🛡 [PROFIT SHIELD] Estimated profit (${:.2}) <= Flash Loan Fee (${:.2}). Skipping...", gross_profit_units / 1_000_000.0, aave_fee_units / 1_000_000.0);
         return Ok(());
     }
 
-    if spread_gap < 2.00 {
-        println!("🛡 [PROFIT SHIELD] Gap (${:.4}) is below profitability threshold ($2.00). Skipping execution.", spread_gap);
+    // 🚀 خفض العتبة إلى 0.50 ليتناسب مع الفروقات الحالية في السوق
+    if spread_gap < 0.50 {
+        println!("🛡 [PROFIT SHIELD] Gap (${:.4}) is below threshold ($0.50). Skipping execution.", spread_gap);
         return Ok(());
     }
 
-    println!("🚀 [BOT -> CONTRACT] Executing Atomic Multi-Swap Command with 10,000 USDC Loan!");
+    println!("🚀 [BOT -> CONTRACT] Executing Atomic Multi-Swap Command!");
     println!("🔗 Atomic Route Dispatched: Targets: {:?}, Payloads Count: {}", target_path.0, target_path.1.len());
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![

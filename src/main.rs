@@ -20,7 +20,7 @@ const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
 
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
 const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
-const AERODROME_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFECe40Da");
+const AERODROME_FACTORY: Address = address!("0x420DD381b31aEf6683db6B902084cB0FFECe40Da");
 
 const AERO_POOL_USDC_WETH: Address = address!("cdac0d6c6c59727a65f871236188350531885c43");
 const UNISWAP_V3_POOL_USDC_WETH: Address = address!("0x6c561b446416e1a00e8e93e221854d6ea4171372");
@@ -446,9 +446,8 @@ where
         return Ok(());
     }
 
-    // Dynamic Flash Loan Fee (Aave = 0.05%)
-    let aave_fee = loan_amount * U256::from(5) / U256::from(10000); // 0.05%
-    let estimated_gross_profit = U256::from((spread_gap * 1000000.0) as u64); // USDC 6 decimals
+    let aave_fee = loan_amount * U256::from(5) / U256::from(10000); 
+    let estimated_gross_profit = U256::from((spread_gap * 1000000.0) as u64);
 
     if estimated_gross_profit <= aave_fee {
         println!("🛡 [PROFIT SHIELD] Gross profit is lower than Flash Loan Premium. Skipping...");
@@ -487,7 +486,13 @@ where
             println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
         }
         Err(e_balancer) => {
-            println!("❌ [BALANCER SIMULATION REVERTED]: {:?}", e_balancer);
+            println!("❌ [BALANCER SIMULATION REVERTED]: {:#?}", e_balancer);
+            
+            // محاولة تحليل فك الـ Error Selector من الخطأ الراجع
+            let err_string = format!("{:?}", e_balancer);
+            if err_string.contains("0x") {
+                println!("🔍 [RAW REVERT HINT FOUND IN ERROR DATA]");
+            }
 
             sleep(Duration::from_millis(100)).await;
 
@@ -504,7 +509,7 @@ where
                     println!("✅ Transaction Mined In Block: {:?}", receipt.block_number);
                 }
                 Err(e_aave) => {
-                    println!("❌ [AAVE SIMULATION REVERTED]: {:?}", e_aave);
+                    println!("❌ [AAVE SIMULATION REVERTED]: {:#?}", e_aave);
                 }
             }
         }
@@ -517,7 +522,6 @@ where
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🤖 Initializing Universal Dynamic Token Scanner Core via Alloy...");
 
-    // العنوان الجديد المعين للعقد الذي تم نشره
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
     let contract_address: Address = contract_addr_str.parse()?;

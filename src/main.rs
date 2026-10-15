@@ -24,7 +24,6 @@ const AERODROME_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFEC
 
 // --- عناوين الأحواض النشطة الحقيقية والمحققة على شبكة Base ---
 const AERO_POOL_USDC_WETH: Address = address!("cdac0d6c6c59727a65f871236188350531885c43");
-// تم تصحيح حوض Uniswap V3 إلى العنوان النشط الفعلي لـ WETH/USDC على Base
 const UNISWAP_V3_POOL_USDC_WETH: Address = address!("0x6c561b446416e1a00e8e93e221854d6ea4171372");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -217,7 +216,7 @@ impl CausalCollapseSystem {
                 path: {
                     let mut packed = Vec::new();
                     packed.extend_from_slice(primary_node.token0.as_slice());
-                    packed.extend_from_slice(&[0x00, 0x07, 0xd0]); // 2000 = 0.2% or 3000 = 0.3% fee tier
+                    packed.extend_from_slice(&[0x00, 0x07, 0xd0]); // 3000 fee tier
                     packed.extend_from_slice(primary_node.token1.as_slice());
                     Bytes::from(packed)
                 },
@@ -357,7 +356,6 @@ where
     ])
 }
 
-// --- جلب الأسعار اللحظية المحدثة لكل من Aerodrome و Uniswap V3 بدقة مطلقة ---
 async fn fetch_live_market_data<P>(
     http_provider: P,
     cached_pools: &[Address],
@@ -365,18 +363,16 @@ async fn fetch_live_market_data<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    // 1. سعر Aerodrome
     let aero_pair = IUniswapV2Pair::new(AERO_POOL_USDC_WETH, http_provider.clone());
     let mut price_aero = 0.0;
     if let Ok(res) = aero_pair.getReserves().call().await {
-        let r0 = res.reserve0.to::<u128>() as f64 / 10f64.powi(18); // WETH
-        let r1 = res.reserve1.to::<u128>() as f64 / 10f64.powi(6);  // USDC
+        let r0 = res.reserve0.to::<u128>() as f64 / 10f64.powi(18);
+        let r1 = res.reserve1.to::<u128>() as f64 / 10f64.powi(6);
         if r0 > 0.0 {
             price_aero = r1 / r0;
         }
     }
 
-    // 2. سعر Uniswap V3 النشط الفعلي
     let v3_pool = IUniswapV3Pool::new(UNISWAP_V3_POOL_USDC_WETH, http_provider.clone());
     let mut price_v3 = 0.0;
     if let Ok(slot0) = v3_pool.slot0().call().await {
@@ -384,18 +380,13 @@ where
         if sqrt_price_x96 > 0.0 {
             let ratio = sqrt_price_x96 / (2.0f64.powi(96));
             let raw_price = ratio * ratio;
-            // Uniswap V3 على Base يحسب السعر بناءً على ترتيب الرموز (WETH/USDC)
             price_v3 = raw_price * 10f64.powi(12);
-            if price_v3 > 0.0 {
-                // تعديل المعامل العكسي إذا لزم الأمر ليطابق القيمة الدولارية الصحيحة
-                if price_v3 < 1000.0 {
-                    price_v3 = 1.0 / price_v3 * 10f64.powi(12); // تصحيح التوجيه التلقائي
-                }
+            if price_v3 > 0.0 && price_v3 < 1000.0 {
+                price_v3 = 1.0 / price_v3 * 10f64.powi(12);
             }
         }
     }
 
-    // إذا فشل حوض V3 لأي سبب، نجعله قريباً من السعر الواقعي لتفادي الأصفار المطلقة
     if price_v3 <= 0.0 {
         price_v3 = price_aero * 0.998; 
     }
@@ -438,20 +429,14 @@ where
     println!("🚀 [BOT -> CONTRACT] Executing Atomic Multi-Swap Command!");
     println!("🔗 Atomic Route Dispatched: Targets: {:?}, Payloads Count: {}", target_path.0, target_path.1.len());
 
-    let inner_swap_path_tuple = alloy::dyn_abi::DynSolValue::Tuple(vec![
+    // مطابقة تامة لـ abi.encode(targets, payloads) التي ينتظرها العقد الذكي
+    let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
             target_path.0.clone().into_iter().map(alloy::dyn_abi::DynSolValue::Address).collect()
         ),
         alloy::dyn_abi::DynSolValue::Array(
-            target_path.1.into_iter().map(|p| alloy::dyn_abi::DynSolValue::Bytes(p)).collect()
+            target_path.1.into_iter().map(alloy::dyn_abi::DynSolValue::Bytes).collect()
         ),
-    ]);
-
-    let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
-        alloy::dyn_abi::DynSolValue::Address(signer_address),
-        alloy::dyn_abi::DynSolValue::Uint(loan_amount, 256),
-        alloy::dyn_abi::DynSolValue::Address(token_to_borrow),
-        alloy::dyn_abi::DynSolValue::Bytes(inner_swap_path_tuple.abi_encode()),
     ]).abi_encode();
 
     let contract = BaseAtomicArbitrage::new(contract_address, http_provider.clone());

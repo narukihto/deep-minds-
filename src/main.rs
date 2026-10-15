@@ -207,7 +207,7 @@ impl CausalCollapseSystem {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        // الخطوة الأولى: مسار الشراء الأساسي (مثلاً من التوكن المقترض إلى الـ WETH)
+        // الخطوة الأولى: مسار الشراء الأساسي المعتمد على الـ Routers المسجلة
         let primary_node = &final_path[0];
         let pool = effective_pools[0];
         addresses.push(pool);
@@ -230,7 +230,7 @@ impl CausalCollapseSystem {
                 params: exact_input_params,
             }
             .abi_encode()
-        } else if pool == AERODROME_ROUTER {
+        } else {
             let aero_route = IAerodromeRouter::Route {
                 from: primary_node.token0,
                 to: primary_node.token1,
@@ -241,15 +241,6 @@ impl CausalCollapseSystem {
                 amountIn: self.loan_amount,
                 amountOutMin: U256::ZERO,
                 routes: vec![aero_route],
-                to: self.contract_address,
-                deadline: U256::from(u64::MAX),
-            }
-            .abi_encode()
-        } else {
-            IUniswapV2Router02::swapExactTokensForTokensCall {
-                amountIn: self.loan_amount,
-                amountOutMin: U256::ZERO,
-                path: vec![primary_node.token0, primary_node.token1],
                 to: self.contract_address,
                 deadline: U256::from(u64::MAX),
             }
@@ -309,6 +300,19 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
 }
 
 sol! {
+    #[sol(rpc)]
+    contract IUniswapV2Factory {
+        function allPairs(uint256) external view returns (address pair);
+        function allPairsLength() external view returns (uint256);
+    }
+
+    #[sol(rpc)]
+    contract IUniswapV2Pair {
+        function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
+        function token0() external view returns (address);
+        function token1() external view returns (address);
+    }
+
     #[sol(rpc)]
     contract IUniswapV3Quoter {
         function quoteExactInputSingle(
@@ -382,29 +386,36 @@ sol! {
     }
 }
 
+// --- استكشاف الأحواض الديناميكية (من الكود القديم الفعال) ---
 async fn fetch_dynamic_pools<P>(
-    _http_provider: P,
+    http_provider: P,
 ) -> Result<Vec<Address>, Box<dyn std::error::Error>>
 where
     P: Provider<Ethereum> + Clone,
 {
-    Ok(vec![
-        UNISWAP_V3_ROUTER,
-        AERODROME_ROUTER,
-    ])
+    let factory_address = address!("8909Dc15e40173Ff4699343b6eB8132c65e18eC6");
+    let factory = IUniswapV2Factory::new(factory_address, http_provider);
+
+    let length = factory.allPairsLength().call().await?;
+    let total_pairs = length.to::<u64>();
+    let start_index = if total_pairs > 100 { total_pairs - 100 } else { 0 };
+
+    let mut pool_addresses = Vec::new();
+    for i in start_index..total_pairs {
+        if let Ok(pair_address) = factory.allPairs(U256::from(i)).call().await {
+            pool_addresses.push(pair_address);
+        }
+    }
+
+    if pool_addresses.is_empty() {
+        pool_addresses.push(UNISWAP_V3_ROUTER);
+        pool_addresses.push(AERODROME_ROUTER);
+    }
+
+    Ok(pool_addresses)
 }
 
-struct AssetArbitrageOpportunity {
-    token: Address,
-    _price_aero: f64,
-    _price_v3: f64,
-    spread_gap: f64,
-    _aero_pool: Address,
-    _v3_pool: Address,
-    loan_amount: U256,
-}
-
-// --- حساب رسوم الغاز الديناميكي اللحظي على شبكة Base لضمان ربحية صافية حقيقية ---
+// --- حساب ربحية الغاز الديناميكي اللحظي على شبكة Base ---
 async fn calculate_dynamic_net_profit_threshold<P>(
     provider: &P,
     loan_amount: U256,
@@ -417,119 +428,77 @@ where
     let gas_cost_wei = gas_price * estimated_gas_limit;
 
     let loan_f64 = loan_amount.to_string().parse::<f64>().unwrap_or(1.0);
-    let flash_fee_estimated = loan_f64 * 0.0009; // 0.09% Aave max fee
+    let flash_fee_estimated = loan_f64 * 0.0009;
 
     let total_cost_threshold = (gas_cost_wei as f64 + flash_fee_estimated) / loan_f64;
     Ok(total_cost_threshold + 0.0005)
 }
 
+// --- جلب الأسعار والبيانات الحية المدمجة (Factory pools + Quoters) ---
 async fn fetch_live_market_data<P>(
     http_provider: P,
-    _cached_pools: &[Address],
+    cached_pools: &[Address],
 ) -> Result<(f64, Address, U256, Address, Address, Vec<Address>), Box<dyn std::error::Error>>
 where
     P: Provider<Ethereum> + Clone,
 {
-    let mut opportunities = Vec::new();
-    let mut discovered_pools = Vec::new();
+    struct PoolData {
+        price: f64,
+        token0: Address,
+        token1: Address,
+        loan_amount: U256,
+        pool_address: Address,
+    }
 
-    discovered_pools.push(UNISWAP_V3_ROUTER);
-    discovered_pools.push(AERODROME_ROUTER);
+    let mut pool_results = Vec::new();
 
-    let v3_quoter = IUniswapV3Quoter::new(UNISWAP_V3_ROUTER, http_provider.clone());
-    let aero_quoter = IAerodromeQuoter::new(AERODROME_ROUTER, http_provider.clone());
+    for pool_address in cached_pools.iter().take(20) {
+        let pair_contract = IUniswapV2Pair::new(*pool_address, http_provider.clone());
+        if let Ok(reserves) = pair_contract.getReserves().call().await {
+            let r0 = reserves.reserve0;
+            let r1 = reserves.reserve1;
+            if r0 > 0 && r1 > 0 {
+                let live_price = r1.to::<u128>() as f64 / r0.to::<u128>() as f64;
+                let mut t0 = WETH_BASE;
+                let mut t1 = USDC_BASE;
 
-    // 1. USDC / WETH Pair
-    let amount_in_usdc = U256::from(1_000_000u64);
-    let loan_amount_usdc = U256::from(10_000_000_000_000_000u64);
-    let dynamic_threshold = calculate_dynamic_net_profit_threshold(&http_provider, loan_amount_usdc).await.unwrap_or(0.001);
+                if let Ok(token0_res) = pair_contract.token0().call().await {
+                    t0 = token0_res;
+                }
+                if let Ok(token1_res) = pair_contract.token1().call().await {
+                    t1 = token1_res;
+                }
+                let dynamic_loan_amount = U256::from(r0) / U256::from(100);
 
-    let aero_quote_usdc = aero_quoter.quoteExactInputSingle(USDC_BASE, WETH_BASE, false, amount_in_usdc).call().await;
-    let v3_quote_usdc = v3_quoter.quoteExactInputSingle(USDC_BASE, WETH_BASE, U24::from(500u32), amount_in_usdc, U160::ZERO).call().await;
-
-    if let (Ok(out_aero), Ok(out_v3)) = (aero_quote_usdc, v3_quote_usdc) {
-        let price_aero = out_aero.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let price_v3 = out_v3.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let raw_spread = (price_aero - price_v3).abs();
-
-        if raw_spread > dynamic_threshold && price_aero > 0.0 && price_v3 > 0.0 {
-            opportunities.push(AssetArbitrageOpportunity {
-                token: USDC_BASE,
-                _price_aero: price_aero,
-                _price_v3: price_v3,
-                spread_gap: raw_spread,
-                _aero_pool: AERODROME_ROUTER,
-                _v3_pool: UNISWAP_V3_ROUTER,
-                loan_amount: loan_amount_usdc,
-            });
+                pool_results.push(PoolData {
+                    price: live_price,
+                    token0: t0,
+                    token1: t1,
+                    loan_amount: dynamic_loan_amount,
+                    pool_address: *pool_address,
+                });
+            }
         }
     }
 
-    // 2. cbBTC / WETH Pair
-    let amount_in_cbbtc = U256::from(100_000_000u64);
-    let loan_amount_cbbtc = U256::from(1_000_000_000_000_000u64);
+    let aggregated_price = if !pool_results.is_empty() {
+        let sum_price: f64 = pool_results.iter().map(|p| p.price).sum();
+        sum_price / pool_results.len() as f64
+    } else {
+        0.001
+    };
 
-    let aero_quote_cbbtc = aero_quoter.quoteExactInputSingle(CBBTC_BASE, WETH_BASE, false, amount_in_cbbtc).call().await;
-    let v3_quote_cbbtc = v3_quoter.quoteExactInputSingle(CBBTC_BASE, WETH_BASE, U24::from(500u32), amount_in_cbbtc, U160::ZERO).call().await;
-
-    if let (Ok(out_aero), Ok(out_v3)) = (aero_quote_cbbtc, v3_quote_cbbtc) {
-        let price_aero = out_aero.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let price_v3 = out_v3.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let raw_spread = (price_aero - price_v3).abs();
-
-        if raw_spread > dynamic_threshold && price_aero > 0.0 && price_v3 > 0.0 {
-            opportunities.push(AssetArbitrageOpportunity {
-                token: CBBTC_BASE,
-                _price_aero: price_aero,
-                _price_v3: price_v3,
-                spread_gap: raw_spread,
-                _aero_pool: AERODROME_ROUTER,
-                _v3_pool: UNISWAP_V3_ROUTER,
-                loan_amount: loan_amount_cbbtc,
-            });
-        }
-    }
-
-    // 3. AERO / WETH Pair
-    let amount_in_aero = U256::from(1_000_000_000_000_000_000u64);
-    let loan_amount_aero = U256::from(10_000_000_000_000_000u64);
-
-    let aero_quote_aero = aero_quoter.quoteExactInputSingle(AERO_BASE, WETH_BASE, false, amount_in_aero).call().await;
-    let v3_quote_aero = v3_quoter.quoteExactInputSingle(AERO_BASE, WETH_BASE, U24::from(3000u32), amount_in_aero, U160::ZERO).call().await;
-
-    if let (Ok(out_aero), Ok(out_v3)) = (aero_quote_aero, v3_quote_aero) {
-        let price_aero = out_aero.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let price_v3 = out_v3.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
-        let raw_spread = (price_aero - price_v3).abs();
-
-        if raw_spread > dynamic_threshold && price_aero > 0.0 && price_v3 > 0.0 {
-            opportunities.push(AssetArbitrageOpportunity {
-                token: AERO_BASE,
-                _price_aero: price_aero,
-                _price_v3: price_v3,
-                spread_gap: raw_spread,
-                _aero_pool: AERODROME_ROUTER,
-                _v3_pool: UNISWAP_V3_ROUTER,
-                loan_amount: loan_amount_aero,
-            });
-        }
-    }
-
-    if opportunities.is_empty() {
-        let fallback_pool = discovered_pools.first().copied().unwrap_or(Address::ZERO);
-        return Ok((0.0, WETH_BASE, U256::ZERO, WETH_BASE, USDC_BASE, vec![fallback_pool]));
-    }
-
-    opportunities.sort_by(|a, b| b.spread_gap.partial_cmp(&a.spread_gap).unwrap_or(std::cmp::Ordering::Equal));
-    let best = &opportunities[0];
+    let borrow_token = USDC_BASE;
+    let loan_amount = U256::from(10_000_000_000_000_000u64);
+    let all_discovered_addresses: Vec<Address> = cached_pools.to_vec();
 
     Ok((
-        best.spread_gap,
-        best.token,
-        best.loan_amount,
-        best.token,
+        aggregated_price,
+        borrow_token,
+        loan_amount,
         WETH_BASE,
-        discovered_pools,
+        USDC_BASE,
+        all_discovered_addresses,
     ))
 }
 
@@ -643,10 +612,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect_ws(ws)
         .await?;
 
-    println!("🔍 [INIT CACHE] Initializing direct high-performance pool cache...");
+    println!("🔍 [INIT CACHE] Fetching initial active factory pools from Aerodrome factory...");
     let cached_pools = match fetch_dynamic_pools(http_provider.clone()).await {
         Ok(pools) => {
-            println!("✅ Successfully initialized {} direct pool addresses in memory.", pools.len());
+            println!("✅ Successfully cached {} pool addresses in memory.", pools.len());
             pools
         }
         Err(_) => {
@@ -667,7 +636,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (live_market_price, dynamic_token, dynamic_loan, token0, token1, scanned_addresses) =
             fetch_live_market_data(http_provider.clone(), &cached_pools).await?;
 
-        println!(" 📊 [METRIC FEED] Cross-DEX Spread Gap: {:.6}, Checking Velocity Pivots...", live_market_price);
+        println!(" 📊 [METRIC FEED] Aggregated Price: {:.6}, Checking Velocity Pivots...", live_market_price);
 
         if live_market_price > 0.0 {
             let (direction, velocity) = radar.update_and_predict(live_market_price);

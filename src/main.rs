@@ -26,9 +26,9 @@ const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F4217
 
 const AERODROME_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFECe40Da");
 
-// --- أحواض السيولة المباشرة والأكثر نشاطاً على شبكة Base ---
-const AERO_POOL_USDC_WETH: Address = address!("6cDcb1C4A4D1C3C6d054b27AC5a77d843F2bA964");
-const UNISWAP_V3_POOL_USDC_WETH: Address = address!("d0b53D9277642d139eA168853AEC068C654a1073");
+// --- عناوين الـ Quoters الرسمية على شبكة Base ---
+const UNISWAP_V3_QUOTER: Address = address!("3d6110f0195e018617882255755255474c156f52");
+const AERODROME_QUOTER: Address = address!("cF77a3Ba9A5CA399B7f97cbf339178ffc51eda8c");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Direction {
@@ -303,13 +303,37 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
 
 sol! {
     #[sol(rpc)]
-    contract IUniswapV2Pair {
-        function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
+    contract IUniswapV2Factory {
+        function allPairs(uint256) external view returns (address pair);
+        function allPairsLength() external view returns (uint256);
     }
 
     #[sol(rpc)]
-    contract IUniswapV3Pool {
-        function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked);
+    contract IUniswapV2Pair {
+        function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
+        function token0() external view returns (address);
+        function token1() external view returns (address);
+    }
+
+    #[sol(rpc)]
+    contract IUniswapV3Quoter {
+        function quoteExactInputSingle(
+            address tokenIn,
+            address tokenOut,
+            uint24 fee,
+            uint256 amountIn,
+            uint160 sqrtPriceLimitX96
+        ) external returns (uint256 amountOut);
+    }
+
+    #[sol(rpc)]
+    contract IAerodromeQuoter {
+        function quoteExactInputSingle(
+            address tokenIn,
+            address tokenOut,
+            bool stable,
+            uint256 amountIn
+        ) external view returns (uint256 amountOut);
     }
 
     #[sol(rpc)]
@@ -349,61 +373,115 @@ sol! {
 }
 
 async fn fetch_dynamic_pools<P>(
-    _http_provider: P,
+    http_provider: P,
 ) -> Result<Vec<Address>, Box<dyn std::error::Error>>
 where
     P: Provider<Ethereum> + Clone,
 {
-    Ok(vec![
-        UNISWAP_V3_ROUTER,
-        AERODROME_ROUTER,
-    ])
+    let factory = IUniswapV2Factory::new(AERODROME_FACTORY, http_provider);
+    let length = factory.allPairsLength().call().await?;
+    let total_pairs = length.to::<u64>();
+    let start_index = if total_pairs > 20 { total_pairs - 20 } else { 0 };
+
+    let mut pool_addresses = Vec::new();
+    for i in start_index..total_pairs {
+        if let Ok(pair_address) = factory.allPairs(U256::from(i)).call().await {
+            pool_addresses.push(pair_address);
+        }
+    }
+
+    if pool_addresses.is_empty() {
+        pool_addresses.push(UNISWAP_V3_ROUTER);
+        pool_addresses.push(AERODROME_ROUTER);
+    }
+
+    Ok(pool_addresses)
 }
 
-// --- جلب الأسعار المباشرة والأكيدة بعد إصلاح تحويل الأنواع (.to::<u128>()) ---
+struct AssetArbitrageOpportunity {
+    token: Address,
+    spread_gap: f64,
+    loan_amount: U256,
+}
+
+// --- استعلام ديناميكي مباشر عبر الـ Quoters النشطة لعملات USDC, cbBTC, AERO ---
 async fn fetch_live_market_data<P>(
     http_provider: P,
-    _cached_pools: &[Address],
+    cached_pools: &[Address],
 ) -> Result<(f64, Address, U256, Address, Address, Vec<Address>), Box<dyn std::error::Error>>
 where
     P: Provider<Ethereum> + Clone,
 {
-    let discovered_pools = vec![UNISWAP_V3_ROUTER, AERODROME_ROUTER];
+    let mut opportunities = Vec::new();
+    let v3_quoter = IUniswapV3Quoter::new(UNISWAP_V3_QUOTER, http_provider.clone());
+    let aero_quoter = IAerodromeQuoter::new(AERODROME_QUOTER, http_provider.clone());
 
-    // 1. قراءة سعر USDC/WETH في Aerodrome
-    let aero_pair = IUniswapV2Pair::new(AERO_POOL_USDC_WETH, http_provider.clone());
-    let mut price_aero = 0.0;
-    if let Ok(res) = aero_pair.getReserves().call().await {
-        let r0 = res.reserve0.to::<u128>() as f64 / 10f64.powi(6);  // USDC (6 Decimals)
-        let r1 = res.reserve1.to::<u128>() as f64 / 10f64.powi(18); // WETH (18 Decimals)
-        if r1 > 0.0 {
-            price_aero = r0 / r1; // سعر ETH بالدولار على Aerodrome
+    // 1. فحص زوج USDC / WETH
+    let amount_in_usdc = U256::from(1_000_000u64); // 1 USDC
+    let loan_usdc = U256::from(10_000_000_000u64); // 10,000 USDC
+
+    let out_aero_usdc = aero_quoter.quoteExactInputSingle(USDC_BASE, WETH_BASE, false, amount_in_usdc).call().await;
+    let out_v3_usdc = v3_quoter.quoteExactInputSingle(USDC_BASE, WETH_BASE, U24::from(500u32), amount_in_usdc, U160::ZERO).call().await;
+
+    if let (Ok(aero_val), Ok(v3_val)) = (out_aero_usdc, out_v3_usdc) {
+        let p_aero = aero_val.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let p_v3 = v3_val.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let gap = (p_aero - p_v3).abs();
+        if p_aero > 0.0 && p_v3 > 0.0 {
+            opportunities.push(AssetArbitrageOpportunity { token: USDC_BASE, spread_gap: gap, loan_amount: loan_usdc });
         }
     }
 
-    // 2. قراءة سعر USDC/WETH في Uniswap V3
-    let v3_pool = IUniswapV3Pool::new(UNISWAP_V3_POOL_USDC_WETH, http_provider.clone());
-    let mut price_v3 = 0.0;
-    if let Ok(slot0) = v3_pool.slot0().call().await {
-        let sqrt_price_x96 = slot0.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0);
-        if sqrt_price_x96 > 0.0 {
-            let price_raw = (sqrt_price_x96 / (2.0f64.powi(96))).powi(2);
-            price_v3 = price_raw * 10f64.powi(12); // سعر ETH بالدولار على Uniswap v3
+    // 2. فحص زوج CBBTC / WETH
+    let amount_in_cbbtc = U256::from(100_000_000u64);
+    let loan_cbbtc = U256::from(1_000_000_000_000_000u64);
+
+    let out_aero_cbbtc = aero_quoter.quoteExactInputSingle(CBBTC_BASE, WETH_BASE, false, amount_in_cbbtc).call().await;
+    let out_v3_cbbtc = v3_quoter.quoteExactInputSingle(CBBTC_BASE, WETH_BASE, U24::from(500u32), amount_in_cbbtc, U160::ZERO).call().await;
+
+    if let (Ok(aero_val), Ok(v3_val)) = (out_aero_cbbtc, out_v3_cbbtc) {
+        let p_aero = aero_val.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let p_v3 = v3_val.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let gap = (p_aero - p_v3).abs();
+        if p_aero > 0.0 && p_v3 > 0.0 {
+            opportunities.push(AssetArbitrageOpportunity { token: CBBTC_BASE, spread_gap: gap, loan_amount: loan_cbbtc });
         }
     }
 
-    let spread_gap = (price_aero - price_v3).abs();
+    // 3. فحص زوج AERO / WETH
+    let amount_in_aero = U256::from(1_000_000_000_000_000_000u64);
+    let loan_aero = U256::from(10_000_000_000_000_000u64);
 
-    if price_aero > 0.0 || price_v3 > 0.0 {
-        println!(" 📈 [REALTIME PRICES] Aerodrome ETH: ${:.2} | Uniswap V3 ETH: ${:.2} | Gap: ${:.4}", price_aero, price_v3, spread_gap);
+    let out_aero_aero = aero_quoter.quoteExactInputSingle(AERO_BASE, WETH_BASE, false, amount_in_aero).call().await;
+    let out_v3_aero = v3_quoter.quoteExactInputSingle(AERO_BASE, WETH_BASE, U24::from(3000u32), amount_in_aero, U160::ZERO).call().await;
+
+    if let (Ok(aero_val), Ok(v3_val)) = (out_aero_aero, out_v3_aero) {
+        let p_aero = aero_val.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let p_v3 = v3_val.to_string().parse::<f64>().unwrap_or(0.0) / 10f64.powi(18);
+        let gap = (p_aero - p_v3).abs();
+        if p_aero > 0.0 && p_v3 > 0.0 {
+            opportunities.push(AssetArbitrageOpportunity { token: AERO_BASE, spread_gap: gap, loan_amount: loan_aero });
+        }
     }
 
-    let loan_amount_usdc = U256::from(10_000_000_000u64); // 10,000 USDC
+    let best_spread = if !opportunities.is_empty() {
+        opportunities.sort_by(|a, b| b.spread_gap.partial_cmp(&a.spread_gap).unwrap_or(std::cmp::Ordering::Equal));
+        println!(" 📊 [QUOTER FEED] Active Asset: {:?} | Spread Gap: {:.6}", opportunities[0].token, opportunities[0].spread_gap);
+        opportunities[0].spread_gap
+    } else {
+        0.0
+    };
+
+    let discovered_pools = if cached_pools.is_empty() {
+        vec![UNISWAP_V3_ROUTER, AERODROME_ROUTER]
+    } else {
+        cached_pools.to_vec()
+    };
 
     Ok((
-        spread_gap,
+        best_spread,
         USDC_BASE,
-        loan_amount_usdc,
+        U256::from(10_000_000_000u64),
         USDC_BASE,
         WETH_BASE,
         discovered_pools,
@@ -538,9 +616,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (live_market_price, dynamic_token, dynamic_loan, token0, token1, scanned_addresses) =
             fetch_live_market_data(http_provider.clone(), &cached_pools).await?;
 
-        println!(" 📊 [METRIC FEED] Cross-DEX Spread Gap: ${:.4}, Checking Velocity Pivots...", live_market_price);
-
-        if live_market_price > 0.05 {
+        if live_market_price > 0.00001 {
             let (direction, velocity) = radar.update_and_predict(live_market_price);
             if direction == Direction::Peak || direction == Direction::Bottom {
                 println!("⚡ [RADAR ALERT] Velocity Pivot Discovered: {:.4}", velocity);

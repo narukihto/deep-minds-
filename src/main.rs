@@ -139,7 +139,6 @@ impl CausalCollapseSystem {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        // الساق الأولى: الشراء عبر Aerodrome Router
         addresses.push(AERODROME_ROUTER);
         
         let min_amount_out_leg1 = self.loan_amount * U256::from(997) / U256::from(1000);
@@ -162,7 +161,6 @@ impl CausalCollapseSystem {
 
         payloads.push(payload_leg1);
 
-        // الساق الثانية: البيع عبر PancakeSwap V3 Router أو Uniswap V3
         addresses.push(PANCAKESWAP_V3_ROUTER);
 
         let estimated_token_received = min_amount_out_leg1; 
@@ -257,8 +255,8 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             target_token: WETH_BASE,
             aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"),
             uni_v3_pool: address!("0x6c561b446416e1a00e8e93e221854d6ea4171372"),
-            baseswap_pool: address!("0x88AAlc56B7A16892fa56F420d418DE926De7c04e"), // BaseSwap V2/V3 Pool
-            pancakeswap_pool: address!("0x1a877526715f3e4e93fb25a176840fc0f8d9b139"), // PancakeSwap V3 Pool
+            baseswap_pool: address!("0x88AA1c56B7A16892fa56F420d418DE926De7c04e"), // تم تصحيح الخطأ هنا
+            pancakeswap_pool: address!("0x1a877526715f3e4e93fb25a176840fc0f8d9b139"),
             decimals: 18,
             fee_tier_v3: 500,
             token0: USDC_BASE,
@@ -310,7 +308,6 @@ async fn fetch_live_market_data_for_pair<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    // 1. Aerodrome Price
     let mut price_aero = 0.0;
     if config.symbol == "DEGEN" {
         let aero_v3_pool = IUniswapV3Pool::new(config.aero_pool, http_provider.clone());
@@ -337,7 +334,6 @@ where
         }
     }
 
-    // 2. Uniswap V3 Price
     let mut price_v3 = 0.0;
     let v3_pool = IUniswapV3Pool::new(config.uni_v3_pool, http_provider.clone());
     if let Ok(slot0) = v3_pool.slot0().call().await {
@@ -349,7 +345,6 @@ where
         }
     }
 
-    // 3. BaseSwap Price
     let mut price_baseswap = 0.0;
     let baseswap_pool = IUniswapV3Pool::new(config.baseswap_pool, http_provider.clone());
     if let Ok(slot0) = baseswap_pool.slot0().call().await {
@@ -361,7 +356,6 @@ where
         }
     }
 
-    // 4. PancakeSwap V3 Price
     let mut price_pancake = 0.0;
     let pancake_pool = IUniswapV3Pool::new(config.pancakeswap_pool, http_provider.clone());
     if let Ok(slot0) = pancake_pool.slot0().call().await {
@@ -373,7 +367,6 @@ where
         }
     }
 
-    // حساب أقصى الفجوات السعرية بين جميع المنصات المتاحة
     let mut prices = vec![price_aero, price_v3, price_baseswap, price_pancake];
     prices.retain(|&p| p > 0.0);
 

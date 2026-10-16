@@ -26,11 +26,11 @@ const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F4217
 const BASESWAP_ROUTER: Address = address!("0x327Df1e6de05895D2Ab08513aADD931325260A99"); 
 const PANCAKESWAP_V3_ROUTER: Address = address!("0x1b81D678ffb9C0263b24A97847620C99d213eB14"); 
 
-// عناوين مصانع المجمعات (Factory Contracts) الرسمية على شبكة Base
+// عناوين مصانع المجمعات (Factory Contracts) الرسمية والدقيقة لشبكة Base Mainnet
 const AERO_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFECe40Da");
-const UNI_V3_FACTORY: Address = address!("0x33128a8f17816e9fc00045fcd9967648d65ea671");
-const BASESWAP_FACTORY: Address = address!("0xF6Da9A378D0A1C806b747068ef040DEB92fD4925");
-const PANCAKE_V3_FACTORY: Address = address!("0x0BFbCF9fa8f9C73B0F9Cc8f75298816cDe5c7960");
+const UNI_V3_FACTORY: Address = address!("0x1F98431c8aD98523631AE4a59f267346ea31F984"); // Base Uniswap V3 Factory الرسمي
+const BASESWAP_FACTORY: Address = address!("0xFda619b6d20975be80A10332cd39b9a4b0FAa8BB"); // BaseSwap Factory الرسمي
+const PANCAKE_V3_FACTORY: Address = address!("0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865"); // Base PancakeSwap V3 Factory الرسمي
 
 #[derive(Debug, Clone)]
 pub struct PoolInfo {
@@ -248,7 +248,7 @@ where
     })
 }
 
-// دالة فحص جميع فئات الرسوم (Fee Tiers) في V3 ديناميكياً
+// دالة تفحص جميع فئات الرسوم V3 ديناميكياً وتقرأ الحالات الحية للمجمع
 async fn find_v3_pool_across_fees<P>(
     provider: P,
     factory_address: Address,
@@ -265,7 +265,6 @@ where
         if let Ok(res) = factory.getPool(token_a, token_b, _U24::from(fee)).call().await {
             let addr = Address::from(res.0);
             if !addr.is_zero() {
-                // التأكد من أن المجمع يحتوي على سعر حقيقي مفعل
                 let pool = IUniswapV3Pool::new(addr, provider.clone());
                 if let Ok(slot0) = pool.slot0().call().await {
                     if slot0.sqrtPriceX96 > _U160::ZERO {
@@ -293,7 +292,7 @@ where
         .map(|r| Address::from(r.0)).unwrap_or_else(|_| Address::ZERO);
     let aero = resolve_pool_info(provider.clone(), aero_addr).await;
 
-    // 2. Uniswap V3 Pool (فحص كافة فئات الرسوم)
+    // 2. Uniswap V3 Pool
     let mut selected_fee = 500u32;
     let uni_v3 = if let Some((uni_addr, fee)) = find_v3_pool_across_fees(provider.clone(), UNI_V3_FACTORY, USDC_BASE, target_token).await {
         selected_fee = fee;
@@ -308,14 +307,14 @@ where
         .map(|r| Address::from(r.0)).unwrap_or_else(|_| Address::ZERO);
     let baseswap = resolve_pool_info(provider.clone(), baseswap_addr).await;
 
-    // 4. PancakeSwap V3 Pool (فحص كافة فئات الرسوم)
+    // 4. PancakeSwap V3 Pool
     let pancakeswap = if let Some((pancake_addr, _)) = find_v3_pool_across_fees(provider.clone(), PANCAKE_V3_FACTORY, USDC_BASE, target_token).await {
         resolve_pool_info(provider.clone(), pancake_addr).await
     } else {
         None
     };
 
-    println!("🔍 [DYNAMIC DISCOVERY] Pair {}: Aero({:?}) UniV3({:?}) BaseSwap({:?}) PancakeV3({:?}) | Selected Fee: {}",
+    println!("🔍 [DYNAMIC DISCOVERY] Pair {}: Aero({:?}) UniV3({:?}) BaseSwap({:?}) PancakeV3({:?}) | Fee: {}",
         symbol, aero.is_some(), uni_v3.is_some(), baseswap.is_some(), pancakeswap.is_some(), selected_fee);
 
     TokenPairConfig {
@@ -559,7 +558,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect_ws(ws)
         .await?;
 
-    println!("🔄 Resolving Pool Addresses Dynamically across all Fee Tiers on Base...");
+    println!("🔄 Resolving Pool Addresses Dynamically across official Base Factory Contracts...");
     
     let mut monitored_pairs = Vec::new();
     monitored_pairs.push(resolve_token_pair(http_provider.clone(), "WETH", WETH_BASE, 18).await);

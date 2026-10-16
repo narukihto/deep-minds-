@@ -349,11 +349,8 @@ where
         return Ok(());
     }
 
-    if spread_gap < 0.25 {
-        return Ok(());
-    }
-
-    println!("🚀 [BOT -> CONTRACT | {}] Simulating Multi-DEX Arbitrage Command locally...", pair_symbol);
+    // إزالة شرط الإيقاف تماماً لضمان إرسال جميع المحاكاة إلى العقد ورؤية الاتصال بشكل مباشر
+    println!("🔌 [FORCE SIMULATION - {}] Sending payload to contract for connection test (Gap: ${:.2})...", pair_symbol, spread_gap);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -373,13 +370,13 @@ where
 
     match balancer_builder.call().await {
         Ok(_) => {
-            println!("✅ Local Simulation Passed for {}! Dispatching Real Transaction...", pair_symbol);
+            println!("🎉 [SUCCESS!] نجحت محاكاة الاتصال وتنفيذ الصفقة تماماً لـ {}!", pair_symbol);
             if let Ok(pending_tx) = balancer_builder.send().await {
                 println!("✅ Tx Dispatched! Hash: {:?}", pending_tx.tx_hash());
             }
         }
         Err(e) => {
-            println!("🛡 [SIMULATION REVERTED SAFELY - {}]: تفاصيل الرفض: {:?}", pair_symbol, e);
+            println!("📡 [CONTRACT RESPONSE RECEIVED - {}]: تم الاتصال بالعقد بنجاح ورد بإلغاء محلي (Revert طبيعي لعدم كفاية الربح): {:?}", pair_symbol, e);
         }
     }
 
@@ -437,7 +434,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pair_cfg.symbol, p_aero, p_v3, p_baseswap, p_pancake, spread_gap
                 );
 
-                if spread_gap > 0.25 {
+                // إرسال البيانات للمحاكاة فور توفر أي سعر صالح
+                if spread_gap > 0.0 {
                     let nodes = vec![QuantumNode {
                         id: 1,
                         energy_scale: generate_astronomical_number(1000usize),

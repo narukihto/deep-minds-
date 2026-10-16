@@ -123,7 +123,7 @@ impl CausalCollapseSystem {
             return (vec![], vec![]);
         }
 
-        let effective_pools = if self.dynamic_pools.is_empty() {
+        let _effective_pools = if self.dynamic_pools.is_empty() {
             vec![AERODROME_ROUTER]
         } else {
             self.dynamic_pools.clone()
@@ -149,7 +149,7 @@ impl CausalCollapseSystem {
         // الساق الأولى: الشراء من Aerodrome (اقتراض USDC لشراء WETH)
         addresses.push(AERODROME_ROUTER);
         
-        let min_amount_out_leg1 = self.loan_amount * U256::from(997) / U256::from(1000);
+        let min_amount_out_leg1 = self.loan_amount * U256::from(998) / U256::from(1000); // انزلاق 0.2% فقط
 
         let aero_route_1 = IAerodromeRouter::Route {
             from: self.borrowed_token,
@@ -173,7 +173,7 @@ impl CausalCollapseSystem {
         addresses.push(UNISWAP_V3_ROUTER);
 
         let estimated_weth_received = min_amount_out_leg1; 
-        let min_amount_out_leg2 = self.loan_amount * U256::from(1001) / U256::from(1000);
+        let min_amount_out_leg2 = self.loan_amount * U256::from(10005) / U256::from(10000); // هامش ربح يغطي الرسوم
 
         let mut path_bytes = Vec::new();
         path_bytes.extend_from_slice(WETH_BASE.as_slice());
@@ -331,7 +331,7 @@ where
     Ok((
         spread_gap,
         USDC_BASE,
-        U256::from(50_000_000_000u64), // 50,000 USDC Loan
+        U256::from(10_000_000_000u64), // تم التحديث: 10,000 USDC Loan فقط
         USDC_BASE,
         WETH_BASE,
         discovered_pools,
@@ -359,7 +359,7 @@ where
     let profit_ratio = spread_gap / eth_price;
     let loan_f64 = loan_amount.to::<u128>() as f64;
     let gross_profit_units = loan_f64 * profit_ratio;
-    
+
     let aave_fee = loan_amount * U256::from(5) / U256::from(10000); 
     let aave_fee_units = aave_fee.to::<u128>() as f64;
 
@@ -368,7 +368,7 @@ where
         return Ok(());
     }
 
-    if spread_gap < 0.50 {
+    if spread_gap < 0.25 { // تم خفض الحد الأدنى للفجوة لتناسب قرض 10k
         println!("🛡 [PROFIT SHIELD] Gap is below threshold. Skipping execution.");
         return Ok(());
     }

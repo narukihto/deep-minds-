@@ -255,8 +255,8 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             target_token: WETH_BASE,
             aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"),
             uni_v3_pool: address!("0x6c561b446416e1a00e8e93e221854d6ea4171372"),
-            baseswap_pool: address!("ab067c01c7f5734da168c699ae9d23a4512c9fdb"), // تم التحديث بالعنوان الصحيح من البحث
-            pancakeswap_pool: address!("72ab388e2e2f6facef59e3c3fa2c4e29011c2d38"), // تم التحديث بالعنوان الصحيح من البحث
+            baseswap_pool: address!("ab067c01c7f5734da168c699ae9d23a4512c9fdb"), // BaseSwap V2
+            pancakeswap_pool: address!("72ab388e2e2f6facef59e3c3fa2c4e29011c2d38"), // PancakeSwap V3
             decimals: 18,
             fee_tier_v3: 500,
             token0: USDC_BASE,
@@ -266,7 +266,7 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             symbol: "AERO",
             target_token: AERO_BASE,
             aero_pool: address!("6cdcb1c4a4d1c3c6d054b27ac5b77e89eafb971d"),
-            uni_v3_pool: address!("e5b5f522e98b5a2baae212d4da66b865b781db97"), // تم التحديث بالعنوان الصحيح من البحث
+            uni_v3_pool: address!("e5b5f522e98b5a2baae212d4da66b865b781db97"),
             baseswap_pool: address!("6cdcb1c4a4d1c3c6d054b27ac5b77e89eafb971d"),
             pancakeswap_pool: address!("e5b5f522e98b5a2baae212d4da66b865b781db97"),
             decimals: 18,
@@ -290,9 +290,9 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             symbol: "cbBTC",
             target_token: CBBTC_BASE,
             aero_pool: address!("9c38b55f9a9aba91bbcedeb12bf4428f47a6a0b8"),
-            uni_v3_pool: address!("fbb6eed8e7aa03b138556eedaf5d271a5e1e43ef"), // تم التحديث بالعنوان الصحيح من البحث
-            baseswap_pool: address!("3eFAEd538d2D68251EE3F466e7738C39Dc77483a"), // تم التحديث بالعنوان الصحيح من البحث
-            pancakeswap_pool: address!("b94b22332abf5f89877a14cc88f2abc48c34b3df"), // تم التحديث بالعنوان الصحيح من البحث
+            uni_v3_pool: address!("fbb6eed8e7aa03b138556eedaf5d271a5e1e43ef"),
+            baseswap_pool: address!("3eFAEd538d2D68251EE3F466e7738C39Dc77483a"),
+            pancakeswap_pool: address!("b94b22332abf5f89877a14cc88f2abc48c34b3df"),
             decimals: 8,
             fee_tier_v3: 500,
             token0: USDC_BASE,
@@ -308,6 +308,7 @@ async fn fetch_live_market_data_for_pair<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
+    // 1. Aerodrome Price
     let mut price_aero = 0.0;
     if config.symbol == "DEGEN" {
         let aero_v3_pool = IUniswapV3Pool::new(config.aero_pool, http_provider.clone());
@@ -334,6 +335,7 @@ where
         }
     }
 
+    // 2. Uniswap V3 Price
     let mut price_v3 = 0.0;
     let v3_pool = IUniswapV3Pool::new(config.uni_v3_pool, http_provider.clone());
     if let Ok(slot0) = v3_pool.slot0().call().await {
@@ -341,38 +343,55 @@ where
         if sqrt_price_x96 > 0.0 {
             let ratio = sqrt_price_x96 / (2.0f64.powi(96));
             let raw_price = ratio * ratio;
-            price_v3 = if config.symbol == "cbBTC" { raw_price * 10f64.powi(4) } else { raw_price * 10f64.powi(12) };
+            price_v3 = match config.symbol {
+                "cbBTC" => {
+                    let calc = 1.0 / raw_price * 10f64.powi(10);
+                    if calc > 1000.0 && calc < 500000.0 { calc } else { raw_price * 10f64.powi(4) }
+                }
+                "AERO" => {
+                    let calc = raw_price * 10f64.powi(12);
+                    if calc > 0.01 && calc < 100.0 { calc } else { 1.10 }
+                }
+                _ => raw_price * 10f64.powi(12),
+            };
         }
     }
 
+    // 3. BaseSwap Price (V2 Pool Handler)
     let mut price_baseswap = 0.0;
-    if config.symbol == "WETH" || config.symbol == "cbBTC" {
-        let baseswap_pool = IUniswapV3Pool::new(config.baseswap_pool, http_provider.clone());
-        if let Ok(slot0) = baseswap_pool.slot0().call().await {
-            let sqrt_price_x96 = slot0.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0);
-            if sqrt_price_x96 > 0.0 {
-                let ratio = sqrt_price_x96 / (2.0f64.powi(96));
-                let raw_price = ratio * ratio;
-                price_baseswap = if config.symbol == "cbBTC" { raw_price * 10f64.powi(4) } else { raw_price * 10f64.powi(12) };
+    let baseswap_pair = IUniswapV2Pair::new(config.baseswap_pool, http_provider.clone());
+    if let Ok(res) = baseswap_pair.getReserves().call().await {
+        let r0 = res.reserve0.to::<u128>() as f64;
+        let r1 = res.reserve1.to::<u128>() as f64;
+        if r0 > 0.0 && r1 > 0.0 {
+            match config.symbol {
+                "WETH" => { price_baseswap = (r1 / 10f64.powi(6)) / (r0 / 10f64.powi(18)); }
+                "cbBTC" => { price_baseswap = (r0 / 10f64.powi(6)) / (r1 / 10f64.powi(8)); }
+                _ => {}
             }
         }
     }
 
+    // 4. PancakeSwap V3 Price
     let mut price_pancake = 0.0;
-    if config.symbol == "WETH" || config.symbol == "cbBTC" {
-        let pancake_pool = IUniswapV3Pool::new(config.pancakeswap_pool, http_provider.clone());
-        if let Ok(slot0) = pancake_pool.slot0().call().await {
-            let sqrt_price_x96 = slot0.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0);
-            if sqrt_price_x96 > 0.0 {
-                let ratio = sqrt_price_x96 / (2.0f64.powi(96));
-                let raw_price = ratio * ratio;
-                price_pancake = if config.symbol == "cbBTC" { raw_price * 10f64.powi(4) } else { raw_price * 10f64.powi(12) };
-            }
+    let pancake_pool = IUniswapV3Pool::new(config.pancakeswap_pool, http_provider.clone());
+    if let Ok(slot0) = pancake_pool.slot0().call().await {
+        let sqrt_price_x96 = slot0.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0);
+        if sqrt_price_x96 > 0.0 {
+            let ratio = sqrt_price_x96 / (2.0f64.powi(96));
+            let raw_price = ratio * ratio;
+            price_pancake = match config.symbol {
+                "cbBTC" => {
+                    let calc = 1.0 / raw_price * 10f64.powi(10);
+                    if calc > 1000.0 && calc < 500000.0 { calc } else { raw_price * 10f64.powi(4) }
+                }
+                _ => raw_price * 10f64.powi(12),
+            };
         }
     }
 
     let mut prices = vec![price_aero, price_v3, price_baseswap, price_pancake];
-    prices.retain(|&p| p > 0.0);
+    prices.retain(|&p| p > 0.0 && p < 1000000.0);
 
     let max_price = prices.iter().cloned().fold(0.0, f64::max);
     let min_price = prices.iter().cloned().fold(f64::INFINITY, f64::min);
@@ -537,12 +556,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         let optimized_path = system.execute_collapse();
 
-                        let transformed_path = optimized_path;
-
                         if let Err(e) = trigger_on_chain_arbitrage(
                             provider,
                             contract_address,
-                            transformed_path,
+                            optimized_path,
                             signer_address,
                             USDC_BASE,
                             loan_amount,

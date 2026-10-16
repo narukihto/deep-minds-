@@ -17,6 +17,22 @@ jobs:
         with:
           components: clippy
 
+      - name: Install Foundry (Anvil)
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      - name: Start Local Anvil Fork in Background
+        env:
+          ALCHEMY_HTTP_URL: ${{ secrets.ALCHEMY_HTTP_URL }}
+        run: |
+          echo "[*] Starting local Anvil fork of Base Mainnet..."
+          nohup anvil --fork-url "$ALCHEMY_HTTP_URL" --port 8545 > anvil.log 2>&1 &
+          echo "[*] Waiting for Anvil RPC to initialize..."
+          sleep 5
+          # التحقق من أن Anvil يعمل بنجاح
+          nc -z localhost 8545 && echo "[*] Anvil is up and running!" || (cat anvil.log && exit 1)
+
       - name: Cache Cargo Dependencies
         uses: actions/cache@v4
         with:
@@ -37,7 +53,8 @@ jobs:
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           ALCHEMY_HTTP_URL: ${{ secrets.ALCHEMY_HTTP_URL }}
           ALCHEMY_WSS_URL: ${{ secrets.ALCHEMY_WSS_URL }}
-          BASE_WSS_RPC: ${{ secrets.ALCHEMY_WSS_URL }} 
+          BASE_WSS_RPC: ${{ secrets.ALCHEMY_WSS_URL }}
+          ANVIL_RPC_URL: "http://127.0.0.1:8545"
         run: |
-          echo "[*] Starting MEV Engine in Release Mode..."
+          echo "[*] Starting MEV Engine with Local Anvil Simulation..."
           cargo run --release

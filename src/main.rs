@@ -100,10 +100,10 @@ impl CausalCollapseSystem {
         let (p_aero, p_v3, p_baseswap, p_pancake) = self.prices;
 
         let mut dex_offers = Vec::new();
-        if p_aero > 1.0 { dex_offers.push(("Aero", p_aero, AERODROME_ROUTER)); }
-        if p_v3 > 1.0 { dex_offers.push(("UniV3", p_v3, UNISWAP_V3_ROUTER)); }
-        if p_baseswap > 1.0 { dex_offers.push(("BaseSwap", p_baseswap, BASESWAP_ROUTER)); }
-        if p_pancake > 1.0 { dex_offers.push(("PancakeV3", p_pancake, PANCAKESWAP_V3_ROUTER)); }
+        if p_aero > 0.0 { dex_offers.push(("Aero", p_aero, AERODROME_ROUTER)); }
+        if p_v3 > 0.0 { dex_offers.push(("UniV3", p_v3, UNISWAP_V3_ROUTER)); }
+        if p_baseswap > 0.0 { dex_offers.push(("BaseSwap", p_baseswap, BASESWAP_ROUTER)); }
+        if p_pancake > 0.0 { dex_offers.push(("PancakeV3", p_pancake, PANCAKESWAP_V3_ROUTER)); }
 
         if dex_offers.len() < 2 {
             return (vec![], vec![], 0.0, 0.0);
@@ -386,9 +386,9 @@ fn calculate_v2_price(
     let r1 = reserve1 as f64 / 10f64.powi(d1 as i32);
 
     if target_token == token1 {
-        r0 / r1
+        if r1 > 0.0 { r0 / r1 } else { 0.0 }
     } else {
-        r1 / r0
+        if r0 > 0.0 { r1 / r0 } else { 0.0 }
     }
 }
 
@@ -484,22 +484,16 @@ where
         }
     }
 
-    let mut prices = vec![price_aero, price_v3, price_baseswap, price_pancake];
-    
-    let (min_valid, max_valid) = match config.symbol {
-        "AERO" => (0.01, 10.0),
-        "DEGEN" => (0.00001, 10.0),
-        "cbBTC" => (1000.0, 500000.0),
-        _ => (0.01, 1000000.0),
-    };
+    let mut valid_prices = Vec::new();
+    if price_aero > 0.0 { valid_prices.push(price_aero); }
+    if price_v3 > 0.0 { valid_prices.push(price_v3); }
+    if price_baseswap > 0.0 { valid_prices.push(price_baseswap); }
+    if price_pancake > 0.0 { valid_prices.push(price_pancake); }
 
-    prices.retain(|&p| p >= min_valid && p <= max_valid);
-
-    let max_price = prices.iter().cloned().fold(0.0, f64::max);
-    let min_price = prices.iter().cloned().fold(f64::INFINITY, f64::min);
-
-    let spread_gap = if !prices.is_empty() && min_price != f64::INFINITY {
-        max_price - min_price
+    let spread_gap = if valid_prices.len() >= 2 {
+        let max_p = valid_prices.iter().cloned().fold(0.0, f64::max);
+        let min_p = valid_prices.iter().cloned().fold(f64::INFINITY, f64::min);
+        max_p - min_p
     } else {
         0.0
     };
@@ -619,7 +613,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(provider.clone(), &pair_cfg).await {
                 println!(
-                    " 📈 [{}] Aero: ${:.2} | UniV3: ${:.2} | BaseSwap: ${:.2} | Pancake: ${:.2} | Max Gap: ${:.2}",
+                    " 📈 [{}] Aero: ${:.2} | UniV3: ${:.2} | BaseSwap: ${:.2} | Pancake: ${:.2} | Active Gap: ${:.2}",
                     pair_cfg.symbol, p_aero, p_v3, p_baseswap, p_pancake, spread_gap
                 );
 

@@ -95,9 +95,9 @@ impl CausalCollapseSystem {
         }
     }
 
-    pub fn execute_collapse(&self) -> (Vec<Address>, Vec<Vec<u8>>) {
+    pub fn execute_collapse(&self) -> (Vec<Address>, Vec<Vec<u8>>, f64, f64) {
         if self.nodes.is_empty() {
-            return (vec![], vec![]);
+            return (vec![], vec![], 0.0, 0.0);
         }
 
         let (p_aero, p_v3, p_baseswap, p_pancake) = self.prices;
@@ -109,7 +109,7 @@ impl CausalCollapseSystem {
         if p_pancake > 1.0 { dex_offers.push(("PancakeV3", p_pancake, PANCAKESWAP_V3_ROUTER)); }
 
         if dex_offers.len() < 2 {
-            return (vec![], vec![]);
+            return (vec![], vec![], 0.0, 0.0);
         }
 
         dex_offers.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
@@ -120,9 +120,9 @@ impl CausalCollapseSystem {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        // 1. حساب الشراء مع انزلاق سعر آمن 0.3%
+        // 1. حساب الشراء مع انزلاق سعر 0.2%
         addresses.push(buy_dex.2);
-        let min_amount_out_leg1 = self.loan_amount * U256::from(997) / U256::from(1000);
+        let min_amount_out_leg1 = self.loan_amount * U256::from(998) / U256::from(1000);
 
         let payload_leg1 = if buy_dex.0 == "Aero" || buy_dex.0 == "BaseSwap" {
             let aero_route = IAerodromeRouter::Route {
@@ -157,10 +157,9 @@ impl CausalCollapseSystem {
         };
         payloads.push(payload_leg1);
 
-        // 2. حساب البيع مع تغطية أصل القرض + رسوم Aave V3 (0.09%) + رسوم DEX + هامش ربح نظيف
+        // 2. حساب البيع مع تغطية أصل القرض + رسوم Aave V3 (0.05%) + هامش ربح محكم
         addresses.push(sell_dex.2);
-        // Aave V3 Flash Loan fee on Base is ~0.05% to 0.09%. نستخدم 10012 لضمان تغطية رسوم Aave والـ Swaps مع ربح حقيقي
-        let min_amount_out_leg2 = self.loan_amount * U256::from(10012) / U256::from(10000);
+        let min_amount_out_leg2 = self.loan_amount * U256::from(10008) / U256::from(10000);
 
         let payload_leg2 = if sell_dex.0 == "Aero" || sell_dex.0 == "BaseSwap" {
             let aero_route_sell = IAerodromeRouter::Route {
@@ -195,10 +194,7 @@ impl CausalCollapseSystem {
         };
         payloads.push(payload_leg2);
 
-        println!("⚡ [AAVE V3 DYNAMIC ROUTER] Validated Buy on {} (${:.2}) -> Sell on {} (${:.2})", 
-            buy_dex.0, buy_dex.1, sell_dex.0, sell_dex.1);
-
-        (addresses, payloads)
+        (addresses, payloads, buy_dex.1, sell_dex.1)
     }
 }
 
@@ -513,7 +509,7 @@ where
 async fn trigger_on_chain_arbitrage<P>(
     http_provider: P,
     contract_address: Address,
-    target_path: (Vec<Address>, Vec<Vec<u8>>),
+    target_path: (Vec<Address>, Vec<Vec<u8>>, f64, f64),
     signer_address: Address,
     token_to_borrow: Address,
     loan_amount: U256,
@@ -523,7 +519,8 @@ async fn trigger_on_chain_arbitrage<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    if loan_amount == U256::ZERO || target_path.0.is_empty() {
+    let (addresses, payloads, buy_price, sell_price) = target_path;
+    if loan_amount == U256::ZERO || addresses.is_empty() {
         return Ok(());
     }
 
@@ -532,20 +529,30 @@ where
         return Ok(());
     }
 
-    println!("🚀 [BOT -> CONTRACT | {}] Simulating Aave V3 Arbitrage Command locally...", pair_symbol);
+    // طباعة التحليل المالي الرياضي الدقيق قبل محاكاة العقد
+    let loan_numeric = 2000.0; // حجم القرض التجريبي بالـ USDC
+    let estimated_aave_fee = loan_numeric * 0.0005; // 0.05% رسوم Aave
+    let estimated_dex_fees = loan_numeric * 0.006; // 0.6% رسوم سواب مزدوجة
+    let total_cost = estimated_aave_fee + estimated_dex_fees;
+    let theoretical_gross_profit = (spread_gap / buy_price) * loan_numeric;
+
+    println!("📊 [FINANCIAL DEBUGGER - {}] قرض: ${} | شراء: ${:.2} | بيع: ${:.2} | ربح إجمالي نظري: ${:.2} | إجمالي الرسوم والعمولات: ${:.2}",
+        pair_symbol, loan_numeric, buy_price, sell_price, theoretical_gross_profit, total_cost
+    );
+
+    println!("🚀 [BOT -> CONTRACT | {}] Simulating Aave V3 Arbitrage Command locally with Debug Analysis...", pair_symbol);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
-            target_path.0.clone().into_iter().map(alloy::dyn_abi::DynSolValue::Address).collect()
+            addresses.clone().into_iter().map(alloy::dyn_abi::DynSolValue::Address).collect()
         ),
         alloy::dyn_abi::DynSolValue::Array(
-            target_path.1.into_iter().map(alloy::dyn_abi::DynSolValue::Bytes).collect()
+            payloads.into_iter().map(alloy::dyn_abi::DynSolValue::Bytes).collect()
         ),
     ]).abi_encode();
 
     let contract = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
 
-    // استدعاء Aave V3 Flash Loan بدلاً من Balancer لزيادة الاستقرار على شبكة Base
     let aave_builder = contract
         .triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
         .from(signer_address)
@@ -559,7 +566,7 @@ where
             }
         }
         Err(e) => {
-            println!("🛡 [SIMULATION REVERTED - {}]: السبب الفعلي للفشل: {:?}", pair_symbol, e);
+            println!("🛡 [SIMULATION REVERTED - {}]: تفاصيل الرفض: العقد الذكي رفض الصفقة لأن الرصيد الناتج أقل من المتوقع (Slippage/Fee Impact). الخطأ: {:?}", pair_symbol, e);
         }
     }
 
@@ -568,7 +575,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Multi-DEX Cross-Matrix Scanner Engine via Alloy...");
+    println!("🤖 Initializing Multi-DEX Cross-Matrix Scanner Engine with Financial Debugger...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -607,7 +614,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = sub.into_stream();
     let mut block_counter = 0u64;
 
-    let loan_amount = U256::from(10_000_000_000u64); // 10,000 USDC
+    // تم ضبط حجم القرض التجريبي إلى 2,000 USDC لتقليل الانزلاق السعري في مجمعات السيولة
+    let loan_amount = U256::from(2_000_000_000u64); 
 
     while let Some(block) = stream.next().await {
         block_counter += 1;

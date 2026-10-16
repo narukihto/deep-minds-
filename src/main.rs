@@ -30,7 +30,7 @@ pub struct TokenPairConfig {
     pub baseswap_pool: Address,
     pub pancakeswap_pool: Address,
     pub decimals: u32,
-    pub fee_tier_v3: u32, // سيتم استخدام 100 (0.01%) أو 500 (0.05%) لتخفيض الرسوم
+    pub fee_tier_v3: u32,
     pub token0: Address,
     pub token1: Address,
 }
@@ -86,7 +86,6 @@ impl CausalCollapseSystem {
 
         addresses.push(AERODROME_ROUTER);
         
-        // تحسين هامش الخروج لتفادي الـ Slippage الزائد
         let min_amount_out_leg1 = self.loan_amount * U256::from(999) / U256::from(1000);
 
         let aero_route = IAerodromeRouter::Route {
@@ -210,7 +209,7 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             baseswap_pool: address!("ab067c01c7f5734da168c699ae9d23a4512c9fdb"),
             pancakeswap_pool: address!("72ab388e2e2f6facef59e3c3fa2c4e29011c2d38"),
             decimals: 18,
-            fee_tier_v3: 100, // استخدام فئة 0.01% لتقليل الرسوم إلى الحد الأدنى التاريخي
+            fee_tier_v3: 100,
             token0: WETH_BASE,
             token1: USDC_BASE,
         },
@@ -350,7 +349,7 @@ where
         return Ok(());
     }
 
-    println!("⚡ [LOW-FEE OPTIMIZED SIMULATION - {}] Testing execution with 0.01% Fee Tier (Gap: ${:.2})...", pair_symbol, spread_gap);
+    println!("⚡ [OPTIMIZED SIMULATION - {}] Testing execution with 2,000 USDC Loan (Gap: ${:.2})...", pair_symbol, spread_gap);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -376,7 +375,7 @@ where
             }
         }
         Err(e) => {
-            println!("📡 [LOW-FEE RESPONSE - {}]: الاتصال ناجح. تفاصيل الرد: {:?}", pair_symbol, e);
+            println!("📡 [RESPONSE - {}]: الاتصال ناجح. تفاصيل الرد: {:?}", pair_symbol, e);
         }
     }
 
@@ -385,7 +384,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Low-Fee Optimized MEV Scanner Engine via Alloy...");
+    println!("🤖 Initializing Optimized MEV Scanner Engine with Reduced Loan Size...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -417,7 +416,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = sub.into_stream();
     let mut block_counter = 0u64;
 
-    let loan_amount = U256::from(10_000_000_000u64); // 10,000 USDC
+    // تم تخفيض حجم القرض إلى 2,000 USDC لتغطية الفجوات السعرية الضيقة الحالية
+    let loan_amount = U256::from(2_000_000_000u64);
 
     while let Some(block) = stream.next().await {
         block_counter += 1;

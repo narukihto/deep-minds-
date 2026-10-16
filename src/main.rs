@@ -30,7 +30,7 @@ pub struct TokenPairConfig {
     pub baseswap_pool: Address,
     pub pancakeswap_pool: Address,
     pub decimals: u32,
-    pub fee_tier_v3: u32,
+    pub fee_tier_v3: u32, // سيتم استخدام 100 (0.01%) أو 500 (0.05%) لتخفيض الرسوم
     pub token0: Address,
     pub token1: Address,
 }
@@ -86,7 +86,8 @@ impl CausalCollapseSystem {
 
         addresses.push(AERODROME_ROUTER);
         
-        let min_amount_out_leg1 = self.loan_amount * U256::from(997) / U256::from(1000);
+        // تحسين هامش الخروج لتفادي الـ Slippage الزائد
+        let min_amount_out_leg1 = self.loan_amount * U256::from(999) / U256::from(1000);
 
         let aero_route = IAerodromeRouter::Route {
             from: self.borrowed_token,
@@ -109,7 +110,7 @@ impl CausalCollapseSystem {
         addresses.push(PANCAKESWAP_V3_ROUTER);
 
         let estimated_token_received = min_amount_out_leg1; 
-        let min_amount_out_leg2 = self.loan_amount * U256::from(10005) / U256::from(10000);
+        let min_amount_out_leg2 = self.loan_amount * U256::from(10002) / U256::from(10000);
 
         let mut path_bytes = Vec::new();
         path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
@@ -209,7 +210,7 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             baseswap_pool: address!("ab067c01c7f5734da168c699ae9d23a4512c9fdb"),
             pancakeswap_pool: address!("72ab388e2e2f6facef59e3c3fa2c4e29011c2d38"),
             decimals: 18,
-            fee_tier_v3: 500,
+            fee_tier_v3: 100, // استخدام فئة 0.01% لتقليل الرسوم إلى الحد الأدنى التاريخي
             token0: WETH_BASE,
             token1: USDC_BASE,
         },
@@ -349,8 +350,7 @@ where
         return Ok(());
     }
 
-    // إزالة شرط الإيقاف تماماً لضمان إرسال جميع المحاكاة إلى العقد ورؤية الاتصال بشكل مباشر
-    println!("🔌 [FORCE SIMULATION - {}] Sending payload to contract for connection test (Gap: ${:.2})...", pair_symbol, spread_gap);
+    println!("⚡ [LOW-FEE OPTIMIZED SIMULATION - {}] Testing execution with 0.01% Fee Tier (Gap: ${:.2})...", pair_symbol, spread_gap);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -370,13 +370,13 @@ where
 
     match balancer_builder.call().await {
         Ok(_) => {
-            println!("🎉 [SUCCESS!] نجحت محاكاة الاتصال وتنفيذ الصفقة تماماً لـ {}!", pair_symbol);
+            println!("🎉 [SUCCESS!] نجح اجتياز شروط العقد الذكي وتحقيق الربح الصافي لـ {}!", pair_symbol);
             if let Ok(pending_tx) = balancer_builder.send().await {
-                println!("✅ Tx Dispatched! Hash: {:?}", pending_tx.tx_hash());
+                println!("✅ Real Tx Dispatched on Base! Hash: {:?}", pending_tx.tx_hash());
             }
         }
         Err(e) => {
-            println!("📡 [CONTRACT RESPONSE RECEIVED - {}]: تم الاتصال بالعقد بنجاح ورد بإلغاء محلي (Revert طبيعي لعدم كفاية الربح): {:?}", pair_symbol, e);
+            println!("📡 [LOW-FEE RESPONSE - {}]: الاتصال ناجح. تفاصيل الرد: {:?}", pair_symbol, e);
         }
     }
 
@@ -385,7 +385,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Multi-DEX Cross-Matrix Scanner Engine via Alloy...");
+    println!("🤖 Initializing Low-Fee Optimized MEV Scanner Engine via Alloy...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -434,7 +434,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pair_cfg.symbol, p_aero, p_v3, p_baseswap, p_pancake, spread_gap
                 );
 
-                // إرسال البيانات للمحاكاة فور توفر أي سعر صالح
                 if spread_gap > 0.0 {
                     let nodes = vec![QuantumNode {
                         id: 1,

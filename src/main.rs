@@ -518,7 +518,7 @@ where
 
     match contract.owner().call().await {
         Ok(owner_res) => {
-            let owner_addr = owner_res.0;
+            let owner_addr = Address::from(owner_res.0);
             println!("   -> [Owner Found]: {:?}", owner_addr);
             if owner_addr == signer_address {
                 println!("   -> [MATCH]: عنوان المنفذ يطابق المالك (Owner) تماماً.");
@@ -533,7 +533,7 @@ where
 
     match contract.botAddress().call().await {
         Ok(bot_res) => {
-            let bot_addr = bot_res.0;
+            let bot_addr = Address::from(bot_res.0);
             println!("   -> [BotAddress Found]: {:?}", bot_addr);
             if bot_addr == signer_address {
                 println!("   -> [MATCH]: عنوان المنفذ يطابق بوت الصلاحية (BotAddress) تماماً.");

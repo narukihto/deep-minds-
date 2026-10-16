@@ -263,6 +263,11 @@ sol! {
     #[sol(rpc)]
     contract BaseAtomicArbitrage {
         function triggerAaveArbitrage(address tokenToBorrow, uint256 loanAmount, bytes calldata swapPathData) external;
+        
+        // الأخطاء المخصصة المحتملة لاستخراج السبب بدقة عبر Anvil Fork
+        error ArbitrageUnprofitable(uint256 expected, uint256 actual);
+        error InsufficientLiquidity();
+        error TargetUnauthorized();
     }
 }
 
@@ -501,8 +506,9 @@ where
     Ok((price_aero, price_v3, price_baseswap, price_pancake, spread_gap))
 }
 
-async fn trigger_on_chain_arbitrage<P>(
-    http_provider: P,
+async fn trigger_on_chain_arbitrage<P, SP>(
+    live_provider: P,
+    simulation_provider: SP,
     contract_address: Address,
     target_path: (Vec<Address>, Vec<Vec<u8>>, f64, f64),
     signer_address: Address,
@@ -513,6 +519,7 @@ async fn trigger_on_chain_arbitrage<P>(
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     P: Provider<Ethereum> + Clone,
+    SP: Provider<Ethereum> + Clone,
 {
     let (addresses, payloads, _buy_price, _sell_price) = target_path;
     if loan_amount == U256::ZERO || addresses.is_empty() {
@@ -523,7 +530,7 @@ where
         return Ok(());
     }
 
-    println!("🔥 [UNCONDITIONAL SIMULATION TRIGGER - {}] تم إلغاء قيود الفحص المحلي. إرسال الصفقة للمحاكاة الفورية على العقد...", pair_symbol);
+    println!("🔬 [ANVIL LOCAL FORK SIMULATION - {}] محاكاة عبر العقد المحلي لرصد السبب الحرفي...", pair_symbol);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -534,24 +541,39 @@ where
         ),
     ]).abi_encode();
 
-    let contract = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
-
-    let aave_builder = contract
+    // 1. إجراء المحاكاة المحلية عبر مزود Anvil Fork
+    let sim_contract = BaseAtomicArbitrage::new(contract_address, simulation_provider);
+    let sim_call = sim_contract
         .triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
         .from(signer_address)
         .gas(1_500_000);
 
-    match aave_builder.call().await {
+    match sim_call.call().await {
         Ok(_) => {
-            println!("✅ [SUCCESS!] المحاكاة الفعلية على العقد نجحت تماماً لـ {}! جاري إرسال المعاملة الفعلية للشبكة...", pair_symbol);
-            if let Ok(pending_tx) = aave_builder.send().await {
+            println!("✅ [ANVIL SIMULATION PASSED!] النجاح مؤكد محلياً لـ {}! جاري إرسال المعاملة الحية للشبكة...", pair_symbol);
+            
+            // 2. إذا نجحت محاكاة Anvil، نرسل المعاملة عبر المزود الحي الحقيقي
+            let live_contract = BaseAtomicArbitrage::new(contract_address, live_provider);
+            let live_tx = live_contract
+                .triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
+                .from(signer_address)
+                .gas(1_500_000);
+
+            if let Ok(pending_tx) = live_tx.send().await {
                 println!("🚀 [TX DISPATCHED SUCCESSFULLY!]: Hash: {:?}", pending_tx.tx_hash());
             }
         }
         Err(e) => {
             let err_string = format!("{:?}", e);
-            println!("🛡 [CONTRACT REVERT DETAILS - {}]: المحاكاة وصلت للعقد الذكي ولكنه رفض التنفيذ. السبب الحرفي:", pair_symbol);
-            println!("   -> {}", err_string);
+            println!("🛡 [ANVIL CUSTOM ERROR DECODER - {}]: فشلت المحاكاة المحلية. السبب الحرفي من العقد:", pair_symbol);
+            
+            if err_string.contains("ArbitrageUnprofitable") {
+                println!("   -> الخطأ العائد: [ArbitrageUnprofitable] الربح النهائي أقل من تكلفة القرض والرسوم.");
+            } else if err_string.contains("InsufficientLiquidity") {
+                println!("   -> الخطأ العائد: [InsufficientLiquidity] نقص في سيولة المجمع لتنفيذ التبادل.");
+            } else {
+                println!("   -> تفاصيل الخطأ الخام: {}", err_string);
+            }
         }
     }
 
@@ -560,7 +582,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Unconditional Arbitrage Bot Engine (Direct Execution Mode)...");
+    println!("🤖 Initializing Anvil Fork MEV Bot Engine...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -570,30 +592,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "https://mainnet.base.org".to_string());
     let alchemy_wss_url = std::env::var("ALCHEMY_WSS_URL")
         .unwrap_or_else(|_| "ws://127.0.0.1:8545".to_string());
+    
+    // عنوان Anvil المحلي المخصص للمحاكاة (مثال: http://127.0.0.1:8545)
+    let anvil_fork_url = std::env::var("ANVIL_RPC_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string());
 
     let private_key_str = std::env::var("PRIVATE_KEY")
         .unwrap_or_else(|_| "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string());
     let signer: PrivateKeySigner = private_key_str.parse()?;
     let signer_address = signer.address();
-    let wallet = EthereumWallet::from(signer);
+    let wallet = EthereumWallet::from(signer.clone());
 
-    let http_provider = ProviderBuilder::new()
+    // مزود الشبكة الحية للبث والإرسال
+    let live_provider = ProviderBuilder::new()
         .wallet(wallet.clone())
         .connect_http(primary_http_url.parse()?);
 
+    // مزود محاكاة Anvil Fork المحلي
+    let anvil_provider = ProviderBuilder::new()
+        .wallet(wallet)
+        .connect_http(anvil_fork_url.parse()?);
+
     let ws = alloy::providers::WsConnect::new(alchemy_wss_url);
     let ws_provider = ProviderBuilder::new()
-        .wallet(wallet)
+        .wallet(PrivateKeySigner::from_str(&private_key_str)?) // إعادة بناء wallet للـ Ws
         .connect_ws(ws)
         .await?;
 
     println!("🔄 Resolving Pool Addresses Dynamically across official Base Factory Contracts...");
     
     let mut monitored_pairs = Vec::new();
-    monitored_pairs.push(resolve_token_pair(http_provider.clone(), "WETH", WETH_BASE, 18).await);
-    monitored_pairs.push(resolve_token_pair(http_provider.clone(), "AERO", AERO_BASE, 18).await);
-    monitored_pairs.push(resolve_token_pair(http_provider.clone(), "DEGEN", DEGEN_BASE, 18).await);
-    monitored_pairs.push(resolve_token_pair(http_provider.clone(), "cbBTC", CBBTC_BASE, 8).await);
+    monitored_pairs.push(resolve_token_pair(live_provider.clone(), "WETH", WETH_BASE, 18).await);
+    monitored_pairs.push(resolve_token_pair(live_provider.clone(), "AERO", AERO_BASE, 18).await);
+    monitored_pairs.push(resolve_token_pair(live_provider.clone(), "DEGEN", DEGEN_BASE, 18).await);
+    monitored_pairs.push(resolve_token_pair(live_provider.clone(), "cbBTC", CBBTC_BASE, 8).await);
 
     let sub = ws_provider.subscribe_blocks().await?;
     let mut stream = sub.into_stream();
@@ -607,7 +639,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n📦 WSS Block Synced: #{} (Counter: {})", block_num, block_counter);
 
         for pair in &monitored_pairs {
-            let provider = http_provider.clone();
+            let provider = live_provider.clone();
+            let sim_provider = anvil_provider.clone();
             let pair_cfg = pair.clone();
 
             if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(provider.clone(), &pair_cfg).await {
@@ -639,6 +672,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let _ = trigger_on_chain_arbitrage(
                         provider,
+                        sim_provider,
                         contract_address,
                         optimized_path,
                         signer_address,

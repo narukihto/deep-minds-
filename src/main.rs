@@ -262,9 +262,14 @@ sol! {
 
     #[sol(rpc)]
     contract BaseAtomicArbitrage {
-        function owner() external view returns (address);
-        function botAddress() external view returns (address);
         function triggerAaveArbitrage(address tokenToBorrow, uint256 loanAmount, bytes calldata swapPathData) external;
+        
+        error ArbitrageUnprofitable(uint256 expected, uint256 actual);
+        error InsufficientLiquidity();
+        error TargetUnauthorized();
+        error UntrustedInitiator();
+        error NotAuthorized();
+        error ExternalCallFailed(bytes reason);
     }
 }
 
@@ -503,46 +508,54 @@ where
     Ok((price_aero, price_v3, price_baseswap, price_pancake, spread_gap))
 }
 
-async fn check_contract_state_diagnostic<SP>(
+// 🚀 إعادة تفعيل التنفيذ الكامل مع تتبع دقيق للأخطاء المخصصة
+async fn execute_full_arbitrage_simulation<SP>(
     simulation_provider: SP,
     contract_address: Address,
+    target_path: (Vec<Address>, Vec<Vec<u8>>, f64, f64),
     signer_address: Address,
+    token_to_borrow: Address,
+    loan_amount: U256,
+    spread_gap: f64,
     pair_symbol: &str,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     SP: Provider<Ethereum> + Clone,
 {
-    println!("🔬 [DIAGNOSTIC - {}] جاري فحص حالة العقد والصلاحيات على Anvil...", pair_symbol);
-
-    let contract = BaseAtomicArbitrage::new(contract_address, simulation_provider);
-
-    match contract.owner().call().await {
-        Ok(owner_res) => {
-            let owner_addr = Address::from(owner_res.0);
-            println!("   -> [Owner Found]: {:?}", owner_addr);
-            if owner_addr == signer_address {
-                println!("   -> [MATCH]: عنوان المنفذ يطابق المالك (Owner) تماماً.");
-            } else {
-                println!("   -> [MISMATCH]: عنوان المنفذ مختلف عن المالك الأساسي.");
-            }
-        }
-        Err(e) => {
-            println!("   -> [ERROR reading owner]: فشل قراءة المالك. ربما العنوان لا يحتوي على عقد ذكي: {:?}", e);
-        }
+    let (addresses, payloads, _buy_price, _sell_price) = target_path;
+    if loan_amount == U256::ZERO || addresses.is_empty() {
+        return Ok(());
     }
 
-    match contract.botAddress().call().await {
-        Ok(bot_res) => {
-            let bot_addr = Address::from(bot_res.0);
-            println!("   -> [BotAddress Found]: {:?}", bot_addr);
-            if bot_addr == signer_address {
-                println!("   -> [MATCH]: عنوان المنفذ يطابق بوت الصلاحية (BotAddress) تماماً.");
-            } else {
-                println!("   -> [MISMATCH]: عنوان المنفذ مختلف عن عنوان البوت المسجل.");
-            }
+    if spread_gap < 0.25 {
+        return Ok(());
+    }
+
+    println!("🚀 [FULL ARBITRAGE SIMULATION - {}] جاري محاكاة صفقة الفلاش لون الكاملة...", pair_symbol);
+
+    let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
+        alloy::dyn_abi::DynSolValue::Array(
+            addresses.clone().into_iter().map(alloy::dyn_abi::DynSolValue::Address).collect()
+        ),
+        alloy::dyn_abi::DynSolValue::Array(
+            payloads.into_iter().map(alloy::dyn_abi::DynSolValue::Bytes).collect()
+        ),
+    ]).abi_encode();
+
+    let sim_contract = BaseAtomicArbitrage::new(contract_address, simulation_provider);
+    let sim_call = sim_contract
+        .triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
+        .from(signer_address)
+        .gas(1_500_000);
+
+    match sim_call.call().await {
+        Ok(_) => {
+            println!("🎉 [SUCCESS!] المحاكاة الكاملة لصفقة الفلاش لون نجحت 100% للزوج {}!", pair_symbol);
         }
         Err(e) => {
-            println!("   -> [ERROR reading botAddress]: {:?}", e);
+            let err_str = format!("{:?}", e);
+            println!("🛡 [SIMULATION REVERT - {}]: تفاصيل الخطأ المستخرج:", pair_symbol);
+            println!("   -> الخطأ الكامل: {}", err_str);
         }
     }
 
@@ -551,7 +564,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Contract State Diagnostic Engine (Aave Bypassed)...");
+    println!("🤖 Initializing Full Arbitrage Execution & Simulation Engine...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -570,7 +583,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let signer: PrivateKeySigner = private_key_str.parse()?;
     let signer_address = signer.address();
-    println!("🔑 Active Diagnostic Signer: {:?}", signer_address);
+    println!("🔑 Active Signer Loaded: {:?}", signer_address);
 
     let wallet = EthereumWallet::from(signer.clone());
 
@@ -600,6 +613,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = sub.into_stream();
     let mut block_counter = 0u64;
 
+    let loan_amount = U256::from(5_000_000_000u64); // 5000 USDC
+
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
@@ -617,17 +632,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
 
                 if spread_gap > 0.25 {
-                    let _ = check_contract_state_diagnostic(
+                    let nodes = vec![QuantumNode {
+                        id: 1,
+                        energy_scale: generate_astronomical_number(1000usize),
+                        frequency: spread_gap,
+                        token0: USDC_BASE,
+                        token1: pair_cfg.target_token,
+                    }];
+
+                    let system = CausalCollapseSystem::new(
+                        nodes,
+                        vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, BASESWAP_ROUTER, AERODROME_ROUTER],
+                        contract_address,
+                        loan_amount,
+                        USDC_BASE,
+                        pair_cfg.clone(),
+                        (p_aero, p_v3, p_baseswap, p_pancake),
+                    );
+
+                    let optimized_path = system.execute_collapse();
+
+                    let _ = execute_full_arbitrage_simulation(
                         sim_provider,
                         contract_address,
+                        optimized_path,
                         signer_address,
+                        USDC_BASE,
+                        loan_amount,
+                        spread_gap,
                         pair_cfg.symbol,
                     ).await;
                 }
             }
         }
 
-        sleep(Duration::from_millis(5000)).await;
+        sleep(Duration::from_millis(100)).await;
     }
 
     Ok(())

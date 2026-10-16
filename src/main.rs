@@ -15,17 +15,15 @@ use alloy::{
 type _U24 = Uint<24, 1>;
 type _U160 = Uint<160, 3>;
 
-// الرموز الأساسية على شبكة Base
+// الرموز الأساسية والعناوين الدقيقة على شبكة Base
 const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
-const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
-const AERO_BASE: Address = address!("940181a94A35A4569E4529A3CDfBfB4e5807413F");
-const DEGEN_BASE: Address = address!("4ed4E862860bed51a9570b96d89aF5E1B0Efefed");
-const CBBTC_BASE: Address = address!("c1C43e09645F1623215040f3359dC88D377d6C70");
+const AERO_BASE: Address = address!("940181a94A35A4569E4529A3CDfB74e38FD98631");
+const DEGEN_BASE: Address = address!("4ed4e862860bed51a9570b96d89af5e1b0efefed");
+const CBBTC_BASE: Address = address!("cbB7C0000aB88B473b1f5aFd9ef808440eed33Bf");
 
-// المنصات والموجهات
+// المنصات والموجهات الرئيسية
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
 const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
-const AERODROME_FACTORY: Address = address!("0x420DD381b31aEf6683db6B902084cB0FFECe40Da");
 
 #[derive(Debug, Clone)]
 pub struct TokenPairConfig {
@@ -35,6 +33,8 @@ pub struct TokenPairConfig {
     pub uni_v3_pool: Address,
     pub decimals: u32,
     pub fee_tier_v3: u32,
+    pub token0: Address,
+    pub token1: Address,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -132,24 +132,10 @@ impl CausalCollapseSystem {
             return (vec![], vec![]);
         }
 
-        let mut ordered_nodes = self.nodes.clone();
-        ordered_nodes.sort_by(|a, b| b.energy_scale.cmp(&a.energy_scale));
-
-        let _active_nodes: Vec<QuantumNode> = ordered_nodes
-            .par_iter()
-            .map(|node| {
-                let mut triggered = node.clone();
-                if triggered.frequency == 0.0 {
-                    triggered.frequency = 0.01;
-                }
-                triggered
-            })
-            .collect();
-
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        // الساق الأولى: Aerodrome Router (USDC -> Target Token)
+        // الساق الأولى: الشراء عبر Aerodrome Router (USDC -> Target Token)
         addresses.push(AERODROME_ROUTER);
         
         let min_amount_out_leg1 = self.loan_amount * U256::from(997) / U256::from(1000);
@@ -158,7 +144,7 @@ impl CausalCollapseSystem {
             from: self.borrowed_token,
             to: self.pair_config.target_token,
             stable: false,
-            factory: AERODROME_FACTORY,
+            factory: address!("420DD381b31aEf6683db6B902084cB0FFECe40Da"),
         };
 
         let payload_leg1 = IAerodromeRouter::swapExactTokensForTokensCall {
@@ -172,7 +158,7 @@ impl CausalCollapseSystem {
 
         payloads.push(payload_leg1);
 
-        // الساق الثانية: Uniswap V3 Router (Target Token -> USDC)
+        // الساق الثانية: البيع عبر Uniswap V3 Router (Target Token -> USDC)
         addresses.push(UNISWAP_V3_ROUTER);
 
         let estimated_token_received = min_amount_out_leg1; 
@@ -263,36 +249,34 @@ sol! {
 pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
     vec![
         TokenPairConfig {
-            symbol: "WETH",
-            target_token: WETH_BASE,
-            aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"),
-            uni_v3_pool: address!("0x6c561b446416e1a00e8e93e221854d6ea4171372"),
-            decimals: 18,
-            fee_tier_v3: 500,
-        },
-        TokenPairConfig {
             symbol: "AERO",
             target_token: AERO_BASE,
-            aero_pool: address!("6ec865c2323c963f03b8cc7e089228e932ec7349"),
-            uni_v3_pool: address!("0xb2cc224c1c9ee327e0580bf1bde2d110024103d6"),
+            aero_pool: address!("6cdcb1c4a4d1c3c6d054b27ac5b77e89eafb971d"),
+            uni_v3_pool: address!("e5b5f522e98b5a2baae212d4da66b865b781db9"),
             decimals: 18,
-            fee_tier_v3: 3000,
+            fee_tier_v3: 500, // 0.05%
+            token0: USDC_BASE,
+            token1: AERO_BASE,
         },
         TokenPairConfig {
             symbol: "DEGEN",
             target_token: DEGEN_BASE,
-            aero_pool: address!("c9034c3e7f58d0bc26364024c0d1c8f498308cf2"),
-            uni_v3_pool: address!("0x6e210118335508f763bf424d1a5113d5a4204ff3"),
+            aero_pool: address!("a19acc3b4f11c46c2b1fc36b5f592af422ee338c"),
+            uni_v3_pool: address!("29715d8d279cab143a12ff515b40a2b35d7bad37"),
             decimals: 18,
-            fee_tier_v3: 10000,
+            fee_tier_v3: 3000, // 0.3%
+            token0: DEGEN_BASE,
+            token1: USDC_BASE,
         },
         TokenPairConfig {
             symbol: "cbBTC",
             target_token: CBBTC_BASE,
-            aero_pool: address!("f21853cc6be829ef243306540c496be820ee7d76"),
-            uni_v3_pool: address!("0x1236f0144edcb37df49ef05f63db545f6eb68c85"),
+            aero_pool: address!("9c38b55f9a9aba91bbcedeb12bf4428f47a6a0b8"),
+            uni_v3_pool: address!("4e962bb3889bf030368f56810a9c96b83cb3e778"),
             decimals: 8,
-            fee_tier_v3: 500,
+            fee_tier_v3: 500, // 0.05%
+            token0: USDC_BASE,
+            token1: CBBTC_BASE,
         },
     ]
 }
@@ -304,19 +288,29 @@ async fn fetch_live_market_data_for_pair<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    // 1. Aerodrome Calculation
+    // 1. حساب أسعار Aerodrome بناءً على ترتيب token0 و token1 الدقيق
     let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
     let mut price_aero = 0.0;
     if let Ok(res) = aero_pair.getReserves().call().await {
-        let r0 = res.reserve0.to::<u128>() as f64 / 10f64.powi(config.decimals as i32);
-        let r1 = res.reserve1.to::<u128>() as f64 / 10f64.powi(6); // USDC = 6 decimals
+        let r0 = res.reserve0.to::<u128>() as f64;
+        let r1 = res.reserve1.to::<u128>() as f64;
+        
         if r0 > 0.0 && r1 > 0.0 {
-            let ratio = r1 / r0;
-            price_aero = if ratio < 0.00001 { 1.0 / ratio } else { ratio };
+            // التحقق من ترتيب الاحتياطيات بناءً على عنوان USDC وموقع الـ token0/token1
+            if config.token0 == USDC_BASE {
+                // token0 هو USDC (6 خانات) و token1 هو العملة المستهدفة
+                let dec_factor = 10f64.powi(config.decimals as i32 - 6);
+                price_aero = (r1 / r0) * dec_factor;
+            } else {
+                // token0 هو العملة المستهدفة و token1 هو USDC
+                let dec_factor = 10f64.powi(config.decimals as i32 - 6);
+                let ratio = r0 / r1;
+                price_aero = if ratio > 0.0 { ratio * dec_factor } else { 0.0 };
+            }
         }
     }
 
-    // 2. Uniswap V3 Calculation
+    // 2. حساب أسعار Uniswap V3 من Slot0
     let v3_pool = IUniswapV3Pool::new(config.uni_v3_pool, http_provider.clone());
     let mut price_v3 = 0.0;
     if let Ok(slot0) = v3_pool.slot0().call().await {
@@ -325,15 +319,14 @@ where
             let ratio = sqrt_price_x96 / (2.0f64.powi(96));
             let raw_price = ratio * ratio;
             
-            price_v3 = match config.symbol {
-                "WETH" => raw_price * 10f64.powi(12),
-                "cbBTC" => raw_price / 10f64.powi(2),
-                _ => raw_price * 10f64.powi(12),
-            };
+            let dec_diff = 18 - config.decimals as i32;
+            let raw_calculated = raw_price * 10f64.powi(12 + dec_diff);
 
-            if config.symbol == "WETH" && price_v3 < 1000.0 && price_v3 > 0.0 {
-                price_v3 = (1.0 / price_v3) * 10f64.powi(12);
-            }
+            price_v3 = if config.token0 == USDC_BASE {
+                if raw_calculated > 0.0 { 1.0 / raw_calculated * 10f64.powi(24) } else { 0.0 }
+            } else {
+                raw_calculated
+            };
         }
     }
 
@@ -363,9 +356,8 @@ where
     }
 
     let min_gap_threshold = match pair_symbol {
-        "WETH" => 0.25,
-        "cbBTC" => 10.00,
-        "AERO" => 0.005,
+        "cbBTC" => 5.00,
+        "AERO" => 0.01,
         "DEGEN" => 0.0001,
         _ => 0.25,
     };

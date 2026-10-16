@@ -317,7 +317,7 @@ where
                 "DEGEN" => {
                     let r0_f = r0 / 10f64.powi(18); // DEGEN
                     let r1_f = r1 / 10f64.powi(6);  // USDC
-                    if r1_f > 0.0 { price_aero = r0_f / r1_f; }
+                    if r1_f > 0.0 { price_aero = r0_f / r1_f; } else if r0_f > 0.0 { price_aero = r0_f; }
                 }
                 "cbBTC" => {
                     let r0_f = r0 / 10f64.powi(6);  // USDC

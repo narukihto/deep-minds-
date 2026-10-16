@@ -28,9 +28,9 @@ const PANCAKESWAP_V3_ROUTER: Address = address!("0x1b81D678ffb9C0263b24A97847620
 
 // عناوين مصانع المجمعات (Factory Contracts) الرسمية والدقيقة لشبكة Base Mainnet
 const AERO_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFECe40Da");
-const UNI_V3_FACTORY: Address = address!("0x1F98431c8aD98523631AE4a59f267346ea31F984"); // Base Uniswap V3 Factory الرسمي
-const BASESWAP_FACTORY: Address = address!("0xFda619b6d20975be80A10332cd39b9a4b0FAa8BB"); // BaseSwap Factory الرسمي
-const PANCAKE_V3_FACTORY: Address = address!("0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865"); // Base PancakeSwap V3 Factory الرسمي
+const UNI_V3_FACTORY: Address = address!("0x1F98431c8aD98523631AE4a59f267346ea31F984");
+const BASESWAP_FACTORY: Address = address!("0xFda619b6d20975be80A10332cd39b9a4b0FAa8BB");
+const PANCAKE_V3_FACTORY: Address = address!("0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865");
 
 #[derive(Debug, Clone)]
 pub struct PoolInfo {
@@ -69,6 +69,7 @@ pub struct CausalCollapseSystem {
     pub loan_amount: U256,
     pub borrowed_token: Address,
     pub pair_config: TokenPairConfig,
+    pub prices: (f64, f64, f64, f64), // (Aero, UniV3, BaseSwap, PancakeV3)
 }
 
 impl CausalCollapseSystem {
@@ -79,6 +80,7 @@ impl CausalCollapseSystem {
         loan_amount: U256,
         borrowed_token: Address,
         pair_config: TokenPairConfig,
+        prices: (f64, f64, f64, f64),
     ) -> Self {
         Self {
             nodes,
@@ -89,66 +91,113 @@ impl CausalCollapseSystem {
             loan_amount,
             borrowed_token,
             pair_config,
+            prices,
         }
     }
 
+    // بناء المسار والتوجيه بشكل ديناميكي كامل بناءً على الأسعار الفورية الحالية
     pub fn execute_collapse(&self) -> (Vec<Address>, Vec<Vec<u8>>) {
         if self.nodes.is_empty() {
             return (vec![], vec![]);
         }
 
+        let (p_aero, p_v3, p_baseswap, p_pancake) = self.prices;
+
+        // تجميع المنصات المتاحة والتي تمتلك أسعاراً صالحة أكبر من الصفر
+        let mut dex_offers = Vec::new();
+        if p_aero > 0.0 { dex_offers.push(("Aero", p_aero, AERODROME_ROUTER)); }
+        if p_v3 > 0.0 { dex_offers.push(("UniV3", p_v3, UNISWAP_V3_ROUTER)); }
+        if p_baseswap > 0.0 { dex_offers.push(("BaseSwap", p_baseswap, BASESWAP_ROUTER)); }
+        if p_pancake > 0.0 { dex_offers.push(("PancakeV3", p_pancake, PANCAKESWAP_V3_ROUTER)); }
+
+        if dex_offers.len() < 2 {
+            return (vec![], vec![]); // لا توجد منصتان كافيتان للمراجحة
+        }
+
+        // ترتيب المنصات تصاعدياً حسب السعر (الأرخص أولاً للشراء، والأغلى أخيراً للبيع)
+        dex_offers.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+        let buy_dex = dex_offers.first().unwrap(); // السعر الأقل (الشراء هنا)
+        let sell_dex = dex_offers.last().unwrap(); // السعر الأعلى (البيع هنا)
+
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        addresses.push(AERODROME_ROUTER);
-        
+        // الخطوة الأولى: الشراء من المنصة ذات السعر الأقل
+        addresses.push(buy_dex.2);
         let min_amount_out_leg1 = self.loan_amount * U256::from(997) / U256::from(1000);
 
-        let aero_route = IAerodromeRouter::Route {
-            from: self.borrowed_token,
-            to: self.pair_config.target_token,
-            stable: false,
-            factory: AERO_FACTORY,
+        let payload_leg1 = if buy_dex.0 == "Aero" || buy_dex.0 == "BaseSwap" {
+            let aero_route = IAerodromeRouter::Route {
+                from: self.borrowed_token,
+                to: self.pair_config.target_token,
+                stable: false,
+                factory: AERO_FACTORY,
+            };
+            IAerodromeRouter::swapExactTokensForTokensCall {
+                amountIn: self.loan_amount,
+                amountOutMin: min_amount_out_leg1,
+                routes: vec![aero_route],
+                to: self.contract_address,
+                deadline: U256::from(u64::MAX),
+            }
+            .abi_encode()
+        } else {
+            let mut path_bytes = Vec::new();
+            path_bytes.extend_from_slice(self.borrowed_token.as_slice());
+            let fee_bytes = self.pair_config.fee_tier_v3.to_be_bytes();
+            path_bytes.extend_from_slice(&fee_bytes[1..4]);
+            path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
+
+            let exact_input_params = IUniswapV3Router::ExactInputParams {
+                path: Bytes::from(path_bytes),
+                recipient: self.contract_address,
+                deadline: U256::from(u64::MAX),
+                amountIn: self.loan_amount,
+                amountOutMinimum: min_amount_out_leg1,
+            };
+            IUniswapV3Router::exactInputCall { params: exact_input_params }.abi_encode()
         };
-
-        let payload_leg1 = IAerodromeRouter::swapExactTokensForTokensCall {
-            amountIn: self.loan_amount,
-            amountOutMin: min_amount_out_leg1,
-            routes: vec![aero_route],
-            to: self.contract_address,
-            deadline: U256::from(u64::MAX),
-        }
-        .abi_encode();
-
         payloads.push(payload_leg1);
 
-        addresses.push(PANCAKESWAP_V3_ROUTER);
-
-        let estimated_token_received = min_amount_out_leg1; 
+        // الخطوة الثانية: البيع في المنصة ذات السعر الأعلى واستعادة القرض مع تحقيق الربح
+        addresses.push(sell_dex.2);
         let min_amount_out_leg2 = self.loan_amount * U256::from(10005) / U256::from(10000);
 
-        let mut path_bytes = Vec::new();
-        path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
-        
-        let fee_bytes = self.pair_config.fee_tier_v3.to_be_bytes();
-        path_bytes.extend_from_slice(&fee_bytes[1..4]);
-        
-        path_bytes.extend_from_slice(self.borrowed_token.as_slice());
+        let payload_leg2 = if sell_dex.0 == "Aero" || sell_dex.0 == "BaseSwap" {
+            let aero_route_sell = IAerodromeRouter::Route {
+                from: self.pair_config.target_token,
+                to: self.borrowed_token,
+                stable: false,
+                factory: AERO_FACTORY,
+            };
+            IAerodromeRouter::swapExactTokensForTokensCall {
+                amountIn: min_amount_out_leg1,
+                amountOutMin: min_amount_out_leg2,
+                routes: vec![aero_route_sell],
+                to: self.contract_address,
+                deadline: U256::from(u64::MAX),
+            }
+            .abi_encode()
+        } else {
+            let mut path_bytes_sell = Vec::new();
+            path_bytes_sell.extend_from_slice(self.pair_config.target_token.as_slice());
+            let fee_bytes = self.pair_config.fee_tier_v3.to_be_bytes();
+            path_bytes_sell.extend_from_slice(&fee_bytes[1..4]);
+            path_bytes_sell.extend_from_slice(self.borrowed_token.as_slice());
 
-        let exact_input_params = IUniswapV3Router::ExactInputParams {
-            path: Bytes::from(path_bytes),
-            recipient: self.contract_address,
-            deadline: U256::from(u64::MAX),
-            amountIn: estimated_token_received,
-            amountOutMinimum: min_amount_out_leg2,
+            let exact_input_params_sell = IUniswapV3Router::ExactInputParams {
+                path: Bytes::from(path_bytes_sell),
+                recipient: self.contract_address,
+                deadline: U256::from(u64::MAX),
+                amountIn: min_amount_out_leg1,
+                amountOutMinimum: min_amount_out_leg2,
+            };
+            IUniswapV3Router::exactInputCall { params: exact_input_params_sell }.abi_encode()
         };
-
-        let payload_leg2 = IUniswapV3Router::exactInputCall {
-            params: exact_input_params,
-        }
-        .abi_encode();
-
         payloads.push(payload_leg2);
+
+        println!("⚡ [DYNAMIC ROUTER] Buying on {} -> Selling on {}", buy_dex.0, sell_dex.0);
 
         (addresses, payloads)
     }
@@ -248,7 +297,6 @@ where
     })
 }
 
-// دالة تفحص جميع فئات الرسوم V3 ديناميكياً وتقرأ الحالات الحية للمجمع
 async fn find_v3_pool_across_fees<P>(
     provider: P,
     factory_address: Address,
@@ -286,13 +334,11 @@ async fn resolve_token_pair<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    // 1. Aerodrome Pool (V2 Volatile)
     let aero_factory = IAerodromeFactory::new(AERO_FACTORY, provider.clone());
     let aero_addr = aero_factory.getPool(USDC_BASE, target_token, false).call().await
         .map(|r| Address::from(r.0)).unwrap_or_else(|_| Address::ZERO);
     let aero = resolve_pool_info(provider.clone(), aero_addr).await;
 
-    // 2. Uniswap V3 Pool
     let mut selected_fee = 500u32;
     let uni_v3 = if let Some((uni_addr, fee)) = find_v3_pool_across_fees(provider.clone(), UNI_V3_FACTORY, USDC_BASE, target_token).await {
         selected_fee = fee;
@@ -301,21 +347,16 @@ where
         None
     };
 
-    // 3. BaseSwap Pool (V2)
     let baseswap_factory = IUniswapV2Factory::new(BASESWAP_FACTORY, provider.clone());
     let baseswap_addr = baseswap_factory.getPair(USDC_BASE, target_token).call().await
         .map(|r| Address::from(r.0)).unwrap_or_else(|_| Address::ZERO);
     let baseswap = resolve_pool_info(provider.clone(), baseswap_addr).await;
 
-    // 4. PancakeSwap V3 Pool
     let pancakeswap = if let Some((pancake_addr, _)) = find_v3_pool_across_fees(provider.clone(), PANCAKE_V3_FACTORY, USDC_BASE, target_token).await {
         resolve_pool_info(provider.clone(), pancake_addr).await
     } else {
         None
     };
-
-    println!("🔍 [DYNAMIC DISCOVERY] Pair {}: Aero({:?}) UniV3({:?}) BaseSwap({:?}) PancakeV3({:?}) | Fee: {}",
-        symbol, aero.is_some(), uni_v3.is_some(), baseswap.is_some(), pancakeswap.is_some(), selected_fee);
 
     TokenPairConfig {
         symbol,
@@ -388,7 +429,6 @@ async fn fetch_live_market_data_for_pair<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    // 1. Aerodrome
     let mut price_aero = 0.0;
     if let Some(pool) = &config.aero {
         let pair = IUniswapV2Pair::new(pool.pool_address, http_provider.clone());
@@ -404,7 +444,6 @@ where
         }
     }
 
-    // 2. Uniswap V3
     let mut price_v3 = 0.0;
     if let Some(pool) = &config.uni_v3 {
         let v3_pool = IUniswapV3Pool::new(pool.pool_address, http_provider.clone());
@@ -419,7 +458,6 @@ where
         }
     }
 
-    // 3. BaseSwap
     let mut price_baseswap = 0.0;
     if let Some(pool) = &config.baseswap {
         let pair = IUniswapV2Pair::new(pool.pool_address, http_provider.clone());
@@ -435,7 +473,6 @@ where
         }
     }
 
-    // 4. PancakeSwap V3
     let mut price_pancake = 0.0;
     if let Some(pool) = &config.pancakeswap {
         let v3_pool = IUniswapV3Pool::new(pool.pool_address, http_provider.clone());
@@ -596,6 +633,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         token1: pair_cfg.target_token,
                     }];
 
+                    // تمرير الأسعار الفورية الحالية للنظام ليقوم بالتوجيه الديناميكي بين المنصات النشطة
                     let system = CausalCollapseSystem::new(
                         nodes,
                         vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, BASESWAP_ROUTER, AERODROME_ROUTER],
@@ -603,6 +641,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         loan_amount,
                         USDC_BASE,
                         pair_cfg.clone(),
+                        (p_aero, p_v3, p_baseswap, p_pancake),
                     );
 
                     let optimized_path = system.execute_collapse();

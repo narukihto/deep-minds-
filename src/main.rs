@@ -20,24 +20,35 @@ const AERO_BASE: Address = address!("940181a94A35A4569E4529A3CDfB74e38FD98631");
 const DEGEN_BASE: Address = address!("4ed4e862860bed51a9570b96d89af5e1b0efefed");
 const CBBTC_BASE: Address = address!("cbB7C0000aB88B473b1f5aFd9ef808440eed33Bf");
 
-// موجهات المنصات الرئيسية (Routers) المعتمدة في القائمة البيضاء لعقدك الذكي
+// موجهات المنصات الرئيسية (Routers) في القائمة البيضاء
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
 const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
 const BASESWAP_ROUTER: Address = address!("0x327Df1e6de05895D2Ab08513aADD931325260A99"); 
 const PANCAKESWAP_V3_ROUTER: Address = address!("0x1b81D678ffb9C0263b24A97847620C99d213eB14"); 
 
+// عناوين مصانع المجمعات (Factory Contracts) على شبكة Base
+const AERO_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFECe40Da");
+const UNI_V3_FACTORY: Address = address!("0x33128a8f17816e9fc00045fcd9967648d65ea671");
+const BASESWAP_FACTORY: Address = address!("0xF6Da9A378D0A1C806b747068ef040DEB92fD4925");
+const PANCAKE_V3_FACTORY: Address = address!("0x0BFbCF9fa8f9C73B0F9Cc8f75298816cDe5c7960");
+
+#[derive(Debug, Clone)]
+pub struct PoolInfo {
+    pub pool_address: Address,
+    pub token0: Address,
+    pub token1: Address,
+}
+
 #[derive(Debug, Clone)]
 pub struct TokenPairConfig {
     pub symbol: &'static str,
     pub target_token: Address,
-    pub aero_pool: Address,
-    pub uni_v3_pool: Address,
-    pub baseswap_pool: Address,
-    pub pancakeswap_pool: Address,
     pub decimals: u32,
     pub fee_tier_v3: u32,
-    pub token0: Address,
-    pub token1: Address,
+    pub aero: Option<PoolInfo>,
+    pub uni_v3: Option<PoolInfo>,
+    pub baseswap: Option<PoolInfo>,
+    pub pancakeswap: Option<PoolInfo>,
 }
 
 #[derive(Clone, Debug)]
@@ -97,7 +108,7 @@ impl CausalCollapseSystem {
             from: self.borrowed_token,
             to: self.pair_config.target_token,
             stable: false,
-            factory: address!("420DD381b31aEf6683db6B902084cB0FFECe40Da"),
+            factory: AERO_FACTORY,
         };
 
         let payload_leg1 = IAerodromeRouter::swapExactTokensForTokensCall {
@@ -153,12 +164,31 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
 
 sol! {
     #[sol(rpc)]
+    contract IUniswapV2Factory {
+        function getPair(address tokenA, address tokenB) external view returns (address pair);
+    }
+
+    #[sol(rpc)]
+    contract IAerodromeFactory {
+        function getPool(address tokenA, address tokenB, bool stable) external view returns (address pool);
+    }
+
+    #[sol(rpc)]
+    contract IUniswapV3Factory {
+        function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool);
+    }
+
+    #[sol(rpc)]
     contract IUniswapV2Pair {
+        function token0() external view returns (address);
+        function token1() external view returns (address);
         function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
     }
 
     #[sol(rpc)]
     contract IUniswapV3Pool {
+        function token0() external view returns (address);
+        function token1() external view returns (address);
         function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked);
     }
 
@@ -197,91 +227,109 @@ sol! {
     }
 }
 
-pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
-    vec![
-        // 1. WETH / USDC
-        TokenPairConfig {
-            symbol: "WETH",
-            target_token: WETH_BASE,
-            aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"),
-            uni_v3_pool: address!("0x6c561b446416e1a00e8e93e221854d6ea4171372"),
-            baseswap_pool: address!("ab067c01c7f5734da168c699ae9d23a4512c9fdb"),
-            pancakeswap_pool: address!("72ab388e2e2f6facef59e3c3fa2c4e29011c2d38"),
-            decimals: 18,
-            fee_tier_v3: 500,
-            token0: WETH_BASE,
-            token1: USDC_BASE,
-        },
-        // 2. AERO / USDC
-        TokenPairConfig {
-            symbol: "AERO",
-            target_token: AERO_BASE,
-            aero_pool: address!("0x6cdcb1c4a4d1c3c6d054b27ac5b77e89eafb971d"),
-            uni_v3_pool: address!("0x3154Cf16ccdb4C6d922629664174b904d80F2Cb3"), 
-            baseswap_pool: address!("0x2223f9fe624f69da4d8256a7bcc9104fba7f8f75"), 
-            pancakeswap_pool: address!("0x1b81D678ffb9C0263b24A97847620C99d213eB14"), 
-            decimals: 18,
-            fee_tier_v3: 3000,
-            token0: USDC_BASE,
-            token1: AERO_BASE,
-        },
-        // 3. DEGEN / USDC
-        TokenPairConfig {
-            symbol: "DEGEN",
-            target_token: DEGEN_BASE,
-            aero_pool: address!("0xbe6d8f0f10e44cbcae95febcebcd8e1a76dedab7"),
-            uni_v3_pool: address!("0x29715d8d279cab143a12ff515b40a2b35d7bad37"),
-            baseswap_pool: address!("0x88a646c2438c86d88ae52b1bdfba2f4dc4a84e62"),
-            pancakeswap_pool: address!("0x29715d8d279cab143a12ff515b40a2b35d7bad37"),
-            decimals: 18,
-            fee_tier_v3: 10000,
-            token0: DEGEN_BASE,
-            token1: USDC_BASE,
-        },
-        // 4. cbBTC / USDC
-        TokenPairConfig {
-            symbol: "cbBTC",
-            target_token: CBBTC_BASE,
-            aero_pool: address!("0x11b8c8d62cbfa4a8d4a9cf4e46358c97dd878e69"),
-            uni_v3_pool: address!("0xfbb6eed8e7aa03b138556eedaf5d271a5e1e43ef"),
-            baseswap_pool: address!("0xfbb6eed8e7aa03b138556eedaf5d271a5e1e43ef"),
-            pancakeswap_pool: address!("0xfbb6eed8e7aa03b138556eedaf5d271a5e1e43ef"),
-            decimals: 8,
-            fee_tier_v3: 500,
-            token0: USDC_BASE,
-            token1: CBBTC_BASE,
-        },
-    ]
+// دالة الاكتشاف الديناميكي للمجمعات عبر عقود الـ Factory
+async fn resolve_pool_info<P>(
+    provider: P,
+    pool_address: Address,
+) -> Option<PoolInfo>
+where
+    P: Provider<Ethereum> + Clone,
+{
+    if pool_address.is_zero() {
+        return None;
+    }
+    let pair_contract = IUniswapV2Pair::new(pool_address, provider);
+    let t0 = pair_contract.token0().call().await.ok().map(|r| r._0)?;
+    let t1 = pair_contract.token1().call().await.ok().map(|r| r._0)?;
+
+    Some(PoolInfo {
+        pool_address,
+        token0: t0,
+        token1: t1,
+    })
 }
 
-// دالة لحساب السعر بدقة لبروتوكولات الـ V2
+async fn resolve_token_pair<P>(
+    provider: P,
+    symbol: &'static str,
+    target_token: Address,
+    decimals: u32,
+    fee_tier_v3: u32,
+) -> TokenPairConfig
+where
+    P: Provider<Ethereum> + Clone,
+{
+    // 1. Aerodrome Pool (V2 Volatile)
+    let aero_factory = IAerodromeFactory::new(AERO_FACTORY, provider.clone());
+    let aero_addr = aero_factory.getPool(USDC_BASE, target_token, false).call().await
+        .map(|r| r.pool).unwrap_or_else(|_| Address::ZERO);
+    let aero = resolve_pool_info(provider.clone(), aero_addr).await;
+
+    // 2. Uniswap V3 Pool
+    let uni_factory = IUniswapV3Factory::new(UNI_V3_FACTORY, provider.clone());
+    let uni_addr = uni_factory.getPool(USDC_BASE, target_token, fee_tier_v3).call().await
+        .map(|r| r.pool).unwrap_or_else(|_| Address::ZERO);
+    let uni_v3 = resolve_pool_info(provider.clone(), uni_addr).await;
+
+    // 3. BaseSwap Pool (V2)
+    let baseswap_factory = IUniswapV2Factory::new(BASESWAP_FACTORY, provider.clone());
+    let baseswap_addr = baseswap_factory.getPair(USDC_BASE, target_token).call().await
+        .map(|r| r.pair).unwrap_or_else(|_| Address::ZERO);
+    let baseswap = resolve_pool_info(provider.clone(), baseswap_addr).await;
+
+    // 4. PancakeSwap V3 Pool
+    let pancake_factory = IUniswapV3Factory::new(PANCAKE_V3_FACTORY, provider.clone());
+    let pancake_addr = pancake_factory.getPool(USDC_BASE, target_token, fee_tier_v3).call().await
+        .map(|r| r.pool).unwrap_or_else(|_| Address::ZERO);
+    let pancakeswap = resolve_pool_info(provider.clone(), pancake_addr).await;
+
+    println!("🔍 [DYNAMIC DISCOVERY] Initialized pair {}: Aero({:?}) UniV3({:?}) BaseSwap({:?}) PancakeV3({:?})",
+        symbol, aero.is_some(), uni_v3.is_some(), baseswap.is_some(), pancakeswap.is_some());
+
+    TokenPairConfig {
+        symbol,
+        target_token,
+        decimals,
+        fee_tier_v3,
+        aero,
+        uni_v3,
+        baseswap,
+        pancakeswap,
+    }
+}
+
+// حساب السعر لـ V2 ديناميكياً حسب token0 و token1
 fn calculate_v2_price(
     reserve0: u128,
     reserve1: u128,
     token0: Address,
     token1: Address,
+    target_token: Address,
     target_decimals: u32,
 ) -> f64 {
     if reserve0 == 0 || reserve1 == 0 {
         return 0.0;
     }
     let usdc_decimals = 6;
-    
-    let r0 = reserve0 as f64 / 10f64.powi(if token0 == USDC_BASE { usdc_decimals } else { target_decimals } as i32);
-    let r1 = reserve1 as f64 / 10f64.powi(if token1 == USDC_BASE { usdc_decimals } else { target_decimals } as i32);
+    let d0 = if token0 == USDC_BASE { usdc_decimals } else { target_decimals };
+    let d1 = if token1 == USDC_BASE { usdc_decimals } else { target_decimals };
 
-    if token0 == USDC_BASE {
+    let r0 = reserve0 as f64 / 10f64.powi(d0 as i32);
+    let r1 = reserve1 as f64 / 10f64.powi(d1 as i32);
+
+    if target_token == token1 {
         r0 / r1
     } else {
         r1 / r0
     }
 }
 
-// دالة لحساب السعر بدقة لبروتوكولات الـ V3 عبر sqrtPriceX96
+// حساب السعر لـ V3 ديناميكياً حسب token0 و token1
 fn calculate_v3_price(
     sqrt_price_x96: _U160,
     token0: Address,
     token1: Address,
+    target_token: Address,
     target_decimals: u32,
 ) -> f64 {
     let sqrt_f64 = sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0);
@@ -295,12 +343,12 @@ fn calculate_v3_price(
     let d0 = if token0 == USDC_BASE { usdc_decimals } else { target_decimals };
     let d1 = if token1 == USDC_BASE { usdc_decimals } else { target_decimals };
 
-    let adjusted_price = price_raw * 10f64.powi((d0 as i32) - (d1 as i32));
+    let price_t1_in_t0 = price_raw * 10f64.powi((d0 as i32) - (d1 as i32));
 
-    if token0 == USDC_BASE {
-        if adjusted_price > 0.0 { 1.0 / adjusted_price } else { 0.0 }
+    if target_token == token1 {
+        price_t1_in_t0
     } else {
-        adjusted_price
+        if price_t1_in_t0 > 0.0 { 1.0 / price_t1_in_t0 } else { 0.0 }
     }
 }
 
@@ -311,54 +359,66 @@ async fn fetch_live_market_data_for_pair<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    // 1. Aerodrome Price (V2)
+    // 1. Aerodrome
     let mut price_aero = 0.0;
-    let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
-    if let Ok(res) = aero_pair.getReserves().call().await {
-        price_aero = calculate_v2_price(
-            res.reserve0.to::<u128>(),
-            res.reserve1.to::<u128>(),
-            config.token0,
-            config.token1,
-            config.decimals,
-        );
+    if let Some(pool) = &config.aero {
+        let pair = IUniswapV2Pair::new(pool.pool_address, http_provider.clone());
+        if let Ok(res) = pair.getReserves().call().await {
+            price_aero = calculate_v2_price(
+                res.reserve0.to::<u128>(),
+                res.reserve1.to::<u128>(),
+                pool.token0,
+                pool.token1,
+                config.target_token,
+                config.decimals,
+            );
+        }
     }
 
-    // 2. Uniswap V3 Price
+    // 2. Uniswap V3
     let mut price_v3 = 0.0;
-    let v3_pool = IUniswapV3Pool::new(config.uni_v3_pool, http_provider.clone());
-    if let Ok(slot0) = v3_pool.slot0().call().await {
-        price_v3 = calculate_v3_price(
-            slot0.sqrtPriceX96,
-            config.token0,
-            config.token1,
-            config.decimals,
-        );
+    if let Some(pool) = &config.uni_v3 {
+        let v3_pool = IUniswapV3Pool::new(pool.pool_address, http_provider.clone());
+        if let Ok(slot0) = v3_pool.slot0().call().await {
+            price_v3 = calculate_v3_price(
+                slot0.sqrtPriceX96,
+                pool.token0,
+                pool.token1,
+                config.target_token,
+                config.decimals,
+            );
+        }
     }
 
-    // 3. BaseSwap Price (V2)
+    // 3. BaseSwap
     let mut price_baseswap = 0.0;
-    let baseswap_pair = IUniswapV2Pair::new(config.baseswap_pool, http_provider.clone());
-    if let Ok(res) = baseswap_pair.getReserves().call().await {
-        price_baseswap = calculate_v2_price(
-            res.reserve0.to::<u128>(),
-            res.reserve1.to::<u128>(),
-            config.token0,
-            config.token1,
-            config.decimals,
-        );
+    if let Some(pool) = &config.baseswap {
+        let pair = IUniswapV2Pair::new(pool.pool_address, http_provider.clone());
+        if let Ok(res) = pair.getReserves().call().await {
+            price_baseswap = calculate_v2_price(
+                res.reserve0.to::<u128>(),
+                res.reserve1.to::<u128>(),
+                pool.token0,
+                pool.token1,
+                config.target_token,
+                config.decimals,
+            );
+        }
     }
 
-    // 4. PancakeSwap V3 Price
+    // 4. PancakeSwap V3
     let mut price_pancake = 0.0;
-    let pancake_pool = IUniswapV3Pool::new(config.pancakeswap_pool, http_provider.clone());
-    if let Ok(slot0) = pancake_pool.slot0().call().await {
-        price_pancake = calculate_v3_price(
-            slot0.sqrtPriceX96,
-            config.token0,
-            config.token1,
-            config.decimals,
-        );
+    if let Some(pool) = &config.pancakeswap {
+        let v3_pool = IUniswapV3Pool::new(pool.pool_address, http_provider.clone());
+        if let Ok(slot0) = v3_pool.slot0().call().await {
+            price_pancake = calculate_v3_price(
+                slot0.sqrtPriceX96,
+                pool.token0,
+                pool.token1,
+                config.target_token,
+                config.decimals,
+            );
+        }
     }
 
     let mut prices = vec![price_aero, price_v3, price_baseswap, price_pancake];
@@ -469,7 +529,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect_ws(ws)
         .await?;
 
-    let monitored_pairs = get_monitored_pairs();
+    println!("🔄 Resolving Pool Addresses Dynamically from Factory Contracts on Base...");
+    
+    // الاكتشاف الديناميكي لجميع الأزواج عند الإقلاع
+    let mut monitored_pairs = Vec::new();
+    monitored_pairs.push(resolve_token_pair(http_provider.clone(), "WETH", WETH_BASE, 18, 500).await);
+    monitored_pairs.push(resolve_token_pair(http_provider.clone(), "AERO", AERO_BASE, 18, 3000).await);
+    monitored_pairs.push(resolve_token_pair(http_provider.clone(), "DEGEN", DEGEN_BASE, 18, 10000).await);
+    monitored_pairs.push(resolve_token_pair(http_provider.clone(), "cbBTC", CBBTC_BASE, 8, 500).await);
+
     let sub = ws_provider.subscribe_blocks().await?;
     let mut stream = sub.into_stream();
     let mut block_counter = 0u64;

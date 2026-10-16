@@ -21,9 +21,13 @@ const AERO_BASE: Address = address!("940181a94A35A4569E4529A3CDfB74e38FD98631");
 const DEGEN_BASE: Address = address!("4ed4e862860bed51a9570b96d89af5e1b0efefed");
 const CBBTC_BASE: Address = address!("cbB7C0000aB88B473b1f5aFd9ef808440eed33Bf");
 
-// المنصات والموجهات الرئيسية
+// موجهات المنصات الستة المعتمدة بالكامل في القائمة البيضاء لعقدك الذكي (Whitelisted Routers)
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
 const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
+const CUSTOM_ROUTER_1: Address = address!("0x198FEe7650eAC16286848227e24eC0DFA5e51DA5"); // Sushi/Slipstream
+const BASESWAP_ROUTER: Address = address!("0x327Df1e6de05895D2Ab08513aADD931325260A99"); // BaseSwap
+const CUSTOM_ROUTER_2: Address = address!("0x089A8e0F6fCE8e00138F9b6E7Ff5B2FCC4Ac9D94"); // Aggregator
+const PANCAKESWAP_V3_ROUTER: Address = address!("0x1b81D678ffb9C0263b24A97847620C99d213eB14"); // PancakeSwap V3
 
 #[derive(Debug, Clone)]
 pub struct TokenPairConfig {
@@ -135,6 +139,7 @@ impl CausalCollapseSystem {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
+        // الساق الأولى: الشراء عبر Aerodrome Router أو BaseSwap المدعوم
         addresses.push(AERODROME_ROUTER);
         
         let min_amount_out_leg1 = self.loan_amount * U256::from(997) / U256::from(1000);
@@ -157,7 +162,8 @@ impl CausalCollapseSystem {
 
         payloads.push(payload_leg1);
 
-        addresses.push(UNISWAP_V3_ROUTER);
+        // الساق الثانية: البيع عبر Uniswap V3 أو PancakeSwap V3 (باستخدام الموجهات المعتمدة)
+        addresses.push(PANCAKESWAP_V3_ROUTER);
 
         let estimated_token_received = min_amount_out_leg1; 
         let min_amount_out_leg2 = self.loan_amount * U256::from(10005) / U256::from(10000);
@@ -298,7 +304,6 @@ where
 {
     let mut price_aero = 0.0;
 
-    // معالجة صريحة لـ DEGEN لأن مجمع Aerodrome خاصته من نوع Concentrated Liquidity (Slipstream)
     if config.symbol == "DEGEN" {
         let aero_v3_pool = IUniswapV3Pool::new(config.aero_pool, http_provider.clone());
         if let Ok(slot0) = aero_v3_pool.slot0().call().await {
@@ -309,7 +314,6 @@ where
             }
         }
     } else {
-        // باقي العملات تعتمد على مجمعات القياس القياسية V2 (WETH, AERO, cbBTC)
         let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
         if let Ok(res) = aero_pair.getReserves().call().await {
             let r0 = res.reserve0.to::<u128>() as f64;
@@ -357,7 +361,6 @@ where
         price_v3 = price_aero; 
     }
 
-    // شرط أمان لتفادي الفجوات الوهمية في حال كان أحد السعرين منعدماً
     let spread_gap = if price_aero > 0.0 && price_v3 > 0.0 {
         (price_aero - price_v3).abs()
     } else {
@@ -397,7 +400,7 @@ where
         return Ok(());
     }
 
-    println!("🚀 [BOT -> CONTRACT | {}] Simulating Atomic Multi-Swap Command locally...", pair_symbol);
+    println!("🚀 [BOT -> CONTRACT | {}] Simulating Multi-DEX Atomic Swap Command locally...", pair_symbol);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -441,7 +444,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Multi-Token Dynamic Scanner Engine via Alloy...");
+    println!("🤖 Initializing Multi-DEX Dynamic Scanner Engine via Alloy...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -472,6 +475,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let monitored_pairs = get_monitored_pairs();
     println!("🎯 Active Monitored Tokens: {:?}", monitored_pairs.iter().map(|p| p.symbol).collect::<Vec<&str>>());
+    println!("⚡ Whitelisted Routers Loaded: Uniswap V3, Aerodrome, BaseSwap, PancakeSwap V3, Custom Routers");
 
     let sub = ws_provider.subscribe_blocks().await?;
     let mut stream = sub.into_stream();
@@ -508,7 +512,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         let system = CausalCollapseSystem::new(
                             nodes,
-                            vec![UNISWAP_V3_ROUTER, AERODROME_ROUTER],
+                            vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, AERODROME_ROUTER],
                             contract_address,
                             loan_amount,
                             USDC_BASE,

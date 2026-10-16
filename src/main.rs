@@ -519,7 +519,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         USDC_BASE,
                         loan_amount,
                         spread_gap,
-                        pair_symbol: pair_cfg.symbol,
+                        pair_cfg.symbol,
                     ).await;
                 }
             }

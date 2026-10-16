@@ -599,7 +599,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let anvil_fork_url = std::env::var("ANVIL_RPC_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string());
 
-    // جلب المفتاح الحقيقي من متغير البيئة PRIVATE_KEY مع توفير بديل آمن إن لم يوجد
     let private_key_str = std::env::var("PRIVATE_KEY")
         .unwrap_or_else(|_| "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string());
     
@@ -627,7 +626,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let mut monitored_pairs = Vec::new();
     monitored_pairs.push(resolve_token_pair(live_provider.clone(), "WETH", WETH_BASE, 18).await);
-    monitored_pairs.push(resolve_token_pair(live_provider.clone(), "AERO", AERO_BASE, 18)..await); // تم التصحيح
+    monitored_pairs.push(resolve_token_pair(live_provider.clone(), "AERO", AERO_BASE, 18).await);
     monitored_pairs.push(resolve_token_pair(live_provider.clone(), "DEGEN", DEGEN_BASE, 18).await);
     monitored_pairs.push(resolve_token_pair(live_provider.clone(), "cbBTC", CBBTC_BASE, 8).await);
 

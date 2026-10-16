@@ -13,20 +13,17 @@ use alloy::{
 type _U24 = Uint<24, 1>;
 type _U160 = Uint<160, 3>;
 
-// الرموز الأساسية والعناوين الدقيقة على شبكة Base
 const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
 const AERO_BASE: Address = address!("940181a94A35A4569E4529A3CDfB74e38FD98631");
 const DEGEN_BASE: Address = address!("4ed4e862860bed51a9570b96d89af5e1b0efefed");
 const CBBTC_BASE: Address = address!("cbB7C0000aB88B473b1f5aFd9ef808440eed33Bf");
 
-// موجهات المنصات الرئيسية (Routers) في القائمة البيضاء
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
 const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
 const BASESWAP_ROUTER: Address = address!("0x327Df1e6de05895D2Ab08513aADD931325260A99"); 
 const PANCAKESWAP_V3_ROUTER: Address = address!("0x1b81D678ffb9C0263b24A97847620C99d213eB14"); 
 
-// عناوين مصانع المجمعات (Factory Contracts) الرسمية والدقيقة لشبكة Base Mainnet
 const AERO_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFECe40Da");
 const UNI_V3_FACTORY: Address = address!("0x1F98431c8aD98523631AE4a59f267346ea31F984");
 const BASESWAP_FACTORY: Address = address!("0xFda619b6d20975be80A10332cd39b9a4b0FAa8BB");
@@ -517,7 +514,7 @@ async fn trigger_on_chain_arbitrage<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    let (addresses, payloads, buy_price, _sell_price) = target_path;
+    let (addresses, payloads, _buy_price, _sell_price) = target_path;
     if loan_amount == U256::ZERO || addresses.is_empty() {
         return Ok(());
     }
@@ -526,24 +523,7 @@ where
         return Ok(());
     }
 
-    let loan_numeric = 5000.0; 
-    let estimated_aave_fee = loan_numeric * 0.0005; 
-    let estimated_dex_fees = loan_numeric * 0.0041; // تم تعديلها لتصبح الرسوم المقدرة تقريباً $23.00
-    let total_cost = estimated_aave_fee + estimated_dex_fees;
-    let theoretical_gross_profit = (spread_gap / buy_price) * loan_numeric;
-
-    println!("📊 [ANVIL SIMULATOR - {}] قرض: ${} | ربح نظري: ${:.2} | رسوم مخفضة: ${:.2}",
-        pair_symbol, loan_numeric, theoretical_gross_profit, total_cost
-    );
-
-    if theoretical_gross_profit <= total_cost {
-        println!("🛡 [LOCAL REJECT - {}]: الربح النظري (${:.2}) لا يغطي الرسوم (${:.2}). تم تخطي الصفقة.",
-            pair_symbol, theoretical_gross_profit, total_cost
-        );
-        return Ok(());
-    }
-
-    println!("🚀 [LOCAL FORK SIMULATION - {}] الربح تخطى الرسوم! جاري إرسال المحاكاة لعقد Aave الحقيقي...", pair_symbol);
+    println!("🔥 [UNCONDITIONAL SIMULATION TRIGGER - {}] تم إلغاء قيود الفحص المحلي. إرسال الصفقة للمحاكاة الفورية على العقد...", pair_symbol);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -563,19 +543,15 @@ where
 
     match aave_builder.call().await {
         Ok(_) => {
-            println!("✅ Local Fork Simulation PASSED for {}! Dispatching Real Transaction to Aave...", pair_symbol);
+            println!("✅ [SUCCESS!] المحاكاة الفعلية على العقد نجحت تماماً لـ {}! جاري إرسال المعاملة الفعلية للشبكة...", pair_symbol);
             if let Ok(pending_tx) = aave_builder.send().await {
-                println!("✅ Tx Dispatched Successfully! Hash: {:?}", pending_tx.tx_hash());
+                println!("🚀 [TX DISPATCHED SUCCESSFULLY!]: Hash: {:?}", pending_tx.tx_hash());
             }
         }
         Err(e) => {
             let err_string = format!("{:?}", e);
-            println!("🛡 [ANVIL DEEP REVERT ANALYSIS - {}]: سبب الرفض الصريح من العقد:", pair_symbol);
-            println!("   -> Raw Revert Data: {}", err_string);
-            
-            if err_string.contains("ArbitrageUnprofitable") {
-                println!("   [النتيجة]: العقد رفض التنفيذ بسبب انزلاق سعري حقيقي (Price Impact) أكل الهامش.");
-            }
+            println!("🛡 [CONTRACT REVERT DETAILS - {}]: المحاكاة وصلت للعقد الذكي ولكنه رفض التنفيذ. السبب الحرفي:", pair_symbol);
+            println!("   -> {}", err_string);
         }
     }
 
@@ -584,7 +560,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Multi-DEX Cross-Matrix Scanner Engine with Optimized Threshold ($23)...");
+    println!("🤖 Initializing Unconditional Arbitrage Bot Engine (Direct Execution Mode)...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());

@@ -296,35 +296,44 @@ async fn fetch_live_market_data_for_pair<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
     let mut price_aero = 0.0;
-    if let Ok(res) = aero_pair.getReserves().call().await {
-        let r0 = res.reserve0.to::<u128>() as f64;
-        let r1 = res.reserve1.to::<u128>() as f64;
-        
-        if r0 > 0.0 && r1 > 0.0 {
-            match config.symbol {
-                "WETH" => {
-                    let r0_f = r0 / 10f64.powi(18);
-                    let r1_f = r1 / 10f64.powi(6);
-                    if r0_f > 0.0 { price_aero = r1_f / r0_f; }
+
+    // معالجة صريحة لـ DEGEN لأن مجمع Aerodrome خاصته من نوع Concentrated Liquidity (Slipstream)
+    if config.symbol == "DEGEN" {
+        let aero_v3_pool = IUniswapV3Pool::new(config.aero_pool, http_provider.clone());
+        if let Ok(slot0) = aero_v3_pool.slot0().call().await {
+            let sqrt_price_x96 = slot0.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0);
+            if sqrt_price_x96 > 0.0 {
+                let ratio = sqrt_price_x96 / (2.0f64.powi(96));
+                price_aero = ratio * ratio * 10f64.powi(12);
+            }
+        }
+    } else {
+        // باقي العملات تعتمد على مجمعات القياس القياسية V2 (WETH, AERO, cbBTC)
+        let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
+        if let Ok(res) = aero_pair.getReserves().call().await {
+            let r0 = res.reserve0.to::<u128>() as f64;
+            let r1 = res.reserve1.to::<u128>() as f64;
+            
+            if r0 > 0.0 && r1 > 0.0 {
+                match config.symbol {
+                    "WETH" => {
+                        let r0_f = r0 / 10f64.powi(18);
+                        let r1_f = r1 / 10f64.powi(6);
+                        if r0_f > 0.0 { price_aero = r1_f / r0_f; }
+                    }
+                    "AERO" => {
+                        let r0_f = r0 / 10f64.powi(6);
+                        let r1_f = r1 / 10f64.powi(18);
+                        if r0_f > 0.0 { price_aero = r1_f / r0_f; }
+                    }
+                    "cbBTC" => {
+                        let r0_f = r0 / 10f64.powi(6);
+                        let r1_f = r1 / 10f64.powi(8);
+                        if r1_f > 0.0 { price_aero = r0_f / r1_f; }
+                    }
+                    _ => {}
                 }
-                "AERO" => {
-                    let r0_f = r0 / 10f64.powi(6);  // USDC
-                    let r1_f = r1 / 10f64.powi(18); // AERO
-                    if r0_f > 0.0 { price_aero = r1_f / r0_f; }
-                }
-                "DEGEN" => {
-                    let r0_f = r0 / 10f64.powi(18); // DEGEN
-                    let r1_f = r1 / 10f64.powi(6);  // USDC
-                    if r1_f > 0.0 { price_aero = r0_f / r1_f; } else if r0_f > 0.0 { price_aero = r0_f; }
-                }
-                "cbBTC" => {
-                    let r0_f = r0 / 10f64.powi(6);  // USDC
-                    let r1_f = r1 / 10f64.powi(8);  // cbBTC
-                    if r1_f > 0.0 { price_aero = r0_f / r1_f; }
-                }
-                _ => {}
             }
         }
     }
@@ -338,9 +347,6 @@ where
             let raw_price = ratio * ratio;
             
             price_v3 = match config.symbol {
-                "WETH" => raw_price * 10f64.powi(12),
-                "AERO" => raw_price * 10f64.powi(12),
-                "DEGEN" => raw_price * 10f64.powi(12),
                 "cbBTC" => raw_price * 10f64.powi(4),
                 _ => raw_price * 10f64.powi(12),
             };
@@ -351,7 +357,13 @@ where
         price_v3 = price_aero; 
     }
 
-    let spread_gap = (price_aero - price_v3).abs();
+    // شرط أمان لتفادي الفجوات الوهمية في حال كان أحد السعرين منعدماً
+    let spread_gap = if price_aero > 0.0 && price_v3 > 0.0 {
+        (price_aero - price_v3).abs()
+    } else {
+        0.0
+    };
+
     Ok((price_aero, price_v3, spread_gap))
 }
 

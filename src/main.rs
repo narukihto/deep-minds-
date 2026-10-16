@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use num_bigint::BigUint;
 use num_traits::One;
 use futures_util::StreamExt;
@@ -264,7 +265,6 @@ sol! {
     contract BaseAtomicArbitrage {
         function triggerAaveArbitrage(address tokenToBorrow, uint256 loanAmount, bytes calldata swapPathData) external;
         
-        // الأخطاء المخصصة المحتملة لاستخراج السبب بدقة عبر Anvil Fork
         error ArbitrageUnprofitable(uint256 expected, uint256 actual);
         error InsufficientLiquidity();
         error TargetUnauthorized();
@@ -541,7 +541,6 @@ where
         ),
     ]).abi_encode();
 
-    // 1. إجراء المحاكاة المحلية عبر مزود Anvil Fork
     let sim_contract = BaseAtomicArbitrage::new(contract_address, simulation_provider);
     let sim_call = sim_contract
         .triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
@@ -552,7 +551,6 @@ where
         Ok(_) => {
             println!("✅ [ANVIL SIMULATION PASSED!] النجاح مؤكد محلياً لـ {}! جاري إرسال المعاملة الحية للشبكة...", pair_symbol);
             
-            // 2. إذا نجحت محاكاة Anvil، نرسل المعاملة عبر المزود الحي الحقيقي
             let live_contract = BaseAtomicArbitrage::new(contract_address, live_provider);
             let live_tx = live_contract
                 .triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
@@ -593,7 +591,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let alchemy_wss_url = std::env::var("ALCHEMY_WSS_URL")
         .unwrap_or_else(|_| "ws://127.0.0.1:8545".to_string());
     
-    // عنوان Anvil المحلي المخصص للمحاكاة (مثال: http://127.0.0.1:8545)
     let anvil_fork_url = std::env::var("ANVIL_RPC_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string());
 
@@ -603,19 +600,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let signer_address = signer.address();
     let wallet = EthereumWallet::from(signer.clone());
 
-    // مزود الشبكة الحية للبث والإرسال
     let live_provider = ProviderBuilder::new()
         .wallet(wallet.clone())
         .connect_http(primary_http_url.parse()?);
 
-    // مزود محاكاة Anvil Fork المحلي
     let anvil_provider = ProviderBuilder::new()
         .wallet(wallet)
         .connect_http(anvil_fork_url.parse()?);
 
     let ws = alloy::providers::WsConnect::new(alchemy_wss_url);
     let ws_provider = ProviderBuilder::new()
-        .wallet(PrivateKeySigner::from_str(&private_key_str)?) // إعادة بناء wallet للـ Ws
+        .wallet(private_key_str.parse::<PrivateKeySigner>()?)
         .connect_ws(ws)
         .await?;
 
@@ -631,7 +626,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = sub.into_stream();
     let mut block_counter = 0u64;
 
-    let loan_amount = U256::from(5_000_000_000u64); // 5,000 USDC
+    let loan_amount = U256::from(5_000_000_000u64);
 
     while let Some(block) = stream.next().await {
         block_counter += 1;

@@ -120,9 +120,9 @@ impl CausalCollapseSystem {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        // الخطوة الأولى: الشراء (السماح بانزلاق سعر بسيط 0.5% لضمان نجاح الصفقة محلياً)
+        // 1. حساب الشراء مع انزلاق سعر آمن 0.3%
         addresses.push(buy_dex.2);
-        let min_amount_out_leg1 = self.loan_amount * U256::from(995) / U256::from(1000);
+        let min_amount_out_leg1 = self.loan_amount * U256::from(997) / U256::from(1000);
 
         let payload_leg1 = if buy_dex.0 == "Aero" || buy_dex.0 == "BaseSwap" {
             let aero_route = IAerodromeRouter::Route {
@@ -157,9 +157,10 @@ impl CausalCollapseSystem {
         };
         payloads.push(payload_leg1);
 
-        // الخطوة الثانية: البيع (تغطية أصل القرض والرسوم بدقة مع هامش ربح آمن)
+        // 2. حساب البيع مع تغطية أصل القرض + رسوم Aave V3 (0.09%) + رسوم DEX + هامش ربح نظيف
         addresses.push(sell_dex.2);
-        let min_amount_out_leg2 = self.loan_amount * U256::from(10002) / U256::from(10000);
+        // Aave V3 Flash Loan fee on Base is ~0.05% to 0.09%. نستخدم 10012 لضمان تغطية رسوم Aave والـ Swaps مع ربح حقيقي
+        let min_amount_out_leg2 = self.loan_amount * U256::from(10012) / U256::from(10000);
 
         let payload_leg2 = if sell_dex.0 == "Aero" || sell_dex.0 == "BaseSwap" {
             let aero_route_sell = IAerodromeRouter::Route {
@@ -194,7 +195,7 @@ impl CausalCollapseSystem {
         };
         payloads.push(payload_leg2);
 
-        println!("⚡ [STRICT DYNAMIC ROUTER] Validated Buy on {} (${:.2}) -> Sell on {} (${:.2})", 
+        println!("⚡ [AAVE V3 DYNAMIC ROUTER] Validated Buy on {} (${:.2}) -> Sell on {} (${:.2})", 
             buy_dex.0, buy_dex.1, sell_dex.0, sell_dex.1);
 
         (addresses, payloads)
@@ -270,7 +271,7 @@ sol! {
 
     #[sol(rpc)]
     contract BaseAtomicArbitrage {
-        function triggerBalancerArbitrage(address tokenToBorrow, uint256 loanAmount, bytes calldata swapPathData) external;
+        function triggerAaveArbitrage(address tokenToBorrow, uint256 loanAmount, bytes calldata swapPathData) external;
     }
 }
 
@@ -531,7 +532,7 @@ where
         return Ok(());
     }
 
-    println!("🚀 [BOT -> CONTRACT | {}] Simulating Multi-DEX Arbitrage Command locally...", pair_symbol);
+    println!("🚀 [BOT -> CONTRACT | {}] Simulating Aave V3 Arbitrage Command locally...", pair_symbol);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -544,20 +545,20 @@ where
 
     let contract = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
 
-    let balancer_builder = contract
-        .triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
+    // استدعاء Aave V3 Flash Loan بدلاً من Balancer لزيادة الاستقرار على شبكة Base
+    let aave_builder = contract
+        .triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
         .from(signer_address)
         .gas(1_500_000);
 
-    match balancer_builder.call().await {
+    match aave_builder.call().await {
         Ok(_) => {
-            println!("✅ Local Simulation Passed for {}! Dispatching Real Transaction...", pair_symbol);
-            if let Ok(pending_tx) = balancer_builder.send().await {
+            println!("✅ Local Simulation Passed for {}! Dispatching Real Transaction to Aave...", pair_symbol);
+            if let Ok(pending_tx) = aave_builder.send().await {
                 println!("✅ Tx Dispatched! Hash: {:?}", pending_tx.tx_hash());
             }
         }
         Err(e) => {
-            // طباعة رسالة الخطأ النصية الفعلية القادمة من العقد الذكي إن وجدت
             println!("🛡 [SIMULATION REVERTED - {}]: السبب الفعلي للفشل: {:?}", pair_symbol, e);
         }
     }

@@ -490,10 +490,17 @@ where
     if price_baseswap > 0.0 { valid_prices.push(price_baseswap); }
     if price_pancake > 0.0 { valid_prices.push(price_pancake); }
 
+    // فلترة صارمة: يتم احتساب الفارق فقط إذا وُجد سعران حقيقيان من منصتين مختلفتين، وبحد أقصى منطقي لتجنب الفجوات الوهمية
     let spread_gap = if valid_prices.len() >= 2 {
         let max_p = valid_prices.iter().cloned().fold(0.0, f64::max);
         let min_p = valid_prices.iter().cloned().fold(f64::INFINITY, f64::min);
-        max_p - min_p
+        let diff = max_p - min_p;
+        // إذا كان الفارق منطقياً وصغيراً (أقل من 50 دولار مثلاً كفرصة حقيقية وممكنة)، نعتبره صالحاً
+        if diff > 0.0 && diff < 50.0 {
+            diff
+        } else {
+            0.0
+        }
     } else {
         0.0
     };
@@ -515,11 +522,11 @@ where
     SP: Provider<Ethereum> + Clone,
 {
     let (addresses, payloads, _buy_price, _sell_price) = target_path;
-    if loan_amount == U256::ZERO || addresses.is_empty() {
+    if loan_amount == U256::ZERO || addresses.is_empty() || spread_gap <= 0.0 {
         return Ok(());
     }
 
-    println!("🚀 [WETH FLASHLOAN SIMULATION - {}] جاري محاكاة الفلاش لون بـ WETH...", pair_symbol);
+    println!("🚀 [VALID ARBITRAGE OPPORTUNITY - {}] جاري محاكاة الصفقة بفارق حقيقي: ${:.2}", pair_symbol, spread_gap);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -538,10 +545,10 @@ where
 
     match sim_call.call().await {
         Ok(_) => {
-            println!("🎉 [SUCCESS!] نجحت محاكاة صفقة WETH Flashloan تماماً لـ {}!", pair_symbol);
+            println!("🎉 [SUCCESS!] نجحت محاكاة صفقة الأرباح تماماً لـ {}!", pair_symbol);
         }
         Err(e) => {
-            println!("🛡 [SIMULATION REVERT - {}]: تفاصيل استجابة WETH:", pair_symbol);
+            println!("🛡 [SIMULATION REVERT - {}]: تفاصيل الرفض الحقيقي:", pair_symbol);
             println!("   -> الخطأ الكامل: {:?}", e);
         }
     }
@@ -551,7 +558,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing WETH-Backed FlashLoan Engine...");
+    println!("🤖 Initializing Verified Arbitrage Engine...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -613,11 +620,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(provider.clone(), &pair_cfg).await {
                 println!(
-                    " 📈 [{}] Aero: ${:.2} | UniV3: ${:.2} | BaseSwap: ${:.2} | Pancake: ${:.2} | Active Gap: ${:.2}",
+                    " 📈 [{}] Aero: ${:.2} | UniV3: ${:.2} | BaseSwap: ${:.2} | Pancake: ${:.2} | Verified Gap: ${:.2}",
                     pair_cfg.symbol, p_aero, p_v3, p_baseswap, p_pancake, spread_gap
                 );
 
-                if spread_gap > 0.05 {
+                if spread_gap > 0.01 {
                     let nodes = vec![QuantumNode {
                         id: 1,
                         energy_scale: generate_astronomical_number(1000usize),

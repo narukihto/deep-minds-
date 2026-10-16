@@ -120,7 +120,6 @@ impl CausalCollapseSystem {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        // 1. الشراء مع انزلاق سعر آمن 0.2%
         addresses.push(buy_dex.2);
         let min_amount_out_leg1 = self.loan_amount * U256::from(998) / U256::from(1000);
 
@@ -157,7 +156,6 @@ impl CausalCollapseSystem {
         };
         payloads.push(payload_leg1);
 
-        // 2. البيع مع تغطية القرض + رسوم Aave V3 (0.05%) الهامشية
         addresses.push(sell_dex.2);
         let min_amount_out_leg2 = self.loan_amount * U256::from(10008) / U256::from(10000);
 
@@ -519,7 +517,7 @@ async fn trigger_on_chain_arbitrage<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    let (addresses, payloads, buy_price, sell_price) = target_path;
+    let (addresses, payloads, buy_price, _sell_price) = target_path;
     if loan_amount == U256::ZERO || addresses.is_empty() {
         return Ok(());
     }
@@ -528,18 +526,16 @@ where
         return Ok(());
     }
 
-    // حجم القرض المعدل إلى $5,000 لتخفيض الرسوم الثابتة إلى النصف (~$32.50)
     let loan_numeric = 5000.0; 
-    let estimated_aave_fee = loan_numeric * 0.0005; // 0.05% رسوم Aave
-    let estimated_dex_fees = loan_numeric * 0.006; // 0.6% رسوم سواب مزدوجة
+    let estimated_aave_fee = loan_numeric * 0.0005; 
+    let estimated_dex_fees = loan_numeric * 0.006; 
     let total_cost = estimated_aave_fee + estimated_dex_fees;
     let theoretical_gross_profit = (spread_gap / buy_price) * loan_numeric;
 
-    println!("📊 [OPTIMIZED DEBUGGER - {}] قرض: ${} | ربح إجمالي نظري: ${:.2} | إجمالي الرسوم المنخفضة: ${:.2}",
+    println!("📊 [ANVIL SIMULATOR - {}] قرض: ${} | ربح نظري: ${:.2} | رسوم تقديرية: ${:.2}",
         pair_symbol, loan_numeric, theoretical_gross_profit, total_cost
     );
 
-    // [الفحص المحلي الذقي] التحقق من تغطية الرسوم المخفضة
     if theoretical_gross_profit <= total_cost {
         println!("🛡 [LOCAL REJECT - {}]: الربح النظري (${:.2}) لا يغطي الرسوم (${:.2}). تم تخطي الصفقة.",
             pair_symbol, theoretical_gross_profit, total_cost
@@ -547,7 +543,7 @@ where
         return Ok(());
     }
 
-    println!("🚀 [BOT -> CONTRACT | {}] نجاح الفحص المحلي! الربح يفوق الرسوم. جاري إرسال المحاكاة لعقد Aave...", pair_symbol);
+    println!("🚀 [LOCAL FORK SIMULATION - {}] الربح يغطي الرسوم! جاري اختبار المحاكاة المحلية العميقة...", pair_symbol);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -565,15 +561,27 @@ where
         .from(signer_address)
         .gas(1_500_000);
 
+    // محاكاة عميقة تلتقط تفاصيل الـ Revert الحرفية
     match aave_builder.call().await {
         Ok(_) => {
-            println!("✅ Local Simulation Passed for {}! Dispatching Real Transaction to Aave...", pair_symbol);
+            println!("✅ Local Fork Simulation PASSED for {}! Dispatching Real Transaction to Aave...", pair_symbol);
             if let Ok(pending_tx) = aave_builder.send().await {
-                println!("✅ Tx Dispatched! Hash: {:?}", pending_tx.tx_hash());
+                println!("✅ Tx Dispatched Successfully! Hash: {:?}", pending_tx.tx_hash());
             }
         }
         Err(e) => {
-            println!("🛡 [SIMULATION REVERTED - {}]: العقد الذكي رصد انزلاقاً سعرياً (Price Impact). الخطأ: {:?}", pair_symbol, e);
+            // استخراج وتفكيك سبب الخطأ الفعلي بدقة شديدة
+            let err_string = format!("{:?}", e);
+            println!("🛡 [ANVIL DEEP REVERT ANALYSIS - {}]: فشلت المحاكاة المحلية. السبب الهندسي الصريح من العقد:", pair_symbol);
+            println!("   -> Raw Revert Data / Error: {}", err_string);
+            
+            if err_string.contains("ArbitrageUnprofitable") {
+                println!("   [تشخيص الحقيقة]: العقد يؤكد أن الرصيد النهائي بعد البيع أقل من القرض + الرسوم (Slippage/Impact عالي جداً).");
+            } else if err_string.contains("TargetUnauthorized") {
+                println!("   [تشخيص الحقيقة]: الموجه المستخدم غير مسجل في القائمة البيضاء للعقد الذكي.");
+            } else {
+                println!("   [تشخيص الحقيقة]: خطأ عام في تنفيذ الـ Swaps أو نقص في سيولة المجمع.");
+            }
         }
     }
 
@@ -582,7 +590,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Multi-DEX Cross-Matrix Scanner Engine with Optimized Loan ($5,000)...");
+    println!("🤖 Initializing Multi-DEX Cross-Matrix Scanner Engine with Anvil Fork Debugger...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -621,8 +629,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = sub.into_stream();
     let mut block_counter = 0u64;
 
-    // تم تخفيض حجم القرض إلى 5,000 USDC لتقليل التكاليف الثابتة
-    let loan_amount = U256::from(5_000_000_000u64); 
+    let loan_amount = U256::from(5_000_000_000u64); // 5,000 USDC
 
     while let Some(block) = stream.next().await {
         block_counter += 1;

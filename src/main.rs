@@ -69,7 +69,7 @@ pub struct CausalCollapseSystem {
     pub loan_amount: U256,
     pub borrowed_token: Address,
     pub pair_config: TokenPairConfig,
-    pub prices: (f64, f64, f64, f64), // (Aero, UniV3, BaseSwap, PancakeV3)
+    pub prices: (f64, f64, f64, f64),
 }
 
 impl CausalCollapseSystem {
@@ -95,7 +95,6 @@ impl CausalCollapseSystem {
         }
     }
 
-    // بناء المسار ديناميكياً مع استبعاد المنصات التي تملك أسعاراً صفرية أو غير صالحة
     pub fn execute_collapse(&self) -> (Vec<Address>, Vec<Vec<u8>>) {
         if self.nodes.is_empty() {
             return (vec![], vec![]);
@@ -103,7 +102,6 @@ impl CausalCollapseSystem {
 
         let (p_aero, p_v3, p_baseswap, p_pancake) = self.prices;
 
-        // فلترة المنصات: أخذ المنصات التي تملك سعراً حقيقياً أكبر من 1.0 فقط (لتجنب الأسعار الوهمية أو الصفرية)
         let mut dex_offers = Vec::new();
         if p_aero > 1.0 { dex_offers.push(("Aero", p_aero, AERODROME_ROUTER)); }
         if p_v3 > 1.0 { dex_offers.push(("UniV3", p_v3, UNISWAP_V3_ROUTER)); }
@@ -111,21 +109,20 @@ impl CausalCollapseSystem {
         if p_pancake > 1.0 { dex_offers.push(("PancakeV3", p_pancake, PANCAKESWAP_V3_ROUTER)); }
 
         if dex_offers.len() < 2 {
-            return (vec![], vec![]); // يجب توفر منصتين حقيقيتين على الأقل لتنفيذ المراجحة
+            return (vec![], vec![]);
         }
 
-        // ترتيب المنصات تصاعدياً حسب السعر الفعلي
         dex_offers.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
-        let buy_dex = dex_offers.first().unwrap(); // المنصة الأرخص للشراء
-        let sell_dex = dex_offers.last().unwrap(); // المنصة الأغلى للبيع
+        let buy_dex = dex_offers.first().unwrap(); 
+        let sell_dex = dex_offers.last().unwrap(); 
 
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        // الخطوة الأولى: الشراء من المنصة الأرخص
+        // الخطوة الأولى: الشراء (السماح بانزلاق سعر بسيط 0.5% لضمان نجاح الصفقة محلياً)
         addresses.push(buy_dex.2);
-        let min_amount_out_leg1 = self.loan_amount * U256::from(997) / U256::from(1000);
+        let min_amount_out_leg1 = self.loan_amount * U256::from(995) / U256::from(1000);
 
         let payload_leg1 = if buy_dex.0 == "Aero" || buy_dex.0 == "BaseSwap" {
             let aero_route = IAerodromeRouter::Route {
@@ -160,9 +157,9 @@ impl CausalCollapseSystem {
         };
         payloads.push(payload_leg1);
 
-        // الخطوة الثانية: البيع في المنصة الأغلى
+        // الخطوة الثانية: البيع (تغطية أصل القرض والرسوم بدقة مع هامش ربح آمن)
         addresses.push(sell_dex.2);
-        let min_amount_out_leg2 = self.loan_amount * U256::from(10005) / U256::from(10000);
+        let min_amount_out_leg2 = self.loan_amount * U256::from(10002) / U256::from(10000);
 
         let payload_leg2 = if sell_dex.0 == "Aero" || sell_dex.0 == "BaseSwap" {
             let aero_route_sell = IAerodromeRouter::Route {
@@ -559,8 +556,9 @@ where
                 println!("✅ Tx Dispatched! Hash: {:?}", pending_tx.tx_hash());
             }
         }
-        Err(_) => {
-            println!("🛡 [SIMULATION REVERTED SAFELY - {}]: الصفقة غير مربحة أو ستفشل محلياً.", pair_symbol);
+        Err(e) => {
+            // طباعة رسالة الخطأ النصية الفعلية القادمة من العقد الذكي إن وجدت
+            println!("🛡 [SIMULATION REVERTED - {}]: السبب الفعلي للفشل: {:?}", pair_symbol, e);
         }
     }
 

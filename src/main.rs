@@ -332,12 +332,12 @@ where
     P: Provider<Ethereum> + Clone,
 {
     let aero_factory = IAerodromeFactory::new(AERO_FACTORY, provider.clone());
-    let aero_addr = aero_factory.getPool(USDC_BASE, target_token, false).call().await
+    let aero_addr = aero_factory.getPool(WETH_BASE, target_token, false).call().await
         .map(|r| Address::from(r.0)).unwrap_or_else(|_| Address::ZERO);
     let aero = resolve_pool_info(provider.clone(), aero_addr).await;
 
     let mut selected_fee = 500u32;
-    let uni_v3 = if let Some((uni_addr, fee)) = find_v3_pool_across_fees(provider.clone(), UNI_V3_FACTORY, USDC_BASE, target_token).await {
+    let uni_v3 = if let Some((uni_addr, fee)) = find_v3_pool_across_fees(provider.clone(), UNI_V3_FACTORY, WETH_BASE, target_token).await {
         selected_fee = fee;
         resolve_pool_info(provider.clone(), uni_addr).await
     } else {
@@ -345,11 +345,11 @@ where
     };
 
     let baseswap_factory = IUniswapV2Factory::new(BASESWAP_FACTORY, provider.clone());
-    let baseswap_addr = baseswap_factory.getPair(USDC_BASE, target_token).call().await
+    let baseswap_addr = baseswap_factory.getPair(WETH_BASE, target_token).call().await
         .map(|r| Address::from(r.0)).unwrap_or_else(|_| Address::ZERO);
     let baseswap = resolve_pool_info(provider.clone(), baseswap_addr).await;
 
-    let pancakeswap = if let Some((pancake_addr, _)) = find_v3_pool_across_fees(provider.clone(), PANCAKE_V3_FACTORY, USDC_BASE, target_token).await {
+    let pancakeswap = if let Some((pancake_addr, _)) = find_v3_pool_across_fees(provider.clone(), PANCAKE_V3_FACTORY, WETH_BASE, target_token).await {
         resolve_pool_info(provider.clone(), pancake_addr).await
     } else {
         None
@@ -378,9 +378,9 @@ fn calculate_v2_price(
     if reserve0 == 0 || reserve1 == 0 {
         return 0.0;
     }
-    let usdc_decimals = 6;
-    let d0 = if token0 == USDC_BASE { usdc_decimals } else { target_decimals };
-    let d1 = if token1 == USDC_BASE { usdc_decimals } else { target_decimals };
+    let weth_decimals = 18;
+    let d0 = if token0 == WETH_BASE { weth_decimals } else { target_decimals };
+    let d1 = if token1 == WETH_BASE { weth_decimals } else { target_decimals };
 
     let r0 = reserve0 as f64 / 10f64.powi(d0 as i32);
     let r1 = reserve1 as f64 / 10f64.powi(d1 as i32);
@@ -406,9 +406,9 @@ fn calculate_v3_price(
     let ratio = sqrt_f64 / 2.0f64.powi(96);
     let price_raw = ratio * ratio;
 
-    let usdc_decimals = 6;
-    let d0 = if token0 == USDC_BASE { usdc_decimals } else { target_decimals };
-    let d1 = if token1 == USDC_BASE { usdc_decimals } else { target_decimals };
+    let weth_decimals = 18;
+    let d0 = if token0 == WETH_BASE { weth_decimals } else { target_decimals };
+    let d1 = if token1 == WETH_BASE { weth_decimals } else { target_decimals };
 
     let price_t1_in_t0 = price_raw * 10f64.powi((d0 as i32) - (d1 as i32));
 
@@ -487,10 +487,9 @@ where
     let mut prices = vec![price_aero, price_v3, price_baseswap, price_pancake];
     
     let (min_valid, max_valid) = match config.symbol {
-        "WETH" => (100.0, 100000.0),
-        "AERO" => (0.1, 10.0),
-        "DEGEN" => (0.0001, 10.0),
-        "cbBTC" => (10000.0, 200000.0),
+        "AERO" => (0.01, 10.0),
+        "DEGEN" => (0.00001, 10.0),
+        "cbBTC" => (1000.0, 500000.0),
         _ => (0.01, 1000000.0),
     };
 
@@ -508,7 +507,6 @@ where
     Ok((price_aero, price_v3, price_baseswap, price_pancake, spread_gap))
 }
 
-// 🚀 إعادة تفعيل التنفيذ الكامل مع تتبع دقيق للأخطاء المخصصة
 async fn execute_full_arbitrage_simulation<SP>(
     simulation_provider: SP,
     contract_address: Address,
@@ -527,11 +525,7 @@ where
         return Ok(());
     }
 
-    if spread_gap < 0.25 {
-        return Ok(());
-    }
-
-    println!("🚀 [FULL ARBITRAGE SIMULATION - {}] جاري محاكاة صفقة الفلاش لون الكاملة...", pair_symbol);
+    println!("🚀 [WETH FLASHLOAN SIMULATION - {}] جاري محاكاة الفلاش لون بـ WETH...", pair_symbol);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -550,12 +544,11 @@ where
 
     match sim_call.call().await {
         Ok(_) => {
-            println!("🎉 [SUCCESS!] المحاكاة الكاملة لصفقة الفلاش لون نجحت 100% للزوج {}!", pair_symbol);
+            println!("🎉 [SUCCESS!] نجحت محاكاة صفقة WETH Flashloan تماماً لـ {}!", pair_symbol);
         }
         Err(e) => {
-            let err_str = format!("{:?}", e);
-            println!("🛡 [SIMULATION REVERT - {}]: تفاصيل الخطأ المستخرج:", pair_symbol);
-            println!("   -> الخطأ الكامل: {}", err_str);
+            println!("🛡 [SIMULATION REVERT - {}]: تفاصيل استجابة WETH:", pair_symbol);
+            println!("   -> الخطأ الكامل: {:?}", e);
         }
     }
 
@@ -564,7 +557,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Full Arbitrage Execution & Simulation Engine...");
+    println!("🤖 Initializing WETH-Backed FlashLoan Engine...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -601,10 +594,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect_ws(ws)
         .await?;
 
-    println!("🔄 Resolving Pool Addresses Dynamically across official Base Factory Contracts...");
+    println!("🔄 Resolving Token Pairs against WETH Base Pool...");
     
     let mut monitored_pairs = Vec::new();
-    monitored_pairs.push(resolve_token_pair(live_provider.clone(), "WETH", WETH_BASE, 18).await);
     monitored_pairs.push(resolve_token_pair(live_provider.clone(), "AERO", AERO_BASE, 18).await);
     monitored_pairs.push(resolve_token_pair(live_provider.clone(), "DEGEN", DEGEN_BASE, 18).await);
     monitored_pairs.push(resolve_token_pair(live_provider.clone(), "cbBTC", CBBTC_BASE, 8).await);
@@ -613,7 +605,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = sub.into_stream();
     let mut block_counter = 0u64;
 
-    let loan_amount = U256::from(5_000_000_000u64); // 5000 USDC
+    let loan_amount = U256::from(1_000_000_000_000_000_000u64); // 1 WETH
 
     while let Some(block) = stream.next().await {
         block_counter += 1;
@@ -631,12 +623,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pair_cfg.symbol, p_aero, p_v3, p_baseswap, p_pancake, spread_gap
                 );
 
-                if spread_gap > 0.25 {
+                if spread_gap > 0.05 {
                     let nodes = vec![QuantumNode {
                         id: 1,
                         energy_scale: generate_astronomical_number(1000usize),
                         frequency: spread_gap,
-                        token0: USDC_BASE,
+                        token0: WETH_BASE,
                         token1: pair_cfg.target_token,
                     }];
 
@@ -645,7 +637,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, BASESWAP_ROUTER, AERODROME_ROUTER],
                         contract_address,
                         loan_amount,
-                        USDC_BASE,
+                        WETH_BASE,
                         pair_cfg.clone(),
                         (p_aero, p_v3, p_baseswap, p_pancake),
                     );
@@ -657,7 +649,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         contract_address,
                         optimized_path,
                         signer_address,
-                        USDC_BASE,
+                        WETH_BASE,
                         loan_amount,
                         spread_gap,
                         pair_cfg.symbol,

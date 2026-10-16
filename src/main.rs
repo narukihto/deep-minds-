@@ -199,7 +199,7 @@ sol! {
 
 pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
     vec![
-        // 1. WETH / USDC (token0: WETH [18], token1: USDC [6])
+        // 1. WETH / USDC
         TokenPairConfig {
             symbol: "WETH",
             target_token: WETH_BASE,
@@ -212,7 +212,7 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             token0: WETH_BASE,
             token1: USDC_BASE,
         },
-        // 2. AERO / USDC (token0: USDC [6], token1: AERO [18])
+        // 2. AERO / USDC
         TokenPairConfig {
             symbol: "AERO",
             target_token: AERO_BASE,
@@ -225,27 +225,27 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             token0: USDC_BASE,
             token1: AERO_BASE,
         },
-        // 3. DEGEN / USDC (token0: DEGEN [18], token1: USDC [6])
+        // 3. DEGEN / USDC
         TokenPairConfig {
             symbol: "DEGEN",
             target_token: DEGEN_BASE,
-            aero_pool: address!("0xcdac0d6c6c59727a65f871236188350531885c43"),
+            aero_pool: address!("0xbe6d8f0f10e44cbcae95febcebcd8e1a76dedab7"),
             uni_v3_pool: address!("0x29715d8d279cab143a12ff515b40a2b35d7bad37"),
-            baseswap_pool: address!("0xab067c01c7f5734da168c699ae9d23a4512c9fdb"),
-            pancakeswap_pool: address!("0x72ab388e2e2f6facef59e3c3fa2c4e29011c2d38"),
+            baseswap_pool: address!("0x88a646c2438c86d88ae52b1bdfba2f4dc4a84e62"),
+            pancakeswap_pool: address!("0x29715d8d279cab143a12ff515b40a2b35d7bad37"),
             decimals: 18,
             fee_tier_v3: 10000,
             token0: DEGEN_BASE,
             token1: USDC_BASE,
         },
-        // 4. cbBTC / USDC (token0: USDC [6], token1: cbBTC [8])
+        // 4. cbBTC / USDC
         TokenPairConfig {
             symbol: "cbBTC",
             target_token: CBBTC_BASE,
-            aero_pool: address!("0xcdac0d6c6c59727a65f871236188350531885c43"),
+            aero_pool: address!("0x11b8c8d62cbfa4a8d4a9cf4e46358c97dd878e69"),
             uni_v3_pool: address!("0xfbb6eed8e7aa03b138556eedaf5d271a5e1e43ef"),
-            baseswap_pool: address!("0xab067c01c7f5734da168c699ae9d23a4512c9fdb"),
-            pancakeswap_pool: address!("0x72ab388e2e2f6facef59e3c3fa2c4e29011c2d38"),
+            baseswap_pool: address!("0xfbb6eed8e7aa03b138556eedaf5d271a5e1e43ef"),
+            pancakeswap_pool: address!("0xfbb6eed8e7aa03b138556eedaf5d271a5e1e43ef"),
             decimals: 8,
             fee_tier_v3: 500,
             token0: USDC_BASE,
@@ -254,7 +254,7 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
     ]
 }
 
-// دالة لحساب السعر بدقة لبروتوكولات الـ V2 (مثل Aerodrome و BaseSwap)
+// دالة لحساب السعر بدقة لبروتوكولات الـ V2
 fn calculate_v2_price(
     reserve0: u128,
     reserve1: u128,
@@ -277,7 +277,7 @@ fn calculate_v2_price(
     }
 }
 
-// دالة لحساب السعر بدقة لبروتوكولات الـ V3 (مثل Uniswap V3 و PancakeSwap V3) عبر sqrtPriceX96
+// دالة لحساب السعر بدقة لبروتوكولات الـ V3 عبر sqrtPriceX96
 fn calculate_v3_price(
     sqrt_price_x96: _U160,
     token0: Address,
@@ -519,7 +519,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         USDC_BASE,
                         loan_amount,
                         spread_gap,
-                        pair_cfg.symbol,
+                        pair_symbol: pair_cfg.symbol,
                     ).await;
                 }
             }

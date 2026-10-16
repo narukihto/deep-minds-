@@ -16,6 +16,7 @@ type _U160 = Uint<160, 3>;
 
 // الرموز الأساسية والعناوين الدقيقة على شبكة Base
 const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
+const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
 const AERO_BASE: Address = address!("940181a94A35A4569E4529A3CDfB74e38FD98631");
 const DEGEN_BASE: Address = address!("4ed4e862860bed51a9570b96d89af5e1b0efefed");
 const CBBTC_BASE: Address = address!("cbB7C0000aB88B473b1f5aFd9ef808440eed33Bf");
@@ -246,10 +247,20 @@ sol! {
 pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
     vec![
         TokenPairConfig {
+            symbol: "WETH",
+            target_token: WETH_BASE,
+            aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"),
+            uni_v3_pool: address!("0x6c561b446416e1a00e8e93e221854d6ea4171372"),
+            decimals: 18,
+            fee_tier_v3: 500,
+            token0: USDC_BASE,
+            token1: WETH_BASE,
+        },
+        TokenPairConfig {
             symbol: "AERO",
             target_token: AERO_BASE,
             aero_pool: address!("6cdcb1c4a4d1c3c6d054b27ac5b77e89eafb971d"),
-            uni_v3_pool: address!("0xe5b5f522e98b5a2baae212d4da66b865b781db90"), // تم تصحيح طول العنوان
+            uni_v3_pool: address!("0xe5b5f522e98b5a2baae212d4da66b865b781db90"),
             decimals: 18,
             fee_tier_v3: 500,
             token0: USDC_BASE,
@@ -292,13 +303,28 @@ where
         let r1 = res.reserve1.to::<u128>() as f64;
         
         if r0 > 0.0 && r1 > 0.0 {
-            if config.token0 == USDC_BASE {
-                let dec_factor = 10f64.powi(config.decimals as i32 - 6);
-                price_aero = (r1 / r0) * dec_factor;
-            } else {
-                let dec_factor = 10f64.powi(config.decimals as i32 - 6);
-                let ratio = r0 / r1;
-                price_aero = if ratio > 0.0 { ratio * dec_factor } else { 0.0 };
+            match config.symbol {
+                "WETH" => {
+                    let r0_f = r0 / 10f64.powi(18);
+                    let r1_f = r1 / 10f64.powi(6);
+                    if r0_f > 0.0 { price_aero = r1_f / r0_f; }
+                }
+                "AERO" => {
+                    let r0_f = r0 / 10f64.powi(6);  // USDC
+                    let r1_f = r1 / 10f64.powi(18); // AERO
+                    if r0_f > 0.0 { price_aero = r1_f / r0_f; }
+                }
+                "DEGEN" => {
+                    let r0_f = r0 / 10f64.powi(18); // DEGEN
+                    let r1_f = r1 / 10f64.powi(6);  // USDC
+                    if r1_f > 0.0 { price_aero = r0_f / r1_f; }
+                }
+                "cbBTC" => {
+                    let r0_f = r0 / 10f64.powi(6);  // USDC
+                    let r1_f = r1 / 10f64.powi(8);  // cbBTC
+                    if r1_f > 0.0 { price_aero = r0_f / r1_f; }
+                }
+                _ => {}
             }
         }
     }
@@ -311,13 +337,12 @@ where
             let ratio = sqrt_price_x96 / (2.0f64.powi(96));
             let raw_price = ratio * ratio;
             
-            let dec_diff = 18 - config.decimals as i32;
-            let raw_calculated = raw_price * 10f64.powi(12 + dec_diff);
-
-            price_v3 = if config.token0 == USDC_BASE {
-                if raw_calculated > 0.0 { 1.0 / raw_calculated * 10f64.powi(24) } else { 0.0 }
-            } else {
-                raw_calculated
+            price_v3 = match config.symbol {
+                "WETH" => raw_price * 10f64.powi(12),
+                "AERO" => raw_price * 10f64.powi(12),
+                "DEGEN" => raw_price * 10f64.powi(12),
+                "cbBTC" => raw_price * 10f64.powi(4),
+                _ => raw_price * 10f64.powi(12),
             };
         }
     }
@@ -348,8 +373,9 @@ where
     }
 
     let min_gap_threshold = match pair_symbol {
-        "cbBTC" => 5.00,
-        "AERO" => 0.01,
+        "WETH" => 0.25,
+        "cbBTC" => 50.00,
+        "AERO" => 0.005,
         "DEGEN" => 0.0001,
         _ => 0.25,
     };

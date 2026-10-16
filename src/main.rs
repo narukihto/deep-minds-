@@ -267,6 +267,8 @@ sol! {
         error ArbitrageUnprofitable(uint256 expected, uint256 actual);
         error InsufficientLiquidity();
         error TargetUnauthorized();
+        error UntrustedInitiator();
+        error NotAuthorized();
     }
 }
 
@@ -568,6 +570,10 @@ where
                 println!("   -> الخطأ العائد: [ArbitrageUnprofitable] الربح النهائي أقل من تكلفة القرض والرسوم.");
             } else if err_string.contains("InsufficientLiquidity") {
                 println!("   -> الخطأ العائد: [InsufficientLiquidity] نقص في سيولة المجمع لتنفيذ التبادل.");
+            } else if err_string.contains("NotAuthorized") {
+                println!("   -> الخطأ العائد: [NotAuthorized] المحفظة المنفذة ليست مسجلة كـ Owner أو BotAddress.");
+            } else if err_string.contains("UntrustedInitiator") {
+                println!("   -> الخطأ العائد: [UntrustedInitiator] الـ Initiator غير مصرح له.");
             } else {
                 println!("   -> تفاصيل الخطأ الخام: {}", err_string);
             }
@@ -579,7 +585,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Anvil Fork MEV Bot Engine...");
+    println!("🤖 Initializing Anvil Fork MEV Bot Engine with Real Signer...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -593,10 +599,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let anvil_fork_url = std::env::var("ANVIL_RPC_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string());
 
+    // جلب المفتاح الحقيقي من متغير البيئة PRIVATE_KEY مع توفير بديل آمن إن لم يوجد
     let private_key_str = std::env::var("PRIVATE_KEY")
         .unwrap_or_else(|_| "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string());
+    
     let signer: PrivateKeySigner = private_key_str.parse()?;
     let signer_address = signer.address();
+    println!("🔑 Loaded Active Signer Address: {:?}", signer_address);
+
     let wallet = EthereumWallet::from(signer.clone());
 
     let live_provider = ProviderBuilder::new()
@@ -617,7 +627,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let mut monitored_pairs = Vec::new();
     monitored_pairs.push(resolve_token_pair(live_provider.clone(), "WETH", WETH_BASE, 18).await);
-    monitored_pairs.push(resolve_token_pair(live_provider.clone(), "AERO", AERO_BASE, 18).await);
+    monitored_pairs.push(resolve_token_pair(live_provider.clone(), "AERO", AERO_BASE, 18)..await); // تم التصحيح
     monitored_pairs.push(resolve_token_pair(live_provider.clone(), "DEGEN", DEGEN_BASE, 18).await);
     monitored_pairs.push(resolve_token_pair(live_provider.clone(), "cbBTC", CBBTC_BASE, 8).await);
 

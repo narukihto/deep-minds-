@@ -227,7 +227,6 @@ sol! {
     }
 }
 
-// دالة الاكتشاف الديناميكي للمجمعات عبر عقود الـ Factory
 async fn resolve_pool_info<P>(
     provider: P,
     pool_address: Address,
@@ -239,8 +238,8 @@ where
         return None;
     }
     let pair_contract = IUniswapV2Pair::new(pool_address, provider);
-    let t0 = pair_contract.token0().call().await.ok().map(|r| r._0)?;
-    let t1 = pair_contract.token1().call().await.ok().map(|r| r._0)?;
+    let t0 = pair_contract.token0().call().await.ok().map(|r| r.0)?;
+    let t1 = pair_contract.token1().call().await.ok().map(|r| r.0)?;
 
     Some(PoolInfo {
         pool_address,
@@ -262,25 +261,25 @@ where
     // 1. Aerodrome Pool (V2 Volatile)
     let aero_factory = IAerodromeFactory::new(AERO_FACTORY, provider.clone());
     let aero_addr = aero_factory.getPool(USDC_BASE, target_token, false).call().await
-        .map(|r| r.pool).unwrap_or_else(|_| Address::ZERO);
+        .map(|r| r.0).unwrap_or_else(|_| Address::ZERO);
     let aero = resolve_pool_info(provider.clone(), aero_addr).await;
 
     // 2. Uniswap V3 Pool
     let uni_factory = IUniswapV3Factory::new(UNI_V3_FACTORY, provider.clone());
-    let uni_addr = uni_factory.getPool(USDC_BASE, target_token, fee_tier_v3).call().await
-        .map(|r| r.pool).unwrap_or_else(|_| Address::ZERO);
+    let uni_addr = uni_factory.getPool(USDC_BASE, target_token, _U24::from(fee_tier_v3)).call().await
+        .map(|r| r.0).unwrap_or_else(|_| Address::ZERO);
     let uni_v3 = resolve_pool_info(provider.clone(), uni_addr).await;
 
     // 3. BaseSwap Pool (V2)
     let baseswap_factory = IUniswapV2Factory::new(BASESWAP_FACTORY, provider.clone());
     let baseswap_addr = baseswap_factory.getPair(USDC_BASE, target_token).call().await
-        .map(|r| r.pair).unwrap_or_else(|_| Address::ZERO);
+        .map(|r| r.0).unwrap_or_else(|_| Address::ZERO);
     let baseswap = resolve_pool_info(provider.clone(), baseswap_addr).await;
 
     // 4. PancakeSwap V3 Pool
     let pancake_factory = IUniswapV3Factory::new(PANCAKE_V3_FACTORY, provider.clone());
-    let pancake_addr = pancake_factory.getPool(USDC_BASE, target_token, fee_tier_v3).call().await
-        .map(|r| r.pool).unwrap_or_else(|_| Address::ZERO);
+    let pancake_addr = pancake_factory.getPool(USDC_BASE, target_token, _U24::from(fee_tier_v3)).call().await
+        .map(|r| r.0).unwrap_or_else(|_| Address::ZERO);
     let pancakeswap = resolve_pool_info(provider.clone(), pancake_addr).await;
 
     println!("🔍 [DYNAMIC DISCOVERY] Initialized pair {}: Aero({:?}) UniV3({:?}) BaseSwap({:?}) PancakeV3({:?})",
@@ -298,7 +297,6 @@ where
     }
 }
 
-// حساب السعر لـ V2 ديناميكياً حسب token0 و token1
 fn calculate_v2_price(
     reserve0: u128,
     reserve1: u128,
@@ -324,7 +322,6 @@ fn calculate_v2_price(
     }
 }
 
-// حساب السعر لـ V3 ديناميكياً حسب token0 و token1
 fn calculate_v3_price(
     sqrt_price_x96: _U160,
     token0: Address,
@@ -531,7 +528,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("🔄 Resolving Pool Addresses Dynamically from Factory Contracts on Base...");
     
-    // الاكتشاف الديناميكي لجميع الأزواج عند الإقلاع
     let mut monitored_pairs = Vec::new();
     monitored_pairs.push(resolve_token_pair(http_provider.clone(), "WETH", WETH_BASE, 18, 500).await);
     monitored_pairs.push(resolve_token_pair(http_provider.clone(), "AERO", AERO_BASE, 18, 3000).await);

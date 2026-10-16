@@ -15,9 +15,6 @@ type _U160 = Uint<160, 3>;
 
 const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
-const AERO_BASE: Address = address!("940181a94A35A4569E4529A3CDfB74e38FD98631");
-const DEGEN_BASE: Address = address!("4ed4e862860bed51a9570b96d89af5e1b0efefed");
-const CBBTC_BASE: Address = address!("cbB7C0000aB88B473b1f5aFd9ef808440eed33Bf");
 
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
 const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
@@ -490,13 +487,11 @@ where
     if price_baseswap > 0.0 { valid_prices.push(price_baseswap); }
     if price_pancake > 0.0 { valid_prices.push(price_pancake); }
 
-    // فلترة صارمة: يتم احتساب الفارق فقط إذا وُجد سعران حقيقيان من منصتين مختلفتين، وبحد أقصى منطقي لتجنب الفجوات الوهمية
     let spread_gap = if valid_prices.len() >= 2 {
         let max_p = valid_prices.iter().cloned().fold(0.0, f64::max);
         let min_p = valid_prices.iter().cloned().fold(f64::INFINITY, f64::min);
         let diff = max_p - min_p;
-        // إذا كان الفارق منطقياً وصغيراً (أقل من 50 دولار مثلاً كفرصة حقيقية وممكنة)، نعتبره صالحاً
-        if diff > 0.0 && diff < 50.0 {
+        if diff > 0.0 && diff < 100.0 {
             diff
         } else {
             0.0
@@ -526,7 +521,7 @@ where
         return Ok(());
     }
 
-    println!("🚀 [VALID ARBITRAGE OPPORTUNITY - {}] جاري محاكاة الصفقة بفارق حقيقي: ${:.2}", pair_symbol, spread_gap);
+    println!("🚀 [WETH/USDC HIGH-LIQUIDITY SIMULATION] جاري محاكاة الفلاش لون لـ WETH/USDC بفارق: ${:.2}", spread_gap);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -545,10 +540,10 @@ where
 
     match sim_call.call().await {
         Ok(_) => {
-            println!("🎉 [SUCCESS!] نجحت محاكاة صفقة الأرباح تماماً لـ {}!", pair_symbol);
+            println!("🎉 [SUCCESS!] نجحت محاكاة صفقة WETH/USDC بنسبة 100%!");
         }
         Err(e) => {
-            println!("🛡 [SIMULATION REVERT - {}]: تفاصيل الرفض الحقيقي:", pair_symbol);
+            println!("🛡 [SIMULATION REVERT - WETH/USDC]: تفاصيل الاستجابة:");
             println!("   -> الخطأ الكامل: {:?}", e);
         }
     }
@@ -558,7 +553,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Verified Arbitrage Engine...");
+    println!("🤖 Initializing Pure WETH/USDC Arbitrage Engine...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -595,12 +590,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect_ws(ws)
         .await?;
 
-    println!("🔄 Resolving Token Pairs against WETH Base Pool...");
+    println!("🔄 Resolving WETH / USDC Pools across Base DEXs...");
     
-    let mut monitored_pairs = Vec::new();
-    monitored_pairs.push(resolve_token_pair(live_provider.clone(), "AERO", AERO_BASE, 18).await);
-    monitored_pairs.push(resolve_token_pair(live_provider.clone(), "DEGEN", DEGEN_BASE, 18).await);
-    monitored_pairs.push(resolve_token_pair(live_provider.clone(), "cbBTC", CBBTC_BASE, 8).await);
+    let weth_usdc_pair = resolve_token_pair(live_provider.clone(), "WETH/USDC", USDC_BASE, 6).await;
 
     let sub = ws_provider.subscribe_blocks().await?;
     let mut stream = sub.into_stream();
@@ -613,49 +605,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let block_num = block.inner.number;
         println!("\n📦 WSS Block Synced: #{} (Counter: {})", block_num, block_counter);
 
-        for pair in &monitored_pairs {
-            let provider = live_provider.clone();
-            let sim_provider = anvil_provider.clone();
-            let pair_cfg = pair.clone();
+        let provider = live_provider.clone();
+        let sim_provider = anvil_provider.clone();
 
-            if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(provider.clone(), &pair_cfg).await {
-                println!(
-                    " 📈 [{}] Aero: ${:.2} | UniV3: ${:.2} | BaseSwap: ${:.2} | Pancake: ${:.2} | Verified Gap: ${:.2}",
-                    pair_cfg.symbol, p_aero, p_v3, p_baseswap, p_pancake, spread_gap
+        if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(provider.clone(), &weth_usdc_pair).await {
+            println!(
+                " 📈 [WETH/USDC] Aero: ${:.2} | UniV3: ${:.2} | BaseSwap: ${:.2} | Pancake: ${:.2} | Gap: ${:.2}",
+                p_aero, p_v3, p_baseswap, p_pancake, spread_gap
+            );
+
+            if spread_gap > 0.01 {
+                let nodes = vec![QuantumNode {
+                    id: 1,
+                    energy_scale: generate_astronomical_number(1000usize),
+                    frequency: spread_gap,
+                    token0: WETH_BASE,
+                    token1: USDC_BASE,
+                }];
+
+                let system = CausalCollapseSystem::new(
+                    nodes,
+                    vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, BASESWAP_ROUTER, AERODROME_ROUTER],
+                    contract_address,
+                    loan_amount,
+                    WETH_BASE,
+                    weth_usdc_pair.clone(),
+                    (p_aero, p_v3, p_baseswap, p_pancake),
                 );
 
-                if spread_gap > 0.01 {
-                    let nodes = vec![QuantumNode {
-                        id: 1,
-                        energy_scale: generate_astronomical_number(1000usize),
-                        frequency: spread_gap,
-                        token0: WETH_BASE,
-                        token1: pair_cfg.target_token,
-                    }];
+                let optimized_path = system.execute_collapse();
 
-                    let system = CausalCollapseSystem::new(
-                        nodes,
-                        vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, BASESWAP_ROUTER, AERODROME_ROUTER],
-                        contract_address,
-                        loan_amount,
-                        WETH_BASE,
-                        pair_cfg.clone(),
-                        (p_aero, p_v3, p_baseswap, p_pancake),
-                    );
-
-                    let optimized_path = system.execute_collapse();
-
-                    let _ = execute_full_arbitrage_simulation(
-                        sim_provider,
-                        contract_address,
-                        optimized_path,
-                        signer_address,
-                        WETH_BASE,
-                        loan_amount,
-                        spread_gap,
-                        pair_cfg.symbol,
-                    ).await;
-                }
+                let _ = execute_full_arbitrage_simulation(
+                    sim_provider,
+                    contract_address,
+                    optimized_path,
+                    signer_address,
+                    WETH_BASE,
+                    loan_amount,
+                    spread_gap,
+                    "WETH/USDC",
+                ).await;
             }
         }
 

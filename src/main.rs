@@ -507,8 +507,8 @@ where
     Ok((price_aero, price_v3, price_baseswap, price_pancake, spread_gap))
 }
 
-// 🛑 تم تعطيل الإرسال الحي تماماً هنا وجعل الوظيفة مقتصرة على فحص المحاكاة المحلية فقط
-async fn simulate_only_arbitrage<SP>(
+// 🛑 فحص محلي صرف للـ Anvil دون أي إرسال للشبكة الحية
+async fn anvil_pure_simulation_diagnostic<SP>(
     simulation_provider: SP,
     contract_address: Address,
     target_path: (Vec<Address>, Vec<Vec<u8>>, f64, f64),
@@ -530,7 +530,7 @@ where
         return Ok(());
     }
 
-    println!("🔬 [ANVIL LOCAL SIMULATION ONLY - {}] جاري محاكاة الصفقة محلياً...", pair_symbol);
+    println!("🔬 [ANVIL PURE SIMULATION - {}] جاري استدعاء الـ RPC المحلي لفحص الـ Revert...", pair_symbol);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -549,17 +549,11 @@ where
 
     match sim_call.call().await {
         Ok(_) => {
-            println!("✅ [ANVIL SIMULATION PASSED SUCCESSFULLY!] العقد قبل التنفيذ محلياً لـ {} دون أي مشاكل!", pair_symbol);
+            println!("✅ [ANVIL LOCAL PASS] المحاكاة المحلية عبر Anvil نجحت لـ {}!", pair_symbol);
         }
         Err(e) => {
-            let err_string = format!("{:?}", e);
-            println!("🛡 [ANVIL REVERT ANALYSIS - {}]: فشلت المحاكاة المحلية. التحليل التفصيلي:", pair_symbol);
-            
-            if err_string.contains("0x") && err_string.len() < 120 {
-                println!("   -> ملاحظة: الخطأ يعود ببيانات فارغة (0x)، مما يعني أن العقد رفض الطلب في الشروط المبكرة (Modifiers/Requires).");
-            } else {
-                println!("   -> تفاصيل الخطأ المستخرجة: {}", err_string);
-            }
+            println!("🛡 [ANVIL LOCAL REVERT CAUGHT - {}]: تفاصيل استجابة Anvil:", pair_symbol);
+            println!("   -> كائن الخطأ الكامل: {:?}", e);
         }
     }
 
@@ -568,7 +562,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Anvil Local Simulation Diagnostic Engine (Live Dispatch Disabled)...");
+    println!("🤖 Initializing Anvil Pure Local Diagnostic Tool (No Live Dispatch)...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -587,7 +581,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let signer: PrivateKeySigner = private_key_str.parse()?;
     let signer_address = signer.address();
-    println!("🔑 Active Signer Loaded: {:?}", signer_address);
+    println!("🔑 Active Diagnostic Signer: {:?}", signer_address);
 
     let wallet = EthereumWallet::from(signer.clone());
 
@@ -656,7 +650,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let optimized_path = system.execute_collapse();
 
-                    let _ = simulate_only_arbitrage(
+                    let _ = anvil_pure_simulation_diagnostic(
                         sim_provider,
                         contract_address,
                         optimized_path,

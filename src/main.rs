@@ -528,7 +528,7 @@ where
 
     let loan_numeric = 5000.0; 
     let estimated_aave_fee = loan_numeric * 0.0005; 
-    let estimated_dex_fees = loan_numeric * 0.0047; // تم تعديلها لتصبح الرسوم المقدرة تقريباً $26.00
+    let estimated_dex_fees = loan_numeric * 0.0041; // تم تعديلها لتصبح الرسوم المقدرة تقريباً $23.00
     let total_cost = estimated_aave_fee + estimated_dex_fees;
     let theoretical_gross_profit = (spread_gap / buy_price) * loan_numeric;
 
@@ -584,7 +584,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Multi-DEX Cross-Matrix Scanner Engine with Optimized Threshold ($26)...");
+    println!("🤖 Initializing Multi-DEX Cross-Matrix Scanner Engine with Optimized Threshold ($23)...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());

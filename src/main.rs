@@ -1,6 +1,5 @@
 use num_bigint::BigUint;
 use num_traits::One;
-use std::time::Instant;
 use futures_util::StreamExt;
 use tokio::time::{sleep, Duration};
 use alloy::{
@@ -280,7 +279,7 @@ fn calculate_v2_price(
 
 // دالة لحساب السعر بدقة لبروتوكولات الـ V3 (مثل Uniswap V3 و PancakeSwap V3) عبر sqrtPriceX96
 fn calculate_v3_price(
-    sqrt_price_x96: U256,
+    sqrt_price_x96: _U160,
     token0: Address,
     token1: Address,
     target_decimals: u32,

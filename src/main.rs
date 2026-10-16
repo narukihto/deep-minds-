@@ -503,7 +503,6 @@ where
     Ok((price_aero, price_v3, price_baseswap, price_pancake, spread_gap))
 }
 
-// 🛑 فحص حالة العقد وقراءة الصلاحيات مباشرة من الـ Fork بدلاً من محاكاة Aave
 async fn check_contract_state_diagnostic<SP>(
     simulation_provider: SP,
     contract_address: Address,
@@ -519,7 +518,7 @@ where
 
     match contract.owner().call().await {
         Ok(owner_res) => {
-            let owner_addr = owner._0;
+            let owner_addr = owner_res._0;
             println!("   -> [Owner Found]: {:?}", owner_addr);
             if owner_addr == signer_address {
                 println!("   -> [MATCH]: عنوان المنفذ يطابق المالك (Owner) تماماً.");
@@ -534,7 +533,7 @@ where
 
     match contract.botAddress().call().await {
         Ok(bot_res) => {
-            let bot_addr = bot_res._0;
+            let bot_addr = bot_res.0;
             println!("   -> [BotAddress Found]: {:?}", bot_addr);
             if bot_addr == signer_address {
                 println!("   -> [MATCH]: عنوان المنفذ يطابق بوت الصلاحية (BotAddress) تماماً.");

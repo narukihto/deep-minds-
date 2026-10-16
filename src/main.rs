@@ -518,7 +518,7 @@ where
 
     match contract.owner().call().await {
         Ok(owner_res) => {
-            let owner_addr = owner_res._0;
+            let owner_addr = owner_res.0;
             println!("   -> [Owner Found]: {:?}", owner_addr);
             if owner_addr == signer_address {
                 println!("   -> [MATCH]: عنوان المنفذ يطابق المالك (Owner) تماماً.");

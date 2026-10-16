@@ -120,7 +120,7 @@ impl CausalCollapseSystem {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        // 1. حساب الشراء مع انزلاق سعر 0.2%
+        // 1. حساب الشراء مع انزلاق سعر آمن 0.2%
         addresses.push(buy_dex.2);
         let min_amount_out_leg1 = self.loan_amount * U256::from(998) / U256::from(1000);
 
@@ -525,22 +525,29 @@ where
     }
 
     if spread_gap < 0.25 {
-        println!("🛡 [PROFIT SHIELD - {}] Gap (${:.4}) below minimum threshold. Skipping...", pair_symbol, spread_gap);
         return Ok(());
     }
 
-    // طباعة التحليل المالي الرياضي الدقيق قبل محاكاة العقد
-    let loan_numeric = 2000.0; // حجم القرض التجريبي بالـ USDC
+    // حجم القرض المحدث $15,000 لتوليد أرباح تفوق التكاليف الثابتة
+    let loan_numeric = 15000.0; 
     let estimated_aave_fee = loan_numeric * 0.0005; // 0.05% رسوم Aave
     let estimated_dex_fees = loan_numeric * 0.006; // 0.6% رسوم سواب مزدوجة
     let total_cost = estimated_aave_fee + estimated_dex_fees;
     let theoretical_gross_profit = (spread_gap / buy_price) * loan_numeric;
 
-    println!("📊 [FINANCIAL DEBUGGER - {}] قرض: ${} | شراء: ${:.2} | بيع: ${:.2} | ربح إجمالي نظري: ${:.2} | إجمالي الرسوم والعمولات: ${:.2}",
-        pair_symbol, loan_numeric, buy_price, sell_price, theoretical_gross_profit, total_cost
+    println!("📊 [LOCAL DEBUGGER - {}] قرض: ${} | ربح إجمالي نظري: ${:.2} | إجمالي الرسوم: ${:.2}",
+        pair_symbol, loan_numeric, theoretical_gross_profit, total_cost
     );
 
-    println!("🚀 [BOT -> CONTRACT | {}] Simulating Aave V3 Arbitrage Command locally with Debug Analysis...", pair_symbol);
+    // [اختبار محلي ذكي] الفحص المالي قبل إرسال المحاكاة لمنع الهدر
+    if theoretical_gross_profit <= total_cost {
+        println!("🛡 [LOCAL REJECT - {}]: الفحص المحلي رفض الصفقة! الربح النظري (${:.2}) لا يغطي الرسوم (${:.2}). تم إلغاء الإرسال لتوفير الغاز.",
+            pair_symbol, theoretical_gross_profit, total_cost
+        );
+        return Ok(());
+    }
+
+    println!("🚀 [BOT -> CONTRACT | {}] الفحص المحلي نجح! جاري تنفيذ المحاكاة الفعلية عبر عقد Aave V3...", pair_symbol);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -566,7 +573,7 @@ where
             }
         }
         Err(e) => {
-            println!("🛡 [SIMULATION REVERTED - {}]: تفاصيل الرفض: العقد الذكي رفض الصفقة لأن الرصيد الناتج أقل من المتوقع (Slippage/Fee Impact). الخطأ: {:?}", pair_symbol, e);
+            println!("🛡 [SIMULATION REVERTED - {}]: تفاصيل الرفض الفعلي من العقد الذكي: الانزلاق السعري الحقيقي (Price Impact) أكل الهامش. الخطأ: {:?}", pair_symbol, e);
         }
     }
 
@@ -575,7 +582,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Multi-DEX Cross-Matrix Scanner Engine with Financial Debugger...");
+    println!("🤖 Initializing Multi-DEX Cross-Matrix Scanner Engine with Advanced Local Debugger...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -614,8 +621,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = sub.into_stream();
     let mut block_counter = 0u64;
 
-    // تم ضبط حجم القرض التجريبي إلى 2,000 USDC لتقليل الانزلاق السعري في مجمعات السيولة
-    let loan_amount = U256::from(2_000_000_000u64); 
+    // تم رفع حجم القرض إلى 15,000 USDC لتغطية الرسوم وتحقيق أرباح حقيقية
+    let loan_amount = U256::from(15_000_000_000u64); 
 
     while let Some(block) = stream.next().await {
         block_counter += 1;

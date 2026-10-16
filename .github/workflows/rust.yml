@@ -30,7 +30,6 @@ jobs:
           nohup anvil --fork-url "$ALCHEMY_HTTP_URL" --port 8545 > anvil.log 2>&1 &
           echo "[*] Waiting for Anvil RPC to initialize..."
           sleep 5
-          # التحقق من أن Anvil يعمل بنجاح
           nc -z localhost 8545 && echo "[*] Anvil is up and running!" || (cat anvil.log && exit 1)
 
       - name: Cache Cargo Dependencies

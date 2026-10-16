@@ -95,7 +95,7 @@ impl CausalCollapseSystem {
         }
     }
 
-    // بناء المسار والتوجيه بشكل ديناميكي كامل بناءً على الأسعار الفورية الحالية
+    // بناء المسار ديناميكياً مع استبعاد المنصات التي تملك أسعاراً صفرية أو غير صالحة
     pub fn execute_collapse(&self) -> (Vec<Address>, Vec<Vec<u8>>) {
         if self.nodes.is_empty() {
             return (vec![], vec![]);
@@ -103,27 +103,27 @@ impl CausalCollapseSystem {
 
         let (p_aero, p_v3, p_baseswap, p_pancake) = self.prices;
 
-        // تجميع المنصات المتاحة والتي تمتلك أسعاراً صالحة أكبر من الصفر
+        // فلترة المنصات: أخذ المنصات التي تملك سعراً حقيقياً أكبر من 1.0 فقط (لتجنب الأسعار الوهمية أو الصفرية)
         let mut dex_offers = Vec::new();
-        if p_aero > 0.0 { dex_offers.push(("Aero", p_aero, AERODROME_ROUTER)); }
-        if p_v3 > 0.0 { dex_offers.push(("UniV3", p_v3, UNISWAP_V3_ROUTER)); }
-        if p_baseswap > 0.0 { dex_offers.push(("BaseSwap", p_baseswap, BASESWAP_ROUTER)); }
-        if p_pancake > 0.0 { dex_offers.push(("PancakeV3", p_pancake, PANCAKESWAP_V3_ROUTER)); }
+        if p_aero > 1.0 { dex_offers.push(("Aero", p_aero, AERODROME_ROUTER)); }
+        if p_v3 > 1.0 { dex_offers.push(("UniV3", p_v3, UNISWAP_V3_ROUTER)); }
+        if p_baseswap > 1.0 { dex_offers.push(("BaseSwap", p_baseswap, BASESWAP_ROUTER)); }
+        if p_pancake > 1.0 { dex_offers.push(("PancakeV3", p_pancake, PANCAKESWAP_V3_ROUTER)); }
 
         if dex_offers.len() < 2 {
-            return (vec![], vec![]); // لا توجد منصتان كافيتان للمراجحة
+            return (vec![], vec![]); // يجب توفر منصتين حقيقيتين على الأقل لتنفيذ المراجحة
         }
 
-        // ترتيب المنصات تصاعدياً حسب السعر (الأرخص أولاً للشراء، والأغلى أخيراً للبيع)
+        // ترتيب المنصات تصاعدياً حسب السعر الفعلي
         dex_offers.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
-        let buy_dex = dex_offers.first().unwrap(); // السعر الأقل (الشراء هنا)
-        let sell_dex = dex_offers.last().unwrap(); // السعر الأعلى (البيع هنا)
+        let buy_dex = dex_offers.first().unwrap(); // المنصة الأرخص للشراء
+        let sell_dex = dex_offers.last().unwrap(); // المنصة الأغلى للبيع
 
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        // الخطوة الأولى: الشراء من المنصة ذات السعر الأقل
+        // الخطوة الأولى: الشراء من المنصة الأرخص
         addresses.push(buy_dex.2);
         let min_amount_out_leg1 = self.loan_amount * U256::from(997) / U256::from(1000);
 
@@ -160,7 +160,7 @@ impl CausalCollapseSystem {
         };
         payloads.push(payload_leg1);
 
-        // الخطوة الثانية: البيع في المنصة ذات السعر الأعلى واستعادة القرض مع تحقيق الربح
+        // الخطوة الثانية: البيع في المنصة الأغلى
         addresses.push(sell_dex.2);
         let min_amount_out_leg2 = self.loan_amount * U256::from(10005) / U256::from(10000);
 
@@ -197,7 +197,8 @@ impl CausalCollapseSystem {
         };
         payloads.push(payload_leg2);
 
-        println!("⚡ [DYNAMIC ROUTER] Buying on {} -> Selling on {}", buy_dex.0, sell_dex.0);
+        println!("⚡ [STRICT DYNAMIC ROUTER] Validated Buy on {} (${:.2}) -> Sell on {} (${:.2})", 
+            buy_dex.0, buy_dex.1, sell_dex.0, sell_dex.1);
 
         (addresses, payloads)
     }
@@ -633,7 +634,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         token1: pair_cfg.target_token,
                     }];
 
-                    // تمرير الأسعار الفورية الحالية للنظام ليقوم بالتوجيه الديناميكي بين المنصات النشطة
                     let system = CausalCollapseSystem::new(
                         nodes,
                         vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, BASESWAP_ROUTER, AERODROME_ROUTER],

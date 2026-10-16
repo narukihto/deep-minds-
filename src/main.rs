@@ -12,8 +12,8 @@ use alloy::{
     sol, sol_types::SolCall,
 };
 
-type U24 = Uint<24, 1>;
-type U160 = Uint<160, 3>;
+type _U24 = Uint<24, 1>;
+type _U160 = Uint<160, 3>;
 
 // الرموز الأساسية على شبكة Base
 const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
@@ -305,16 +305,26 @@ async fn fetch_live_market_data_for_pair<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
+    // 1. Aerodrome Reserves Price Calculation
     let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
     let mut price_aero = 0.0;
     if let Ok(res) = aero_pair.getReserves().call().await {
-        let r0 = res.reserve0.to::<u128>() as f64 / 10f64.powi(config.decimals as i32);
-        let r1 = res.reserve1.to::<u128>() as f64 / 10f64.powi(6); // USDC = 6 decimals
-        if r0 > 0.0 {
-            price_aero = r1 / r0;
+        let r0 = res.reserve0.to::<u128>() as f64;
+        let r1 = res.reserve1.to::<u128>() as f64;
+        
+        if r0 > 0.0 && r1 > 0.0 {
+            let dec_factor = 10f64.powi(config.decimals as i32 - 6);
+            let raw_ratio = r1 / r0;
+            
+            price_aero = if raw_ratio < 0.000001 {
+                (r0 / r1) / dec_factor
+            } else {
+                raw_ratio * dec_factor
+            };
         }
     }
 
+    // 2. Uniswap V3 Slot0 Price Calculation
     let v3_pool = IUniswapV3Pool::new(config.uni_v3_pool, http_provider.clone());
     let mut price_v3 = 0.0;
     if let Ok(slot0) = v3_pool.slot0().call().await {
@@ -322,16 +332,19 @@ where
         if sqrt_price_x96 > 0.0 {
             let ratio = sqrt_price_x96 / (2.0f64.powi(96));
             let raw_price = ratio * ratio;
-            let exponent_diff = 12 + (18 - config.decimals as i32);
-            price_v3 = raw_price * 10f64.powi(exponent_diff);
-            if price_v3 > 0.0 && price_v3 < 1000.0 && config.symbol == "WETH" {
-                price_v3 = 1.0 / price_v3 * 10f64.powi(12);
+            let dec_factor = 10f64.powi(12 + (18 - config.decimals as i32));
+            price_v3 = raw_price * dec_factor;
+            
+            if config.symbol == "WETH" && price_v3 < 1000.0 && price_v3 > 0.0 {
+                price_v3 = (1.0 / price_v3) * 10f64.powi(12);
+            } else if price_v3 > 100000.0 && config.symbol != "cbBTC" {
+                price_v3 = 1.0 / (raw_price / 10f64.powi(12));
             }
         }
     }
 
     if price_v3 <= 0.0 {
-        price_v3 = price_aero * 0.998; 
+        price_v3 = price_aero; 
     }
 
     let spread_gap = (price_aero - price_v3).abs();
@@ -354,9 +367,6 @@ where
     if loan_amount == U256::ZERO || target_path.0.is_empty() {
         return Ok(());
     }
-
-    let aave_fee = loan_amount * U256::from(5) / U256::from(10000); 
-    let aave_fee_units = aave_fee.to::<u128>() as f64;
 
     // تكييف عتبة الربحية حسب نوع الرمز والنسبة المئوية للفجوة
     let min_gap_threshold = match pair_symbol {

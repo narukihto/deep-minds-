@@ -507,8 +507,8 @@ where
     Ok((price_aero, price_v3, price_baseswap, price_pancake, spread_gap))
 }
 
-async fn trigger_on_chain_arbitrage<P, SP>(
-    live_provider: P,
+// 🛑 تم تعطيل الإرسال الحي تماماً هنا وجعل الوظيفة مقتصرة على فحص المحاكاة المحلية فقط
+async fn simulate_only_arbitrage<SP>(
     simulation_provider: SP,
     contract_address: Address,
     target_path: (Vec<Address>, Vec<Vec<u8>>, f64, f64),
@@ -519,7 +519,6 @@ async fn trigger_on_chain_arbitrage<P, SP>(
     pair_symbol: &str,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
-    P: Provider<Ethereum> + Clone,
     SP: Provider<Ethereum> + Clone,
 {
     let (addresses, payloads, _buy_price, _sell_price) = target_path;
@@ -531,7 +530,7 @@ where
         return Ok(());
     }
 
-    println!("🔬 [ANVIL LOCAL FORK SIMULATION - {}] محاكاة عبر العقد المحلي لرصد السبب الحرفي...", pair_symbol);
+    println!("🔬 [ANVIL LOCAL SIMULATION ONLY - {}] جاري محاكاة الصفقة محلياً...", pair_symbol);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -550,32 +549,16 @@ where
 
     match sim_call.call().await {
         Ok(_) => {
-            println!("✅ [ANVIL SIMULATION PASSED!] النجاح مؤكد محلياً لـ {}! جاري إرسال المعاملة الحية للشبكة...", pair_symbol);
-            
-            let live_contract = BaseAtomicArbitrage::new(contract_address, live_provider);
-            let live_tx = live_contract
-                .triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
-                .from(signer_address)
-                .gas(1_500_000);
-
-            if let Ok(pending_tx) = live_tx.send().await {
-                println!("🚀 [TX DISPATCHED SUCCESSFULLY!]: Hash: {:?}", pending_tx.tx_hash());
-            }
+            println!("✅ [ANVIL SIMULATION PASSED SUCCESSFULLY!] العقد قبل التنفيذ محلياً لـ {} دون أي مشاكل!", pair_symbol);
         }
         Err(e) => {
             let err_string = format!("{:?}", e);
-            println!("🛡 [ANVIL CUSTOM ERROR DECODER - {}]: فشلت المحاكاة المحلية. السبب الحرفي من العقد:", pair_symbol);
+            println!("🛡 [ANVIL REVERT ANALYSIS - {}]: فشلت المحاكاة المحلية. التحليل التفصيلي:", pair_symbol);
             
-            if err_string.contains("ArbitrageUnprofitable") {
-                println!("   -> الخطأ العائد: [ArbitrageUnprofitable] الربح النهائي أقل من تكلفة القرض والرسوم.");
-            } else if err_string.contains("InsufficientLiquidity") {
-                println!("   -> الخطأ العائد: [InsufficientLiquidity] نقص في سيولة المجمع لتنفيذ التبادل.");
-            } else if err_string.contains("NotAuthorized") {
-                println!("   -> الخطأ العائد: [NotAuthorized] المحفظة المنفذة ليست مسجلة كـ Owner أو BotAddress.");
-            } else if err_string.contains("UntrustedInitiator") {
-                println!("   -> الخطأ العائد: [UntrustedInitiator] الـ Initiator غير مصرح له.");
+            if err_string.contains("0x") && err_string.len() < 120 {
+                println!("   -> ملاحظة: الخطأ يعود ببيانات فارغة (0x)، مما يعني أن العقد رفض الطلب في الشروط المبكرة (Modifiers/Requires).");
             } else {
-                println!("   -> تفاصيل الخطأ الخام: {}", err_string);
+                println!("   -> تفاصيل الخطأ المستخرجة: {}", err_string);
             }
         }
     }
@@ -585,7 +568,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Anvil Fork MEV Bot Engine with Real Signer...");
+    println!("🤖 Initializing Anvil Local Simulation Diagnostic Engine (Live Dispatch Disabled)...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -604,7 +587,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let signer: PrivateKeySigner = private_key_str.parse()?;
     let signer_address = signer.address();
-    println!("🔑 Loaded Active Signer Address: {:?}", signer_address);
+    println!("🔑 Active Signer Loaded: {:?}", signer_address);
 
     let wallet = EthereumWallet::from(signer.clone());
 
@@ -673,8 +656,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let optimized_path = system.execute_collapse();
 
-                    let _ = trigger_on_chain_arbitrage(
-                        provider,
+                    let _ = simulate_only_arbitrage(
                         sim_provider,
                         contract_address,
                         optimized_path,

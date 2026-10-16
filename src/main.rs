@@ -1,6 +1,5 @@
 use num_bigint::BigUint;
 use num_traits::One;
-use rayon::prelude::*;
 use std::time::Instant;
 use futures_util::StreamExt;
 use tokio::time::{sleep, Duration};
@@ -135,7 +134,6 @@ impl CausalCollapseSystem {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        // الساق الأولى: الشراء عبر Aerodrome Router (USDC -> Target Token)
         addresses.push(AERODROME_ROUTER);
         
         let min_amount_out_leg1 = self.loan_amount * U256::from(997) / U256::from(1000);
@@ -158,7 +156,6 @@ impl CausalCollapseSystem {
 
         payloads.push(payload_leg1);
 
-        // الساق الثانية: البيع عبر Uniswap V3 Router (Target Token -> USDC)
         addresses.push(UNISWAP_V3_ROUTER);
 
         let estimated_token_received = min_amount_out_leg1; 
@@ -252,9 +249,9 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             symbol: "AERO",
             target_token: AERO_BASE,
             aero_pool: address!("6cdcb1c4a4d1c3c6d054b27ac5b77e89eafb971d"),
-            uni_v3_pool: address!("e5b5f522e98b5a2baae212d4da66b865b781db9"),
+            uni_v3_pool: address!("0xe5b5f522e98b5a2baae212d4da66b865b781db90"), // تم تصحيح طول العنوان
             decimals: 18,
-            fee_tier_v3: 500, // 0.05%
+            fee_tier_v3: 500,
             token0: USDC_BASE,
             token1: AERO_BASE,
         },
@@ -264,7 +261,7 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             aero_pool: address!("a19acc3b4f11c46c2b1fc36b5f592af422ee338c"),
             uni_v3_pool: address!("29715d8d279cab143a12ff515b40a2b35d7bad37"),
             decimals: 18,
-            fee_tier_v3: 3000, // 0.3%
+            fee_tier_v3: 3000,
             token0: DEGEN_BASE,
             token1: USDC_BASE,
         },
@@ -274,7 +271,7 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             aero_pool: address!("9c38b55f9a9aba91bbcedeb12bf4428f47a6a0b8"),
             uni_v3_pool: address!("4e962bb3889bf030368f56810a9c96b83cb3e778"),
             decimals: 8,
-            fee_tier_v3: 500, // 0.05%
+            fee_tier_v3: 500,
             token0: USDC_BASE,
             token1: CBBTC_BASE,
         },
@@ -288,7 +285,6 @@ async fn fetch_live_market_data_for_pair<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    // 1. حساب أسعار Aerodrome بناءً على ترتيب token0 و token1 الدقيق
     let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
     let mut price_aero = 0.0;
     if let Ok(res) = aero_pair.getReserves().call().await {
@@ -296,13 +292,10 @@ where
         let r1 = res.reserve1.to::<u128>() as f64;
         
         if r0 > 0.0 && r1 > 0.0 {
-            // التحقق من ترتيب الاحتياطيات بناءً على عنوان USDC وموقع الـ token0/token1
             if config.token0 == USDC_BASE {
-                // token0 هو USDC (6 خانات) و token1 هو العملة المستهدفة
                 let dec_factor = 10f64.powi(config.decimals as i32 - 6);
                 price_aero = (r1 / r0) * dec_factor;
             } else {
-                // token0 هو العملة المستهدفة و token1 هو USDC
                 let dec_factor = 10f64.powi(config.decimals as i32 - 6);
                 let ratio = r0 / r1;
                 price_aero = if ratio > 0.0 { ratio * dec_factor } else { 0.0 };
@@ -310,7 +303,6 @@ where
         }
     }
 
-    // 2. حساب أسعار Uniswap V3 من Slot0
     let v3_pool = IUniswapV3Pool::new(config.uni_v3_pool, http_provider.clone());
     let mut price_v3 = 0.0;
     if let Ok(slot0) = v3_pool.slot0().call().await {

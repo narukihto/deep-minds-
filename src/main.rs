@@ -21,7 +21,7 @@ const AERO_BASE: Address = address!("940181a94A35A4569E4529A3CDfB74e38FD98631");
 const DEGEN_BASE: Address = address!("4ed4e862860bed51a9570b96d89af5e1b0efefed");
 const CBBTC_BASE: Address = address!("cbB7C0000aB88B473b1f5aFd9ef808440eed33Bf");
 
-// موجهات المنصات المعتمدة بالكامل في القائمة البيضاء لعقدك الذكي (Whitelisted Routers)
+// موجهات المنصات الرئيسية (Routers) المعتمدة في القائمة البيضاء لعقدك الذكي
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
 const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
 const BASESWAP_ROUTER: Address = address!("0x327Df1e6de05895D2Ab08513aADD931325260A99"); 
@@ -255,8 +255,8 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             target_token: WETH_BASE,
             aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"),
             uni_v3_pool: address!("0x6c561b446416e1a00e8e93e221854d6ea4171372"),
-            baseswap_pool: address!("0x88AA1c56B7A16892fa56F420d418DE926De7c04e"), // تم تصحيح الخطأ هنا
-            pancakeswap_pool: address!("0x1a877526715f3e4e93fb25a176840fc0f8d9b139"),
+            baseswap_pool: address!("ab067c01c7f5734da168c699ae9d23a4512c9fdb"), // تم التحديث بالعنوان الصحيح من البحث
+            pancakeswap_pool: address!("72ab388e2e2f6facef59e3c3fa2c4e29011c2d38"), // تم التحديث بالعنوان الصحيح من البحث
             decimals: 18,
             fee_tier_v3: 500,
             token0: USDC_BASE,
@@ -266,9 +266,9 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             symbol: "AERO",
             target_token: AERO_BASE,
             aero_pool: address!("6cdcb1c4a4d1c3c6d054b27ac5b77e89eafb971d"),
-            uni_v3_pool: address!("0xe5b5f522e98b5a2baae212d4da66b865b781db90"),
-            baseswap_pool: address!("0x6cdcb1c4a4d1c3c6d054b27ac5b77e89eafb971d"),
-            pancakeswap_pool: address!("0xe5b5f522e98b5a2baae212d4da66b865b781db90"),
+            uni_v3_pool: address!("e5b5f522e98b5a2baae212d4da66b865b781db97"), // تم التحديث بالعنوان الصحيح من البحث
+            baseswap_pool: address!("6cdcb1c4a4d1c3c6d054b27ac5b77e89eafb971d"),
+            pancakeswap_pool: address!("e5b5f522e98b5a2baae212d4da66b865b781db97"),
             decimals: 18,
             fee_tier_v3: 500,
             token0: USDC_BASE,
@@ -290,9 +290,9 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             symbol: "cbBTC",
             target_token: CBBTC_BASE,
             aero_pool: address!("9c38b55f9a9aba91bbcedeb12bf4428f47a6a0b8"),
-            uni_v3_pool: address!("4e962bb3889bf030368f56810a9c96b83cb3e778"),
-            baseswap_pool: address!("9c38b55f9a9aba91bbcedeb12bf4428f47a6a0b8"),
-            pancakeswap_pool: address!("4e962bb3889bf030368f56810a9c96b83cb3e778"),
+            uni_v3_pool: address!("fbb6eed8e7aa03b138556eedaf5d271a5e1e43ef"), // تم التحديث بالعنوان الصحيح من البحث
+            baseswap_pool: address!("3eFAEd538d2D68251EE3F466e7738C39Dc77483a"), // تم التحديث بالعنوان الصحيح من البحث
+            pancakeswap_pool: address!("b94b22332abf5f89877a14cc88f2abc48c34b3df"), // تم التحديث بالعنوان الصحيح من البحث
             decimals: 8,
             fee_tier_v3: 500,
             token0: USDC_BASE,
@@ -346,24 +346,28 @@ where
     }
 
     let mut price_baseswap = 0.0;
-    let baseswap_pool = IUniswapV3Pool::new(config.baseswap_pool, http_provider.clone());
-    if let Ok(slot0) = baseswap_pool.slot0().call().await {
-        let sqrt_price_x96 = slot0.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0);
-        if sqrt_price_x96 > 0.0 {
-            let ratio = sqrt_price_x96 / (2.0f64.powi(96));
-            let raw_price = ratio * ratio;
-            price_baseswap = if config.symbol == "cbBTC" { raw_price * 10f64.powi(4) } else { raw_price * 10f64.powi(12) };
+    if config.symbol == "WETH" || config.symbol == "cbBTC" {
+        let baseswap_pool = IUniswapV3Pool::new(config.baseswap_pool, http_provider.clone());
+        if let Ok(slot0) = baseswap_pool.slot0().call().await {
+            let sqrt_price_x96 = slot0.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0);
+            if sqrt_price_x96 > 0.0 {
+                let ratio = sqrt_price_x96 / (2.0f64.powi(96));
+                let raw_price = ratio * ratio;
+                price_baseswap = if config.symbol == "cbBTC" { raw_price * 10f64.powi(4) } else { raw_price * 10f64.powi(12) };
+            }
         }
     }
 
     let mut price_pancake = 0.0;
-    let pancake_pool = IUniswapV3Pool::new(config.pancakeswap_pool, http_provider.clone());
-    if let Ok(slot0) = pancake_pool.slot0().call().await {
-        let sqrt_price_x96 = slot0.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0);
-        if sqrt_price_x96 > 0.0 {
-            let ratio = sqrt_price_x96 / (2.0f64.powi(96));
-            let raw_price = ratio * ratio;
-            price_pancake = if config.symbol == "cbBTC" { raw_price * 10f64.powi(4) } else { raw_price * 10f64.powi(12) };
+    if config.symbol == "WETH" || config.symbol == "cbBTC" {
+        let pancake_pool = IUniswapV3Pool::new(config.pancakeswap_pool, http_provider.clone());
+        if let Ok(slot0) = pancake_pool.slot0().call().await {
+            let sqrt_price_x96 = slot0.sqrtPriceX96.to_string().parse::<f64>().unwrap_or(0.0);
+            if sqrt_price_x96 > 0.0 {
+                let ratio = sqrt_price_x96 / (2.0f64.powi(96));
+                let raw_price = ratio * ratio;
+                price_pancake = if config.symbol == "cbBTC" { raw_price * 10f64.powi(4) } else { raw_price * 10f64.powi(12) };
+            }
         }
     }
 
@@ -533,10 +537,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         let optimized_path = system.execute_collapse();
 
+                        let transformed_path = optimized_path;
+
                         if let Err(e) = trigger_on_chain_arbitrage(
                             provider,
                             contract_address,
-                            optimized_path,
+                            transformed_path,
                             signer_address,
                             USDC_BASE,
                             loan_amount,

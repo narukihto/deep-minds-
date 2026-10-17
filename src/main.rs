@@ -273,7 +273,6 @@ impl ArbitrageGraph {
 
 pub fn load_global_liquidity_graph() -> ArbitrageGraph {
     let mut graph = ArbitrageGraph::new();
-    // استخدام العناوين الحقيقية للمسبحات
     graph.add_pool(Pool { id: address!("0x10648ba41b8565907cfa1496765fa4d95390aa0d"), token0: WETH_BASE, token1: CBETH_BASE, dex_type: DexType::UniswapV3, fee: 500 });
     graph.add_pool(Pool { id: address!("0x47cA96Ea59C13F72745928887f84C9F52C3D7348"), token0: WETH_BASE, token1: CBETH_BASE, dex_type: DexType::Aerodrome, fee: 0 });
     graph.add_pool(Pool { id: address!("0x098679E131333D72E6C4a11f24049A917dB0cBfc"), token0: USDC_BASE, token1: DAI_BASE, dex_type: DexType::UniswapV3, fee: 100 });
@@ -401,7 +400,6 @@ sol! {
     }
 }
 
-// تحديث مصفوفة المزودين بالعناوين المعتمدة الجديدة
 pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
     vec![
         TokenPairConfig {
@@ -443,57 +441,153 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
     ]
 }
 
-fn calculate_v2_price(reserve0: u128, reserve1: u128, token0: Address, token1: Address, target_decimals: u32) -> f64 {
-    if reserve0 == 0 || reserve1 == 0 { return 0.0; }
+fn calculate_v2_price(
+    reserve0: u128,
+    reserve1: u128,
+    token0: Address,
+    token1: Address,
+    target_decimals: u32,
+    weth_price_usd: f64,
+) -> f64 {
+    if reserve0 == 0 || reserve1 == 0 {
+        return 0.0;
+    }
     let usdc_decimals = 6;
-    let r0 = reserve0 as f64 / 10f64.powi(if token0 == USDC_BASE { usdc_decimals } else { target_decimals } as i32);
-    let r1 = reserve1 as f64 / 10f64.powi(if token1 == USDC_BASE { usdc_decimals } else { target_decimals } as i32);
-    if token0 == USDC_BASE { if r1 > 0.0 { r0 / r1 } else { 0.0 } } else { if r0 > 0.0 { r1 / r0 } else { 0.0 } }
+
+    if token0 == USDC_BASE || token1 == USDC_BASE {
+        let r0 = reserve0 as f64 / 10f64.powi(if token0 == USDC_BASE { usdc_decimals } else { target_decimals } as i32);
+        let r1 = reserve1 as f64 / 10f64.powi(if token1 == USDC_BASE { usdc_decimals } else { target_decimals } as i32);
+
+        return if token0 == USDC_BASE {
+            if r1 > 0.0 { r0 / r1 } else { 0.0 }
+        } else {
+            if r0 > 0.0 { r1 / r0 } else { 0.0 }
+        };
+    }
+
+    if token0 == WETH_BASE || token1 == WETH_BASE {
+        let r0 = reserve0 as f64 / 10f64.powi(18);
+        let r1 = reserve1 as f64 / 10f64.powi(18);
+        let ratio = if token0 == WETH_BASE {
+            if r1 > 0.0 { r0 / r1 } else { 0.0 }
+        } else {
+            if r0 > 0.0 { r1 / r0 } else { 0.0 }
+        };
+        return ratio * weth_price_usd;
+    }
+
+    0.0
 }
 
-fn calculate_v3_price(sqrt_price_x96: _U160, token0: Address, token1: Address, target_decimals: u32) -> f64 {
+fn calculate_v3_price(
+    sqrt_price_x96: _U160,
+    token0: Address,
+    token1: Address,
+    target_decimals: u32,
+    weth_price_usd: f64,
+) -> f64 {
     let sqrt_f64 = sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0);
-    if sqrt_f64 <= 0.0 { return 0.0; }
+    if sqrt_f64 <= 0.0 {
+        return 0.0;
+    }
     let ratio = sqrt_f64 / 2.0f64.powi(96);
     let price_raw = ratio * ratio;
+
     let usdc_decimals = 6;
-    let d0 = if token0 == USDC_BASE { usdc_decimals } else { target_decimals };
-    let d1 = if token1 == USDC_BASE { usdc_decimals } else { target_decimals };
-    let adjusted_price = price_raw * 10f64.powi((d0 as i32) - (d1 as i32));
-    if token0 == USDC_BASE { if adjusted_price > 0.0 { 1.0 / adjusted_price } else { 0.0 } } else { adjusted_price }
+
+    if token0 == USDC_BASE || token1 == USDC_BASE {
+        let d0 = if token0 == USDC_BASE { usdc_decimals } else { target_decimals };
+        let d1 = if token1 == USDC_BASE { usdc_decimals } else { target_decimals };
+        let adjusted_price = price_raw * 10f64.powi((d0 as i32) - (d1 as i32));
+
+        return if token0 == USDC_BASE {
+            if adjusted_price > 0.0 { 1.0 / adjusted_price } else { 0.0 }
+        } else {
+            adjusted_price
+        };
+    }
+
+    if token0 == WETH_BASE || token1 == WETH_BASE {
+        let cbeth_in_weth = if token0 == WETH_BASE {
+            if price_raw > 0.0 { 1.0 / price_raw } else { 0.0 }
+        } else {
+            price_raw
+        };
+        return cbeth_in_weth * weth_price_usd;
+    }
+
+    0.0
 }
 
-async fn fetch_live_market_data_for_pair<P>(http_provider: P, config: &TokenPairConfig) -> Result<(f64, f64, f64, f64, f64), Box<dyn std::error::Error>>
-where P: Provider<Ethereum> + Clone {
+async fn fetch_live_market_data_for_pair<P>(
+    http_provider: P,
+    config: &TokenPairConfig,
+    weth_price_usd: f64,
+) -> Result<(f64, f64, f64, f64, f64), Box<dyn std::error::Error>>
+where
+    P: Provider<Ethereum> + Clone,
+{
     let mut price_aero = 0.0;
     let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
     if let Ok(res) = aero_pair.getReserves().call().await {
-        price_aero = calculate_v2_price(res.reserve0.to::<u128>(), res.reserve1.to::<u128>(), config.token0, config.token1, config.decimals);
+        price_aero = calculate_v2_price(
+            res.reserve0.to::<u128>(),
+            res.reserve1.to::<u128>(),
+            config.token0,
+            config.token1,
+            config.decimals,
+            weth_price_usd,
+        );
     }
 
     let mut price_v3 = 0.0;
     let v3_pool = IUniswapV3Pool::new(config.uni_v3_pool, http_provider.clone());
     if let Ok(slot0) = v3_pool.slot0().call().await {
-        price_v3 = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals);
+        price_v3 = calculate_v3_price(
+            slot0.sqrtPriceX96,
+            config.token0,
+            config.token1,
+            config.decimals,
+            weth_price_usd,
+        );
     }
 
     let mut price_baseswap = 0.0;
     let baseswap_pair = IUniswapV2Pair::new(config.baseswap_pool, http_provider.clone());
     if let Ok(res) = baseswap_pair.getReserves().call().await {
-        price_baseswap = calculate_v2_price(res.reserve0.to::<u128>(), res.reserve1.to::<u128>(), config.token0, config.token1, config.decimals);
+        price_baseswap = calculate_v2_price(
+            res.reserve0.to::<u128>(),
+            res.reserve1.to::<u128>(),
+            config.token0,
+            config.token1,
+            config.decimals,
+            weth_price_usd,
+        );
     }
 
     let mut price_pancake = 0.0;
     let pancake_pool = IUniswapV3Pool::new(config.pancakeswap_pool, http_provider.clone());
     if let Ok(slot0) = pancake_pool.slot0().call().await {
-        price_pancake = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals);
+        price_pancake = calculate_v3_price(
+            slot0.sqrtPriceX96,
+            config.token0,
+            config.token1,
+            config.decimals,
+            weth_price_usd,
+        );
     }
 
     let mut prices = vec![price_aero, price_v3, price_baseswap, price_pancake];
     prices.retain(|&p| p > 0.0 && p <= 100000.0);
+
     let max_price = prices.iter().cloned().fold(0.0, f64::max);
     let min_price = prices.iter().cloned().fold(f64::INFINITY, f64::min);
-    let spread_gap = if !prices.is_empty() && min_price != f64::INFINITY { max_price - min_price } else { 0.0 };
+
+    let spread_gap = if !prices.is_empty() && min_price != f64::INFINITY {
+        max_price - min_price
+    } else {
+        0.0
+    };
 
     Ok((price_aero, price_v3, price_baseswap, price_pancake, spread_gap))
 }
@@ -569,7 +663,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Unified Dual-Engine Arbitrage Bot (Cross-DEX + Triangular) with Verified Pools...");
+    println!("🤖 Initializing Unified Dual-Engine Arbitrage Bot with Live Price Conversion...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -590,7 +684,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for pair in &monitored_pairs {
         let _ = BaseAtomicArbitrage::new(contract_address, http_provider.clone()).setTargetWhitelist(pair.target_token, true).from(signer_address).send().await;
     }
-    // Whitelist cbETH explicitly
     let _ = BaseAtomicArbitrage::new(contract_address, http_provider.clone()).setTargetWhitelist(CBETH_BASE, true).from(signer_address).send().await;
 
     let ws = alloy::providers::WsConnect::new(alchemy_wss_url);
@@ -604,9 +697,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let block_num = block.inner.number;
         println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Dual Engine Scanning...", block_num, block_counter);
 
-        // 1. مراقبة الفجوات والأسعار لكل الأصول (WETH, cbETH, DAI)
+        // 1. جلب سعر WETH أولاً كمرجع أساسي للتحويل بالدولار
+        let mut current_weth_price = 2425.0; // قيمة افتراضية كمرجع أمان
+        if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {
+            if let Ok((p_aero, p_v3, _, _, _)) = fetch_live_market_data_for_pair(http_provider.clone(), weth_pair, 1.0).await {
+                if p_aero > 0.0 { current_weth_price = p_aero; }
+                else if p_v3 > 0.0 { current_weth_price = p_v3; }
+            }
+        }
+
+        // 2. مراقبة الفجوات والأسعار لجميع العملات بوجود مرجع سعر WETH
         for pair in &monitored_pairs {
-            if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(http_provider.clone(), pair).await {
+            if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(http_provider.clone(), pair, current_weth_price).await {
                 println!(
                     " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} | BaseSwap: ${:.4} | Pancake: ${:.4} | Max Gap: ${:.2}",
                     pair.symbol, p_aero, p_v3, p_baseswap, p_pancake, spread_gap
@@ -627,7 +729,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // 2. فحص الدورات المثلثية
+        // 3. فحص الدورات المثلثية
         let _ = trigger_triangular_arbitrage(
             http_provider.clone(),
             private_provider.clone(),

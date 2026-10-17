@@ -8,8 +8,7 @@ use alloy::{
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256, Bytes, Uint},
-    sol, sol_types::SolCall,
-    contract::Error as ContractError,
+    sol, sol_types::{SolCall, SolInterface},
 };
 use std::collections::HashMap;
 
@@ -607,12 +606,10 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
         Err(contract_error) => {
             eprintln!("❌ [SIMULATION FAILED for {}]", pair_cfg.symbol);
             
-            // استخراج بايتات الـ Revert بطريقة صحيحة ومتوافقة مع alloy
             if let Some(revert_bytes) = contract_error.as_revert_data() {
                 eprintln!("   🛑 Revert Data Bytes: 0x{}", alloy::hex::encode(revert_bytes));
                 
-                // فحص خطأ ArbitrageUnprofitable (يحتوي على بارامتر واحد struct أو uint256 حسب التوليد)
-                if let Ok(err_decoded) = BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode_raw(revert_bytes, true) {
+                if let Ok(err_decoded) = BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(revert_bytes, true) {
                     match err_decoded {
                         BaseAtomicArbitrage::BaseAtomicArbitrageErrors::ArbitrageUnprofitable(err_data) => {
                             eprintln!("   💰 [Revert Reason]: ArbitrageUnprofitable! Required: {}, Actual: {}", err_data.required, err_data.actual);

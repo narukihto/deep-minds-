@@ -102,27 +102,20 @@ impl CausalCollapseSystem {
             return (vec![], vec![]);
         }
 
-        // 1. حساب رسوم فلاش لون Balancer (0.01%) + إجمالي المبلغ المطلوب إرجاعه بالـ USDC (6 Decimals)
         let flash_loan_fee = self.loan_amount / U256::from(10000); // 0.01%
         let target_repay_amount = self.loan_amount + flash_loan_fee;
         
-        // 2. التحويل الصحيح بين USDC (6 Decimals) والـ Target Token (مثلاً WETH بـ 18 Decimals)
-        // loan_amount بالـ USDC يُقسم على سعر الـ Token بالدولار لمعرفة كمية الـ Token المتوقعة
         let loan_usdc_f64 = self.loan_amount.to_string().parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
         let expected_target_tokens_f64 = loan_usdc_f64 / self.current_target_price_usd;
         
-        // تحويل الناتج المتوقع إلى الخانات العشرية الخاصة بالـ Target Token (18 Decimals للـ WETH/CBETH)
         let target_decimals_multiplier = 10f64.powi(self.pair_config.decimals as i32);
         let expected_target_units_u128 = (expected_target_tokens_f64 * target_decimals_multiplier) as u128;
         let expected_target_units = U256::from(expected_target_units_u128);
 
-        // السماح بـ Slippage بنسبة 0.5% للساق الأولى بدقة في وحدات الـ Target Token الحقيقية (18 Decimals)
-        let min_amount_out_leg1 = expected_target_units * U256::from(9950) / U256::from(10000);
+        let min_amount_out_leg1 = expected_target_units * U256::from(9960) / U256::from(10000); // تحسين هامش الانزلاق لـ 0.4%
+        let min_amount_out_leg2 = target_repay_amount + U256::from(100); // هامش ربح محاكاة آمن
 
-        // الساق الثانية تُخرج USDC (6 Decimals) ويجب أن تغطي أصل القرض والرسوم + هامش ربح بسيط للمحاكاة
-        let min_amount_out_leg2 = target_repay_amount + U256::from(10); 
-
-        // --- الساق الأولى: التبديل عبر Aerodrome (USDC -> WETH) ---
+        // --- الساق الأولى: Aerodrome (USDC -> Target) ---
         addresses.push(AERODROME_ROUTER);
         let aero_route = IAerodromeRouter::Route {
             from: self.borrowed_token,
@@ -141,7 +134,7 @@ impl CausalCollapseSystem {
         .abi_encode();
         payloads.push(payload_leg1);
 
-        // --- الساق الثانية: التبديل عبر Uniswap V3 (WETH -> USDC) ---
+        // --- الساق الثانية: Uniswap V3 (Target -> USDC) ---
         addresses.push(UNISWAP_V3_ROUTER);
         let mut path_bytes = Vec::new();
         path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
@@ -153,8 +146,8 @@ impl CausalCollapseSystem {
             path: Bytes::from(path_bytes),
             recipient: self.contract_address,
             deadline: U256::from(u64::MAX),
-            amountIn: min_amount_out_leg1, // إدخال كمية الـ WETH الصحيحة (18 Decimals)
-            amountOutMinimum: min_amount_out_leg2, // اشتراط استلام الـ USDC الصحيح (6 Decimals)
+            amountIn: min_amount_out_leg1,
+            amountOutMinimum: min_amount_out_leg2,
         };
 
         let payload_leg2 = IUniswapV3Router::exactInputCall {
@@ -550,8 +543,9 @@ async fn trigger_cross_dex_arbitrage<P, PP>(http_provider: P, private_provider: 
 where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     if spread_gap < 1.5 { return Ok(()); }
     
-    let raw_loan = (spread_gap * 50.0) as u128 * 1_000_000;
-    let dynamic_loan = raw_loan.max(1_000_000);
+    // رفع الحد الأدنى للقرض ليكون 1,000 USDC على الأقل لتجنب فشل الهوامش والرسوم الثابتة
+    let raw_loan = (spread_gap * 150.0) as u128 * 1_000_000;
+    let dynamic_loan = raw_loan.max(1_000_000_000); // 1,000 USDC (6 decimals)
     let loan_amount = U256::from(dynamic_loan);
 
     println!("🎯 [Cross-DEX {}] Gap: ${:.2} | Loan: {} USDC... Simulating!", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);

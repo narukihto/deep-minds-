@@ -1,4 +1,4 @@
-name: Deploy and Run Base MEV Bot
+Name: Deploy and Run Base MEV Bot
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ jobs:
         with:
           components: clippy
 
-      - name: Install Foundry (Anvil)
+      - name: Install Foundry (Anvil & Cast)
         uses: foundry-rs/foundry-toolchain@v1
         with:
           version: nightly
@@ -31,6 +31,30 @@ jobs:
           echo "[*] Waiting for Anvil RPC to initialize..."
           sleep 5
           nc -z localhost 8545 && echo "[*] Anvil is up and running!" || (cat anvil.log && exit 1)
+
+      - name: Inspect Execution Trace (Deep Flash Loan Check)
+        env:
+          CONTRACT_ADDR: ${{ secrets.CONTRACT_ADDR }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+        run: |
+          echo "======================================================="
+          echo "🔍 [DEEP TRACE] Inspecting EVM Calls & Flash Loan Execution..."
+          echo "======================================================="
+          
+          # استخراج عنوان المحفظة من المفتاح الخاص
+          ACCOUNT_ADDR=$(cast wallet address --private-key "$PRIVATE_KEY")
+          USDC_BASE="0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913"
+          LOAN_AMOUNT="2000000000" # 2,000 USDC
+
+          # استدعاء دالة العقد مع تفعيل خيار --trace لرؤية شجرة الاستدعاءات الكاملة
+          cast call "$CONTRACT_ADDR" \
+            "triggerBalancerArbitrage(address,uint256,bytes)" \
+            "$USDC_BASE" "$LOAN_AMOUNT" "0x" \
+            --from "$ACCOUNT_ADDR" \
+            --rpc-url "http://127.0.0.1:8545" \
+            --trace || true
+          
+          echo "======================================================="
 
       - name: Cache Cargo Dependencies
         uses: actions/cache@v4

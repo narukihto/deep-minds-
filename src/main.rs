@@ -17,12 +17,9 @@ const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
 const CBETH_BASE: Address = address!("0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22");
 const DAI_BASE: Address = address!("0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb");
-const WBTC_BASE: Address = address!("0x1ceA84203673764244E05693e42E6Ace62bE9BA5");
 
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
 const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
-const BASESWAP_ROUTER: Address = address!("0xcA1F7645EF1077CC178dFb42Cf5d2f840457DDBb"); 
-const PANCAKESWAP_V3_ROUTER: Address = address!("0x1b81D678ffb9C0263b24A97847620C99d213eB14"); 
 
 // --- DEX POOL TYPE ENUM ---
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -327,11 +324,11 @@ where
     }
 
     if min_reserve == U256::from(u128::MAX) || min_reserve.is_zero() {
-        return Ok(U256::from(1_000_000_000));
+        return Ok(U256::from(1_000_000_000u64));
     }
 
-    let dynamic_loan = (min_reserve * U256::from(5)) / U256::from(100);
-    let final_loan = dynamic_loan.max(U256::from(1_000_000_000)).min(U256::from(50_000_000_000));
+    let dynamic_loan = (min_reserve * U256::from(5u64)) / U256::from(100u64);
+    let final_loan = dynamic_loan.max(U256::from(1_000_000_000u64)).min(U256::from(50_000_000_000u64));
 
     Ok(final_loan)
 }
@@ -354,7 +351,7 @@ where
 
     for target_cycle in &cycles {
         let loan_amount = fetch_live_pool_liquidity_and_compute_loan(http_provider.clone(), target_cycle).await
-            .unwrap_or(U256::from(2_000_000_000));
+            .unwrap_or(U256::from(2_000_000_000u64));
 
         let (targets, data) = PayloadEncoder::build_execution_payload(
             target_cycle,

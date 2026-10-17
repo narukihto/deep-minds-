@@ -1,5 +1,3 @@
-use num_bigint::BigUint;
-use num_traits::One;
 use futures_util::StreamExt;
 use tokio::time::{sleep, Duration};
 use alloy::{
@@ -301,7 +299,6 @@ sol! {
     }
 }
 
-// دالة لجلب الاحتياطيات الحية وحساب حجم القرض الديناميكي بدقة لكل مسبح
 async fn fetch_live_pool_liquidity_and_compute_loan<P>(
     http_provider: P,
     cycle: &[DirectedEdge],
@@ -313,7 +310,7 @@ where
 
     for edge in cycle {
         match edge.pool.dex_type {
-            DexType::UniswapV2 | DexType::Aerodrome | DexType::BaseSwap => {
+            DexType::Aerodrome | DexType::BaseSwap => {
                 let pair_contract = IUniswapV2Pair::new(edge.pool.id, http_provider.clone());
                 if let Ok(res) = pair_contract.getReserves().call().await {
                     let r0 = U256::from(res.reserve0);
@@ -323,7 +320,6 @@ where
                 }
             }
             DexType::UniswapV3 | DexType::PancakeSwapV3 => {
-                // للـ V3 نعتمد على حدود سيولة افتراضية آمنة بناءً على الفعالية
                 let default_v3_cap = U256::from(50_000_000_000u64); // 50,000 USDC
                 if default_v3_cap < min_reserve { min_reserve = default_v3_cap; }
             }
@@ -331,12 +327,11 @@ where
     }
 
     if min_reserve == U256::from(u128::MAX) || min_reserve.is_zero() {
-        return Ok(U256::from(1_000_000_000)); // القرض الافتراضي الأدنى (1,000 USDC)
+        return Ok(U256::from(1_000_000_000));
     }
 
-    // حساب حجم قرض ديناميكي آمن (مثلاً 5% من أضعف مسبح في الدورة لمنع الانزلاق السعري)
     let dynamic_loan = (min_reserve * U256::from(5)) / U256::from(100);
-    let final_loan = dynamic_loan.max(U256::from(1_000_000_000)).min(U256::from(50_000_000_000)); // بين 1 ألف و 50 ألف USDC
+    let final_loan = dynamic_loan.max(U256::from(1_000_000_000)).min(U256::from(50_000_000_000));
 
     Ok(final_loan)
 }
@@ -358,7 +353,6 @@ where
     }
 
     for target_cycle in &cycles {
-        // 🚀 تحديث الاحتياطيات الحية وحساب حجم القرض الديناميكي لحظياً لهذا البلوك
         let loan_amount = fetch_live_pool_liquidity_and_compute_loan(http_provider.clone(), target_cycle).await
             .unwrap_or(U256::from(2_000_000_000));
 
@@ -396,9 +390,7 @@ where
                 }
                 break; 
             }
-            Err(_sim_err) => {
-                // محاكاة صامتة في حال لم تكن الفرصة مربحة في هذا البلوك
-            }
+            Err(_sim_err) => {}
         }
     }
 

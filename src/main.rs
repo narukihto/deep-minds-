@@ -273,10 +273,10 @@ impl ArbitrageGraph {
 
 pub fn load_global_liquidity_graph() -> ArbitrageGraph {
     let mut graph = ArbitrageGraph::new();
-    graph.add_pool(Pool { id: address!("0x10648ba41b8565907cfa1496765fa4d95390aa0d"), token0: WETH_BASE, token1: CBETH_BASE, dex_type: DexType::UniswapV3, fee: 500 });
-    graph.add_pool(Pool { id: address!("0x47cA96Ea59C13F72745928887f84C9F52C3D7348"), token0: WETH_BASE, token1: CBETH_BASE, dex_type: DexType::Aerodrome, fee: 0 });
-    graph.add_pool(Pool { id: address!("0x098679E131333D72E6C4a11f24049A917dB0cBfc"), token0: USDC_BASE, token1: DAI_BASE, dex_type: DexType::UniswapV3, fee: 100 });
-    graph.add_pool(Pool { id: address!("0x485E973B43bbD185b0dC255552DDeFbeCC253cfC"), token0: USDC_BASE, token1: DAI_BASE, dex_type: DexType::Aerodrome, fee: 1 });
+    graph.add_pool(Pool { id: address!("0x19a0aef6613524ea0761646a6a4e4be0e114a3c8"), token0: WETH_BASE, token1: CBETH_BASE, dex_type: DexType::UniswapV3, fee: 100 });
+    graph.add_pool(Pool { id: address!("0x643cf6cb74e38fd98631b1e358b0541ea4970477"), token0: WETH_BASE, token1: CBETH_BASE, dex_type: DexType::Aerodrome, fee: 0 });
+    graph.add_pool(Pool { id: address!("0x6f19cf4131599557b447432b49bc70b37feeb1b0"), token0: DAI_BASE, token1: USDC_BASE, dex_type: DexType::UniswapV3, fee: 100 });
+    graph.add_pool(Pool { id: address!("0xca4948af908871923cb1135ec367e9cd59bb2678"), token0: DAI_BASE, token1: USDC_BASE, dex_type: DexType::Aerodrome, fee: 1 });
     graph
 }
 
@@ -417,26 +417,26 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
         TokenPairConfig {
             symbol: "cbETH",
             target_token: CBETH_BASE,
-            aero_pool: address!("0x47cA96Ea59C13F72745928887f84C9F52C3D7348"),
-            uni_v3_pool: address!("0x10648ba41b8565907cfa1496765fa4d95390aa0d"),
-            baseswap_pool: address!("0x24bc6E1f22eE5743c399Fd6Ddf52044F406085a6"),
-            pancakeswap_pool: address!("0x946BeE7D2BfE8b7899667794A6E89eEa72C42B98"),
+            aero_pool: address!("0x643cf6cb74e38fd98631b1e358b0541ea4970477"),
+            uni_v3_pool: address!("0x19a0aef6613524ea0761646a6a4e4be0e114a3c8"),
+            baseswap_pool: address!("0x24d209812c828343a23f831f24f2dee13ff6597f"),
+            pancakeswap_pool: address!("0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee"),
             decimals: 18,
-            fee_tier_v3: 500,
+            fee_tier_v3: 100,
             token0: WETH_BASE,
             token1: CBETH_BASE,
         },
         TokenPairConfig {
             symbol: "DAI",
             target_token: DAI_BASE,
-            aero_pool: address!("0x485E973B43bbD185b0dC255552DDeFbeCC253cfC"),
-            uni_v3_pool: address!("0x098679E131333D72E6C4a11f24049A917dB0cBfc"),
-            baseswap_pool: address!("0x1A09D5d0445047Da3ab4994262b22404288A3BfC"),
-            pancakeswap_pool: address!("0x446B84A6fC0D7dbbCEE32f6bCbFbf7fbaFECC253"),
+            aero_pool: address!("0xca4948af908871923cb1135ec367e9cd59bb2678"),
+            uni_v3_pool: address!("0x6f19cf4131599557b447432b49bc70b37feeb1b0"),
+            baseswap_pool: address!("0x6291a13665ff062a4d0cb5a9167e9cd59bc216b2"),
+            pancakeswap_pool: address!("0x981504d60a1ba36512fb265538cb1b54bfa6c3a1"),
             decimals: 18,
             fee_tier_v3: 100,
-            token0: USDC_BASE,
-            token1: DAI_BASE,
+            token0: DAI_BASE,
+            token1: USDC_BASE,
         },
     ]
 }
@@ -663,7 +663,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Unified Dual-Engine Arbitrage Bot with Live Price Conversion...");
+    println!("🤖 Initializing Unified Dual-Engine Arbitrage Bot with Verified Hex-Sorted Pools...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -685,6 +685,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = BaseAtomicArbitrage::new(contract_address, http_provider.clone()).setTargetWhitelist(pair.target_token, true).from(signer_address).send().await;
     }
     let _ = BaseAtomicArbitrage::new(contract_address, http_provider.clone()).setTargetWhitelist(CBETH_BASE, true).from(signer_address).send().await;
+    let _ = BaseAtomicArbitrage::new(contract_address, http_provider.clone()).setTargetWhitelist(DAI_BASE, true).from(signer_address).send().await;
 
     let ws = alloy::providers::WsConnect::new(alchemy_wss_url);
     let ws_provider = ProviderBuilder::new().wallet(EthereumWallet::from(private_key_str.parse::<PrivateKeySigner>()?)).connect_ws(ws).await?;
@@ -697,8 +698,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let block_num = block.inner.number;
         println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Dual Engine Scanning...", block_num, block_counter);
 
-        // 1. جلب سعر WETH أولاً كمرجع أساسي للتحويل بالدولار
-        let mut current_weth_price = 2425.0; // قيمة افتراضية كمرجع أمان
+        let mut current_weth_price = 2425.0;
         if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {
             if let Ok((p_aero, p_v3, _, _, _)) = fetch_live_market_data_for_pair(http_provider.clone(), weth_pair, 1.0).await {
                 if p_aero > 0.0 { current_weth_price = p_aero; }
@@ -706,7 +706,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // 2. مراقبة الفجوات والأسعار لجميع العملات بوجود مرجع سعر WETH
         for pair in &monitored_pairs {
             if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(http_provider.clone(), pair, current_weth_price).await {
                 println!(
@@ -729,7 +728,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // 3. فحص الدورات المثلثية
         let _ = trigger_triangular_arbitrage(
             http_provider.clone(),
             private_provider.clone(),

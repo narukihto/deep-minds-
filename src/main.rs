@@ -15,11 +15,12 @@ type _U160 = Uint<160, 3>;
 
 const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
-const CBETH_BASE: Address = address!("2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22");
+// العنوان الموثق والمفحوص لـ cbETH على Base
+const CBETH_BASE: Address = address!("2Ae3F1Ec7F1F5035CE78A90ac3A9df53594b2a30");
 
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
 const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
-const BASESWAP_ROUTER: Address = address!("0x327Df1e6de05895D2Ab08513aADD931325260A99"); 
+const BASESWAP_ROUTER: Address = address!("0xcA1F7645EF1077CC178dFb42Cf5d2f840457DDBb"); 
 const PANCAKESWAP_V3_ROUTER: Address = address!("0x1b81D678ffb9C0263b24A97847620C99d213eB14"); 
 
 #[derive(Debug, Clone)]
@@ -77,7 +78,6 @@ impl CausalCollapseSystem {
         }
     }
 
-    // تنفيذ المسار الثلاثي المتقدم أو الثنائي بمرونة عالية للربح
     pub fn execute_collapse(&self) -> (Vec<Address>, Vec<Vec<u8>>) {
         if self.nodes.is_empty() {
             return (vec![], vec![]);
@@ -86,10 +86,9 @@ impl CausalCollapseSystem {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        // Leg 1: Aerodrome (USDC -> Target / WETH)
+        // Leg 1: Aerodrome Router (USDC -> Target Token)
         addresses.push(AERODROME_ROUTER);
         
-        // سليباج مرن جائع للربح (99.95% بدلاً من 99.9%) لتقليل الهامش الضائع
         let min_amount_out_leg1 = self.loan_amount * U256::from(9995) / U256::from(10000);
 
         let aero_route = IAerodromeRouter::Route {
@@ -110,11 +109,10 @@ impl CausalCollapseSystem {
 
         payloads.push(payload_leg1);
 
-        // Leg 2: PancakeSwap V3 / Uniswap V3 (Target -> Back to USDC or via cbETH)
+        // Leg 2: PancakeSwap V3 / Uniswap V3 (Target Token -> USDC)
         addresses.push(PANCAKESWAP_V3_ROUTER);
 
         let estimated_token_received = min_amount_out_leg1; 
-        // ضمان حد أدنى مرن جداً يطارد أبسط فائض ربح فوق التكاليف
         let min_amount_out_leg2 = self.loan_amount * U256::from(10001) / U256::from(10000);
 
         let mut path_bytes = Vec::new();
@@ -220,16 +218,15 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             token0: WETH_BASE,
             token1: USDC_BASE,
         },
-        // إضافة زوج cbETH الآمن جداً لتوليد مسارات ثلاثية/متوازية عالية الفجوات
         TokenPairConfig {
             symbol: "cbETH",
             target_token: CBETH_BASE,
-            aero_pool: address!("0xD07F8152c93C68b8e0e7D79CBA12C26DA3a7B692"),
-            uni_v3_pool: address!("0xd1dF9CE4b7a2d2a0e4c58f00078De745aEE2EBE4"),
-            baseswap_pool: address!("0xd1dF9CE4b7a2d2a0e4c58f00078De745aEE2EBE4"),
-            pancakeswap_pool: address!("0xd1dF9CE4b7a2d2a0e4c58f00078De745aEE2EBE4"),
+            aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"), // fallback check
+            uni_v3_pool: address!("0xa8e4c55d6daf4d768aeba2378c1ad94c112ef48a"), // مسبح Uniswap V3 الموثق
+            baseswap_pool: address!("ab067c01c7f5734da168c699ae9d23a4512c9fdb"),
+            pancakeswap_pool: address!("72ab388e2e2f6facef59e3c3fa2c4e29011c2d38"),
             decimals: 18,
-            fee_tier_v3: 500,
+            fee_tier_v3: 3000, // 0.3% Fee Tier
             token0: CBETH_BASE,
             token1: USDC_BASE,
         },
@@ -369,7 +366,7 @@ where
         return Ok(());
     }
 
-    println!("⚡ [GREEDY SIMULATION - {}] Testing execution with 2,000 USDC Loan (Gap: ${:.2})...", pair_symbol, spread_gap);
+    println!("⚡ [HIGH VOLUME SIMULATION - {}] Testing execution with 5,000 USDC Loan (Gap: ${:.2})...", pair_symbol, spread_gap);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -422,7 +419,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Greedy Multi-Protocol MEV Scanner (Balancer & Aave V3)...");
+    println!("🤖 Initializing High-Volume Multi-Protocol MEV Scanner (Balancer & Aave V3)...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -454,7 +451,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = sub.into_stream();
     let mut block_counter = 0u64;
 
-    let loan_amount = U256::from(2_000_000_000u64);
+    // تم التحديث رسمياً إلى 5,000 USDC لرفع القوة الربحية وتجاوز الرسوم
+    let loan_amount = U256::from(5_000_000_000u64);
 
     while let Some(block) = stream.next().await {
         block_counter += 1;

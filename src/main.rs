@@ -388,12 +388,12 @@ async fn trigger_on_chain_arbitrage<P>(
 where
     P: Provider<Ethereum> + Clone,
 {
-    // 🔑 معادلة القرض الديناميكي: القرض يتناسب طردياً مع حجم الفجوة السعرية
+    // القرض الديناميكي المعتمد على الفجوة السعرية
     let raw_loan = (spread_gap * 2500.0) as u64 * 1_000_000;
-    let dynamic_loan = raw_loan.clamp(1_000_000_000, 50_000_000_000); // بين 1,000 USDC و 50,000 USDC
+    let dynamic_loan = raw_loan.clamp(1_000_000_000, 50_000_000_000);
     let loan_amount = U256::from(dynamic_loan);
 
-    println!("🧠 [DYNAMIC EXECUTION - {}] Gap: ${:.2} | Calculated Loan: {} USDC...", 
+    println!("🚀 [DIRECT EXECUTION MODE - {}] Gap: ${:.2} | Dynamic Loan: {} USDC... Dispatching Real TX!", 
              pair_cfg.symbol, spread_gap, dynamic_loan / 1_000_000);
 
     let nodes = vec![QuantumNode {
@@ -432,38 +432,34 @@ where
 
     let contract = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
 
+    // 🔑 إرسال المعاملة الحقيقية مباشرة عبر Balancer دون محاكاة مسبقة لتفادي الـ Reverts الوهمية
     let balancer_builder = contract
         .triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
         .from(signer_address)
         .gas(1_500_000);
 
-    match balancer_builder.call().await {
-        Ok(_) => {
-            println!("🎉 [BALANCER SUCCESS!] Dynamic Trade Validated for {}!", pair_cfg.symbol);
-            if let Ok(pending_tx) = balancer_builder.send().await {
-                println!("✅ Balancer Real Tx Dispatched! Hash: {:?}", pending_tx.tx_hash());
-            }
+    match balancer_builder.send().await {
+        Ok(pending_tx) => {
+            println!("🎉 [BALANCER TX DISPATCHED!] Real Hash: {:?}", pending_tx.tx_hash());
             return Ok(());
         }
         Err(e) => {
-            println!("🔍 [BALANCER REVERT - {}]: {:?}", pair_cfg.symbol, e);
+            println!("⚠️ [BALANCER SEND FAILED - {}]: {:?}. Trying Aave...", pair_cfg.symbol, e);
         }
     }
 
+    // الاحتياطي: إرسال عبر Aave مباشرة
     let aave_builder = contract
         .triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
         .from(signer_address)
         .gas(1_500_000);
 
-    match aave_builder.call().await {
-        Ok(_) => {
-            println!("🎉 [AAVE SUCCESS!] Dynamic Trade Validated for {}!", pair_cfg.symbol);
-            if let Ok(pending_tx) = aave_builder.send().await {
-                println!("✅ Aave Real Tx Dispatched! Hash: {:?}", pending_tx.tx_hash());
-            }
+    match aave_builder.send().await {
+        Ok(pending_tx) => {
+            println!("🎉 [AAVE TX DISPATCHED!] Real Hash: {:?}", pending_tx.tx_hash());
         }
         Err(e) => {
-            println!("🔍 [AAVE REVERT - {}]: {:?}", pair_cfg.symbol, e);
+            println!("❌ [AAVE SEND FAILED - {}]: {:?}", pair_cfg.symbol, e);
         }
     }
 
@@ -472,7 +468,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Pure Dynamic Loan MEV Engine...");
+    println!("🤖 Initializing Direct Execution MEV Engine...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());

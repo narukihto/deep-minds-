@@ -1,4 +1,4 @@
-Name: Deploy and Run Base MEV Bot
+name: Deploy and Run Base MEV Bot
 
 on:
   workflow_dispatch:

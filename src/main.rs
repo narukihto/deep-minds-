@@ -9,183 +9,241 @@ use alloy::{
     primitives::{address, Address, U256, Bytes, Uint},
     sol, sol_types::SolCall,
 };
+use std::collections::HashMap;
 
 type _U24 = Uint<24, 1>;
 type _U160 = Uint<160, 3>;
 
+// --- OFFICIAL BASE MAINNET CORE CONTRACTS ---
 const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
+const CBETH_BASE: Address = address!("0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22");
+const DAI_BASE: Address = address!("0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb");
+const WBTC_BASE: Address = address!("0x1ceA84203673764244E05693e42E6Ace62bE9BA5");
 
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
 const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
 const BASESWAP_ROUTER: Address = address!("0xcA1F7645EF1077CC178dFb42Cf5d2f840457DDBb"); 
 const PANCAKESWAP_V3_ROUTER: Address = address!("0x1b81D678ffb9C0263b24A97847620C99d213eB14"); 
 
+// --- DEX POOL TYPE ENUM ---
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DexType {
+    UniswapV3,
+    Aerodrome,
+    BaseSwap,
+    PancakeSwapV3,
+}
+
+// --- POOL DEFINITION ---
 #[derive(Debug, Clone)]
-pub struct TokenPairConfig {
-    pub symbol: &'static str,
-    pub target_token: Address,
-    pub aero_pool: Address,
-    pub uni_v3_pool: Address,
-    pub baseswap_pool: Address,
-    pub pancakeswap_pool: Address,
-    pub decimals: u32,
-    pub fee_tier_v3: u32,
+pub struct Pool {
+    pub id: Address,
     pub token0: Address,
     pub token1: Address,
+    pub dex_type: DexType,
+    pub fee: u32,
 }
 
-#[derive(Clone, Debug)]
-pub struct QuantumNode {
-    pub id: usize,
-    pub energy_scale: BigUint,
-    pub frequency: f64,
-    pub token0: Address,
-    pub token1: Address,
+// --- EDGE DEFINITION FOR GRAPH ---
+#[derive(Debug, Clone)]
+pub struct DirectedEdge {
+    pub pool: Pool,
+    pub from_token: Address,
+    pub to_token: Address,
 }
 
-pub struct CausalCollapseSystem {
-    pub nodes: Vec<QuantumNode>,
-    pub threshold_limit: f64,
-    pub buffer_capacity: usize,
-    pub dynamic_pools: Vec<Address>,
-    pub contract_address: Address,
-    pub loan_amount: U256,
-    pub borrowed_token: Address,
-    pub pair_config: TokenPairConfig,
-    pub price_aero: f64,
-    pub price_v3: f64,
+// --- GLOBAL ARBITRAGE GRAPH (Multi-hop Pathfinding) ---
+#[derive(Default, Clone)]
+pub struct ArbitrageGraph {
+    pub adjacency_list: HashMap<Address, Vec<DirectedEdge>>,
 }
 
-impl CausalCollapseSystem {
-    pub fn new(
-        nodes: Vec<QuantumNode>,
-        dynamic_pools: Vec<Address>,
-        contract_address: Address,
-        loan_amount: U256,
-        borrowed_token: Address,
-        pair_config: TokenPairConfig,
-        price_aero: f64,
-        price_v3: f64,
-    ) -> Self {
+impl ArbitrageGraph {
+    pub fn new() -> Self {
         Self {
-            nodes,
-            threshold_limit: 0.0,
-            buffer_capacity: 16,
-            dynamic_pools,
-            contract_address,
-            loan_amount,
-            borrowed_token,
-            pair_config,
-            price_aero,
-            price_v3,
+            adjacency_list: HashMap::new(),
         }
     }
 
-    pub fn execute_collapse(&self) -> (Vec<Address>, Vec<Vec<u8>>) {
-        if self.nodes.is_empty() {
-            return (vec![], vec![]);
+    pub fn add_pool(&mut self, pool: Pool) {
+        self.adjacency_list
+            .entry(pool.token0)
+            .or_default()
+            .push(DirectedEdge {
+                pool: pool.clone(),
+                from_token: pool.token0,
+                to_token: pool.token1,
+            });
+        self.adjacency_list
+            .entry(pool.token1)
+            .or_default()
+            .push(DirectedEdge {
+                pool: pool.clone(),
+                from_token: pool.token1,
+                to_token: pool.token0,
+            });
+    }
+
+    pub fn find_cycles(&self, start_token: Address, max_hops: usize) -> Vec<Vec<DirectedEdge>> {
+        let mut cycles = Vec::new();
+        let mut current_path = Vec::new();
+        self.dfs_search(start_token, start_token, max_hops, &mut current_path, &mut cycles);
+        cycles
+    }
+
+    fn dfs_search(
+        &self,
+        start_token: Address,
+        current_token: Address,
+        max_hops: usize,
+        current_path: &mut Vec<DirectedEdge>,
+        cycles: &mut Vec<Vec<DirectedEdge>>,
+    ) {
+        if current_path.len() > max_hops {
+            return;
         }
 
-        let mut addresses = Vec::new();
-        let mut payloads = Vec::new();
-
-        let min_amount_out_leg1 = self.loan_amount * U256::from(9980) / U256::from(10000);
-        let min_amount_out_leg2 = self.loan_amount * U256::from(10002) / U256::from(10000);
-
-        if self.price_aero <= self.price_v3 {
-            addresses.push(AERODROME_ROUTER);
-
-            let aero_route = IAerodromeRouter::Route {
-                from: self.borrowed_token,
-                to: self.pair_config.target_token,
-                stable: false,
-                factory: address!("420DD381b31aEf6683db6B902084cB0FFECe40Da"),
-            };
-
-            let payload_leg1 = IAerodromeRouter::swapExactTokensForTokensCall {
-                amountIn: self.loan_amount,
-                amountOutMin: min_amount_out_leg1,
-                routes: vec![aero_route],
-                to: self.contract_address,
-                deadline: U256::from(u64::MAX),
+        if current_token == start_token && !current_path.is_empty() {
+            if current_path.len() >= 3 {
+                cycles.push(current_path.clone());
             }
-            .abi_encode();
-            payloads.push(payload_leg1);
-
-            addresses.push(UNISWAP_V3_ROUTER);
-            let mut path_bytes = Vec::new();
-            path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
-            let fee_bytes = self.pair_config.fee_tier_v3.to_be_bytes();
-            path_bytes.extend_from_slice(&fee_bytes[1..4]);
-            path_bytes.extend_from_slice(self.borrowed_token.as_slice());
-
-            let exact_input_params = IUniswapV3Router::ExactInputParams {
-                path: Bytes::from(path_bytes),
-                recipient: self.contract_address,
-                deadline: U256::from(u64::MAX),
-                amountIn: min_amount_out_leg1,
-                amountOutMinimum: min_amount_out_leg2,
-            };
-
-            let payload_leg2 = IUniswapV3Router::exactInputCall {
-                params: exact_input_params,
-            }
-            .abi_encode();
-            payloads.push(payload_leg2);
-
-        } else {
-            addresses.push(UNISWAP_V3_ROUTER);
-
-            let mut path_bytes = Vec::new();
-            path_bytes.extend_from_slice(self.borrowed_token.as_slice());
-            let fee_bytes = self.pair_config.fee_tier_v3.to_be_bytes();
-            path_bytes.extend_from_slice(&fee_bytes[1..4]);
-            path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
-
-            let exact_input_params = IUniswapV3Router::ExactInputParams {
-                path: Bytes::from(path_bytes),
-                recipient: self.contract_address,
-                deadline: U256::from(u64::MAX),
-                amountIn: self.loan_amount,
-                amountOutMinimum: U256::ZERO,
-            };
-
-            let payload_leg1 = IUniswapV3Router::exactInputCall {
-                params: exact_input_params,
-            }
-            .abi_encode();
-            payloads.push(payload_leg1);
-
-            addresses.push(AERODROME_ROUTER);
-            let aero_route = IAerodromeRouter::Route {
-                from: self.pair_config.target_token,
-                to: self.borrowed_token,
-                stable: false,
-                factory: address!("420DD381b31aEf6683db6B902084cB0FFECe40Da"),
-            };
-
-            let payload_leg2 = IAerodromeRouter::swapExactTokensForTokensCall {
-                amountIn: min_amount_out_leg1,
-                amountOutMin: min_amount_out_leg2,
-                routes: vec![aero_route],
-                to: self.contract_address,
-                deadline: U256::from(u64::MAX),
-            }
-            .abi_encode();
-            payloads.push(payload_leg2);
+            return;
         }
 
-        (addresses, payloads)
+        if current_path.len() == max_hops {
+            return;
+        }
+
+        if let Some(edges) = self.adjacency_list.get(&current_token) {
+            for edge in edges {
+                if current_path.iter().any(|e| e.pool.id == edge.pool.id) {
+                    continue;
+                }
+
+                current_path.push(edge.clone());
+                self.dfs_search(start_token, edge.to_token, max_hops, current_path, cycles);
+                current_path.pop();
+            }
+        }
     }
 }
 
-pub fn generate_astronomical_number(zeros: usize) -> BigUint {
-    let mut num_str = "1".to_string();
-    for _ in 0..zeros {
-        num_str.push('0');
+// --- INITIALIZE GLOBAL LIQUIDITY POOLS REGISTRY ---
+pub fn load_global_liquidity_graph() -> ArbitrageGraph {
+    let mut graph = ArbitrageGraph::new();
+
+    graph.add_pool(Pool {
+        id: address!("0x6c561b446416e1a00e8e93e221854d6ea4171372"), // Uni V3 WETH/USDC
+        token0: WETH_BASE,
+        token1: USDC_BASE,
+        dex_type: DexType::UniswapV3,
+        fee: 100,
+    });
+    graph.add_pool(Pool {
+        id: address!("cdac0d6c6c59727a65f871236188350531885c43"), // Aerodrome WETH/USDC
+        token0: WETH_BASE,
+        token1: USDC_BASE,
+        dex_type: DexType::Aerodrome,
+        fee: 0,
+    });
+    graph.add_pool(Pool {
+        id: address!("0x21198fdfbc9c3b88b0a9dfbf65449cf77cecc0df"), // Aerodrome cbETH/WETH
+        token0: WETH_BASE,
+        token1: CBETH_BASE,
+        dex_type: DexType::Aerodrome,
+        fee: 0,
+    });
+    graph.add_pool(Pool {
+        id: address!("0x53009586111164998d36371dd0349f7e44a4f806"), // Aerodrome USDC/DAI
+        token0: USDC_BASE,
+        token1: DAI_BASE,
+        dex_type: DexType::Aerodrome,
+        fee: 1, 
+    });
+    graph.add_pool(Pool {
+        id: address!("0x327cd1c2c31e42f9862b535d4ff3a6af6256f081"), // Uni V3 WETH/DAI
+        token0: WETH_BASE,
+        token1: DAI_BASE,
+        dex_type: DexType::UniswapV3,
+        fee: 500,
+    });
+
+    graph
+}
+
+// --- PAYLOAD ENCODER ---
+pub struct PayloadEncoder;
+
+impl PayloadEncoder {
+    pub fn encode_v3_path(edges: &[DirectedEdge]) -> Vec<u8> {
+        let mut path = Vec::new();
+        if edges.is_empty() {
+            return path;
+        }
+        
+        path.extend_from_slice(edges[0].from_token.as_slice());
+        
+        for edge in edges {
+            let fee_bytes = edge.pool.fee.to_be_bytes();
+            path.extend_from_slice(&fee_bytes[1..4]);
+            path.extend_from_slice(edge.to_token.as_slice());
+        }
+        path
     }
-    BigUint::parse_bytes(num_str.as_bytes(), 10).unwrap_or_else(BigUint::one)
+
+    pub fn build_execution_payload(
+        cycle: &[DirectedEdge],
+        recipient_contract: Address,
+        amount_in: U256,
+    ) -> (Vec<Address>, Vec<Bytes>) {
+        let mut targets = Vec::new();
+        let mut data = Vec::new();
+        let mut current_amount = amount_in;
+
+        for edge in cycle {
+            targets.push(match edge.pool.dex_type {
+                DexType::UniswapV3 | DexType::PancakeSwapV3 => UNISWAP_V3_ROUTER,
+                DexType::Aerodrome | DexType::BaseSwap => AERODROME_ROUTER,
+            });
+
+            let min_out = current_amount * U256::from(9950) / U256::from(10000); 
+
+            match edge.pool.dex_type {
+                DexType::UniswapV3 | DexType::PancakeSwapV3 => {
+                    let sub_path = Self::encode_v3_path(&[edge.clone()]);
+                    let params = IUniswapV3Router::ExactInputParams {
+                        path: Bytes::from(sub_path),
+                        recipient: recipient_contract,
+                        deadline: U256::from(u64::MAX),
+                        amountIn: current_amount, 
+                        amountOutMinimum: min_out,
+                    };
+                    let call_bytes = IUniswapV3Router::exactInputCall { params }.abi_encode();
+                    data.push(Bytes::from(call_bytes));
+                }
+                DexType::Aerodrome | DexType::BaseSwap => {
+                    let aero_route = IAerodromeRouter::Route {
+                        from: edge.from_token,
+                        to: edge.to_token,
+                        stable: edge.pool.fee == 1, 
+                        factory: address!("420DD381b31aEf6683db6B902084cB0FFECe40Da"),
+                    };
+                    let call_bytes = IAerodromeRouter::swapExactTokensForTokensCall {
+                        amountIn: current_amount,
+                        amountOutMin: min_out,
+                        routes: vec![aero_route],
+                        to: recipient_contract,
+                        deadline: U256::from(u64::MAX),
+                    }.abi_encode();
+                    data.push(Bytes::from(call_bytes));
+                }
+            }
+            current_amount = min_out;
+        }
+
+        (targets, data)
+    }
 }
 
 sol! {
@@ -230,8 +288,8 @@ sol! {
 
     #[sol(rpc)]
     contract BaseAtomicArbitrage {
-        function triggerBalancerArbitrage(address tokenToBorrow, uint256 loanAmount, bytes calldata swapPathData) external;
-        function triggerAaveArbitrage(address tokenToBorrow, uint256 loanAmount, bytes calldata swapPathData) external;
+        function triggerBalancerArbitrage(address tokenToBorrow, uint256 loanAmount, address[] calldata targets, bytes[] calldata data) external;
+        function triggerAaveArbitrage(address tokenToBorrow, uint256 loanAmount, address[] calldata targets, bytes[] calldata data) external;
         function setTargetWhitelist(address target, bool status) external;
         
         error ArbitrageUnprofitable(uint256 expected, uint256 actual);
@@ -243,223 +301,104 @@ sol! {
     }
 }
 
-pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
-    vec![
-        TokenPairConfig {
-            symbol: "WETH",
-            target_token: WETH_BASE,
-            aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"),
-            uni_v3_pool: address!("0x6c561b446416e1a00e8e93e221854d6ea4171372"),
-            baseswap_pool: address!("ab067c01c7f5734da168c699ae9d23a4512c9fdb"),
-            pancakeswap_pool: address!("72ab388e2e2f6facef59e3c3fa2c4e29011c2d38"),
-            decimals: 18,
-            fee_tier_v3: 100,
-            token0: WETH_BASE,
-            token1: USDC_BASE,
-        },
-    ]
-}
-
-fn calculate_v2_price(
-    reserve0: u128,
-    reserve1: u128,
-    token0: Address,
-    token1: Address,
-    target_decimals: u32,
-) -> f64 {
-    if reserve0 == 0 || reserve1 == 0 {
-        return 0.0;
-    }
-    let usdc_decimals = 6;
-    let r0 = reserve0 as f64 / 10f64.powi(if token0 == USDC_BASE { usdc_decimals } else { target_decimals } as i32);
-    let r1 = reserve1 as f64 / 10f64.powi(if token1 == USDC_BASE { usdc_decimals } else { target_decimals } as i32);
-
-    if token0 == USDC_BASE {
-        if r1 > 0.0 { r0 / r1 } else { 0.0 }
-    } else {
-        if r0 > 0.0 { r1 / r0 } else { 0.0 }
-    }
-}
-
-fn calculate_v3_price(
-    sqrt_price_x96: _U160,
-    token0: Address,
-    token1: Address,
-    target_decimals: u32,
-) -> f64 {
-    let sqrt_f64 = sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0);
-    if sqrt_f64 <= 0.0 {
-        return 0.0;
-    }
-    let ratio = sqrt_f64 / 2.0f64.powi(96);
-    let price_raw = ratio * ratio;
-
-    let usdc_decimals = 6;
-    let d0 = if token0 == USDC_BASE { usdc_decimals } else { target_decimals };
-    let d1 = if token1 == USDC_BASE { usdc_decimals } else { target_decimals };
-
-    let adjusted_price = price_raw * 10f64.powi((d0 as i32) - (d1 as i32));
-
-    if token0 == USDC_BASE {
-        if adjusted_price > 0.0 { 1.0 / adjusted_price } else { 0.0 }
-    } else {
-        adjusted_price
-    }
-}
-
-async fn fetch_live_market_data_for_pair<P>(
+// دالة لجلب الاحتياطيات الحية وحساب حجم القرض الديناميكي بدقة لكل مسبح
+async fn fetch_live_pool_liquidity_and_compute_loan<P>(
     http_provider: P,
-    config: &TokenPairConfig,
-) -> Result<(f64, f64, f64, f64, f64), Box<dyn std::error::Error>>
+    cycle: &[DirectedEdge],
+) -> Result<U256, Box<dyn std::error::Error>>
 where
     P: Provider<Ethereum> + Clone,
 {
-    let mut price_aero = 0.0;
-    let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
-    if let Ok(res) = aero_pair.getReserves().call().await {
-        price_aero = calculate_v2_price(
-            res.reserve0.to::<u128>(),
-            res.reserve1.to::<u128>(),
-            config.token0,
-            config.token1,
-            config.decimals,
-        );
+    let mut min_reserve = U256::from(u128::MAX);
+
+    for edge in cycle {
+        match edge.pool.dex_type {
+            DexType::UniswapV2 | DexType::Aerodrome | DexType::BaseSwap => {
+                let pair_contract = IUniswapV2Pair::new(edge.pool.id, http_provider.clone());
+                if let Ok(res) = pair_contract.getReserves().call().await {
+                    let r0 = U256::from(res.reserve0);
+                    let r1 = U256::from(res.reserve1);
+                    if r0 < min_reserve { min_reserve = r0; }
+                    if r1 < min_reserve { min_reserve = r1; }
+                }
+            }
+            DexType::UniswapV3 | DexType::PancakeSwapV3 => {
+                // للـ V3 نعتمد على حدود سيولة افتراضية آمنة بناءً على الفعالية
+                let default_v3_cap = U256::from(50_000_000_000u64); // 50,000 USDC
+                if default_v3_cap < min_reserve { min_reserve = default_v3_cap; }
+            }
+        }
     }
 
-    let mut price_v3 = 0.0;
-    let v3_pool = IUniswapV3Pool::new(config.uni_v3_pool, http_provider.clone());
-    if let Ok(slot0) = v3_pool.slot0().call().await {
-        price_v3 = calculate_v3_price(
-            slot0.sqrtPriceX96,
-            config.token0,
-            config.token1,
-            config.decimals,
-        );
+    if min_reserve == U256::from(u128::MAX) || min_reserve.is_zero() {
+        return Ok(U256::from(1_000_000_000)); // القرض الافتراضي الأدنى (1,000 USDC)
     }
 
-    let mut price_baseswap = 0.0;
-    let baseswap_pair = IUniswapV2Pair::new(config.baseswap_pool, http_provider.clone());
-    if let Ok(res) = baseswap_pair.getReserves().call().await {
-        price_baseswap = calculate_v2_price(
-            res.reserve0.to::<u128>(),
-            res.reserve1.to::<u128>(),
-            config.token0,
-            config.token1,
-            config.decimals,
-        );
-    }
+    // حساب حجم قرض ديناميكي آمن (مثلاً 5% من أضعف مسبح في الدورة لمنع الانزلاق السعري)
+    let dynamic_loan = (min_reserve * U256::from(5)) / U256::from(100);
+    let final_loan = dynamic_loan.max(U256::from(1_000_000_000)).min(U256::from(50_000_000_000)); // بين 1 ألف و 50 ألف USDC
 
-    let mut price_pancake = 0.0;
-    let pancake_pool = IUniswapV3Pool::new(config.pancakeswap_pool, http_provider.clone());
-    if let Ok(slot0) = pancake_pool.slot0().call().await {
-        price_pancake = calculate_v3_price(
-            slot0.sqrtPriceX96,
-            config.token0,
-            config.token1,
-            config.decimals,
-        );
-    }
-
-    let mut prices = vec![price_aero, price_v3, price_baseswap, price_pancake];
-    prices.retain(|&p| p >= 100.0 && p <= 100000.0);
-
-    let max_price = prices.iter().cloned().fold(0.0, f64::max);
-    let min_price = prices.iter().cloned().fold(f64::INFINITY, f64::min);
-
-    let spread_gap = if !prices.is_empty() && min_price != f64::INFINITY {
-        max_price - min_price
-    } else {
-        0.0
-    };
-
-    Ok((price_aero, price_v3, price_baseswap, price_pancake, spread_gap))
+    Ok(final_loan)
 }
 
-async fn trigger_on_chain_arbitrage<P, PP>(
+async fn execute_triangular_arbitrage<P, PP>(
     http_provider: P,
     private_provider: PP,
     contract_address: Address,
     signer_address: Address,
-    token_to_borrow: Address,
-    spread_gap: f64,
-    pair_cfg: &TokenPairConfig,
-    price_aero: f64,
-    price_v3: f64,
+    graph: &ArbitrageGraph,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     P: Provider<Ethereum> + Clone,
     PP: Provider<Ethereum> + Clone,
 {
-    // رفع عتبة الفجوة إلى 6.0$ لتجنب الـ Dust والتأكد من تغطية الرسوم تماماً
-    if spread_gap < 6.0 {
-        println!("💤 [WETH] Gap (${:.2}) below safe profit threshold ($6.0). Skipping.", spread_gap);
+    let cycles = graph.find_cycles(USDC_BASE, 3);
+    if cycles.is_empty() {
         return Ok(());
     }
 
-    // 🚀 تحسين حجم القرض الديناميكي ليتناسب منطقياً مع الفجوة وبدون مبالغة تسبب الانزلاق السعري
-    let raw_loan = (spread_gap * 250.0) as u128 * 1_000_000;
-    let dynamic_loan = raw_loan.max(1_000_000); // الحد الأدنى قرض بـ 1 USDC وبدون سقف أعلى للأرباح الكبرى
-    let loan_amount = U256::from(dynamic_loan);
+    for target_cycle in &cycles {
+        // 🚀 تحديث الاحتياطيات الحية وحساب حجم القرض الديناميكي لحظياً لهذا البلوك
+        let loan_amount = fetch_live_pool_liquidity_and_compute_loan(http_provider.clone(), target_cycle).await
+            .unwrap_or(U256::from(2_000_000_000));
 
-    println!("🎯 [WETH BALANCED SNIPER] Gap: ${:.2} | Dynamic Loan: {} USDC... Simulating locally!", 
-             spread_gap, dynamic_loan as f64 / 1_000_000.0);
+        let (targets, data) = PayloadEncoder::build_execution_payload(
+            target_cycle,
+            contract_address,
+            loan_amount,
+        );
 
-    let nodes = vec![QuantumNode {
-        id: 1,
-        energy_scale: generate_astronomical_number(1000usize),
-        frequency: spread_gap,
-        token0: USDC_BASE,
-        token1: pair_cfg.target_token,
-    }];
-
-    let system = CausalCollapseSystem::new(
-        nodes,
-        vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, BASESWAP_ROUTER, AERODROME_ROUTER],
-        contract_address,
-        loan_amount,
-        USDC_BASE,
-        pair_cfg.clone(),
-        price_aero,
-        price_v3,
-    );
-
-    let target_path = system.execute_collapse();
-
-    if target_path.0.is_empty() {
-        return Ok(());
-    }
-
-    let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
-        alloy::dyn_abi::DynSolValue::Array(
-            target_path.0.clone().into_iter().map(alloy::dyn_abi::DynSolValue::Address).collect()
-        ),
-        alloy::dyn_abi::DynSolValue::Array(
-            target_path.1.into_iter().map(alloy::dyn_abi::DynSolValue::Bytes).collect()
-        ),
-    ]).abi_encode();
-
-    let contract_sim = BaseAtomicArbitrage::new(contract_address, http_provider);
-    let simulation_builder = contract_sim
-        .triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
-        .from(signer_address)
-        .gas(1_500_000);
-
-    match simulation_builder.call().await {
-        Ok(_) => {
-            println!("🎉 [SIMULATION PASSED!] Profitable Verified. Dispatching via PRIVATE RPC...");
-            
-            let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider);
-            let private_builder = contract_private
-                .triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
-                .from(signer_address)
-                .gas(1_500_000);
-
-            if let Ok(pending_tx) = private_builder.send().await {
-                println!("🚀 [PRIVATE MEV-PROTECTED TX DISPATCHED!] Real Hash: {:?}", pending_tx.tx_hash());
-            }
+        if targets.is_empty() || data.is_empty() {
+            continue;
         }
-        Err(sim_err) => {
-            println!("🛡️ [GAS SAVED] Simulation reverted locally. Reason: {:?}", sim_err);
+
+        println!("🎯 [LIVE MULTI-HOP SNIPER] Cycle hops: {} | Dynamic Loan: {} USDC... Simulating locally!", 
+                 target_cycle.len(), loan_amount.to::<u128>() as f64 / 1_000_000.0);
+
+        let contract_sim = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
+        let simulation_builder = contract_sim
+            .triggerBalancerArbitrage(USDC_BASE, loan_amount, targets.clone(), data.clone())
+            .from(signer_address)
+            .gas(1_800_000);
+
+        match simulation_builder.call().await {
+            Ok(_) => {
+                println!("🎉 [SIMULATION PASSED!] Live Multi-hop Arbitrage Verified! Dispatching via PRIVATE RPC...");
+                
+                let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider.clone());
+                let private_builder = contract_private
+                    .triggerBalancerArbitrage(USDC_BASE, loan_amount, targets, data)
+                    .from(signer_address)
+                    .gas(1_800_000);
+
+                if let Ok(pending_tx) = private_builder.send().await {
+                    println!("🚀 [PRIVATE MEV-PROTECTED TX DISPATCHED!] Real Hash: {:?}", pending_tx.tx_hash());
+                }
+                break; 
+            }
+            Err(_sim_err) => {
+                // محاكاة صامتة في حال لم تكن الفرصة مربحة في هذا البلوك
+            }
         }
     }
 
@@ -468,7 +407,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing WETH Sniper Engine with Balanced Dynamic Scaling...");
+    println!("🤖 Initializing Live Multi-Hop Triangular Arbitrage Engine with Real-time Reserves...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -498,10 +437,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .wallet(wallet_private)
         .connect_http(private_http_url.parse()?);
 
-    println!("🛡️ Ensuring WETH ({:?}) is whitelisted on contract...", WETH_BASE);
-    let contract_init = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
-    let whitelist_call = contract_init.setTargetWhitelist(WETH_BASE, true).from(signer_address);
-    let _ = whitelist_call.send().await;
+    let liquidity_graph = load_global_liquidity_graph();
+    println!("🌐 Global Liquidity Graph Loaded Successfully!");
 
     let ws = alloy::providers::WsConnect::new(alchemy_wss_url);
     let ws_provider = ProviderBuilder::new()
@@ -509,7 +446,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect_ws(ws)
         .await?;
 
-    let monitored_pairs = get_monitored_pairs();
     let sub = ws_provider.subscribe_blocks().await?;
     let mut stream = sub.into_stream();
     let mut block_counter = 0u64;
@@ -517,34 +453,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("\n📦 WSS Block Synced: #{} (Counter: {})", block_num, block_counter);
+        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Live Multi-hop Cycles...", block_num, block_counter);
 
-        for pair in &monitored_pairs {
-            let provider = http_provider.clone();
-            let priv_provider = private_provider.clone();
-            let pair_cfg = pair.clone();
-
-            if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(provider.clone(), &pair_cfg).await {
-                println!(
-                    " 📈 [{}] Aero: ${:.2} | UniV3: ${:.2} | BaseSwap: ${:.2} | Pancake: ${:.2} | Max Gap: ${:.2}",
-                    pair_cfg.symbol, p_aero, p_v3, p_baseswap, p_pancake, spread_gap
-                );
-
-                if spread_gap >= 6.0 { 
-                    let _ = trigger_on_chain_arbitrage(
-                        provider,
-                        priv_provider,
-                        contract_address,
-                        signer_address,
-                        USDC_BASE,
-                        spread_gap,
-                        &pair_cfg,
-                        p_aero,
-                        p_v3,
-                    ).await;
-                }
-            }
-        }
+        let _ = execute_triangular_arbitrage(
+            http_provider.clone(),
+            private_provider.clone(),
+            contract_address,
+            signer_address,
+            &liquidity_graph,
+        ).await;
 
         sleep(Duration::from_millis(100)).await;
     }

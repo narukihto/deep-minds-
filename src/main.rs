@@ -94,7 +94,6 @@ impl CausalCollapseSystem {
         let min_amount_out_leg2 = self.loan_amount * U256::from(10002) / U256::from(10000);
 
         if self.price_aero <= self.price_v3 {
-            // المسار المباشر الأول: Aerodrome -> Uniswap V3
             addresses.push(AERODROME_ROUTER);
 
             let aero_route = IAerodromeRouter::Route {
@@ -136,7 +135,6 @@ impl CausalCollapseSystem {
             payloads.push(payload_leg2);
 
         } else {
-            // المسار المباشر الثاني: Uniswap V3 -> Aerodrome
             addresses.push(UNISWAP_V3_ROUTER);
 
             let mut path_bytes = Vec::new();
@@ -430,16 +428,8 @@ where
             return Ok(());
         }
         Err(e) => {
-            // استخراج وتفكيك الـ Revert Hex Bytes بدقة تامة
-            if let Some(rpc_err) = e.as_transport_error().and_then(|t| t.as_rpc_error()) {
-                if let Some(data) = rpc_err.data() {
-                    println!("🔍 [BALANCER RAW REVERT HEX - {}]: {:?}", pair_symbol, data);
-                } else {
-                    println!("🔍 [BALANCER REVERT ERROR - {}]: {:?}", pair_symbol, rpc_err);
-                }
-            } else {
-                println!("🔍 [BALANCER REVERT - {}]: {:?}", pair_symbol, e);
-            }
+            // طباعة تفاصيل الخطأ مباشرة باستخدام الـ Debug الخاص بـ Alloy Contract Error
+            println!("🔍 [BALANCER REVERT - {}]: {:?}", pair_symbol, e);
         }
     }
 
@@ -456,15 +446,7 @@ where
             }
         }
         Err(e) => {
-            if let Some(rpc_err) = e.as_transport_error().and_then(|t| t.as_rpc_error()) {
-                if let Some(data) = rpc_err.data() {
-                    println!("🔍 [AAVE RAW REVERT HEX - {}]: {:?}", pair_symbol, data);
-                } else {
-                    println!("🔍 [AAVE REVERT ERROR - {}]: {:?}", pair_symbol, rpc_err);
-                }
-            } else {
-                println!("🔍 [AAVE REVERT - {}]: {:?}", pair_symbol, e);
-            }
+            println!("🔍 [AAVE REVERT - {}]: {:?}", pair_symbol, e);
         }
     }
 
@@ -521,10 +503,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let provider = http_provider.clone();
             let pair_cfg = pair.clone();
 
-            if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(provider.clone(), &pair_cfg).data() {
-                // ملاحظة: تم تعديل استدعاء جلب البيانات لتفادي أي خطأ
-            }
-
+            // التصحيح: استدعاء الدالة المتزامنة بشكل صحيح دون استخدام .data()
             if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(provider.clone(), &pair_cfg).await {
                 println!(
                     " 📈 [{}] Aero: ${:.2} | UniV3: ${:.2} | BaseSwap: ${:.2} | Pancake: ${:.2} | Max Gap: ${:.2}",

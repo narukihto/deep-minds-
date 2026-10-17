@@ -21,7 +21,6 @@ const CBETH_BASE: Address = address!("2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22")
 const DAI_BASE: Address = address!("50c5725949a6f0c72e6c4a641f24049a917db0cb");
 
 const UNISWAP_V3_FACTORY: Address = address!("0x33128a8fC17869897dcE68Ed026d694621f6FDfD");
-const AERODROME_CL_FACTORY: Address = address!("0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A");
 const AERODROME_V2_FACTORY: Address = address!("0x420DD381b31aEf6683db6B902084cB0FFECe40Da");
 
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
@@ -409,89 +408,42 @@ async fn get_monitored_pairs<P>(http_provider: P) -> Result<Vec<TokenPairConfig>
 where P: Provider<Ethereum> + Clone {
     let uni_factory = IUniswapV3Factory::new(UNISWAP_V3_FACTORY, http_provider.clone());
     let pancake_factory = IUniswapV3Factory::new(address!("0x41ebdCbb4802521A392742417441411ce903fF02"), http_provider.clone());
-    let aero_cl_factory = IUniswapV3Factory::new(AERODROME_CL_FACTORY, http_provider.clone());
 
     let fee_tier_100 = _U24::from(100);
-    let fee_tier_500 = _U24::from(500);
 
-    // جلب آمن مع Fallback لتجنب خطأ ZeroData نهائياً
+    // جلب آمن مع Fallback لتجنب خطأ ZeroData نهائياً لمسبحات V3
     let weth_uni = match uni_factory.getPool(WETH_BASE, USDC_BASE, fee_tier_100).call().await {
-        Ok(res) => {
-            let addr: Address = res.0.into();
-            if addr.is_zero() { address!("0x19a0aef6613524ea0761646a6a4e4be0e114a3c8") } else { addr }
-        }
+        Ok(res) => { let addr: Address = res.0.into(); if addr.is_zero() { address!("0x19a0aef6613524ea0761646a6a4e4be0e114a3c8") } else { addr } }
         Err(_) => address!("0x19a0aef6613524ea0761646a6a4e4be0e114a3c8"),
     };
-
     let weth_pancake = match pancake_factory.getPool(WETH_BASE, USDC_BASE, fee_tier_100).call().await {
-        Ok(res) => {
-            let addr: Address = res.0.into();
-            if addr.is_zero() { address!("0x72ab388e2e2f6facef59e3c3fa2c4e29011c2d38") } else { addr }
-        }
+        Ok(res) => { let addr: Address = res.0.into(); if addr.is_zero() { address!("0x72ab388e2e2f6facef59e3c3fa2c4e29011c2d38") } else { addr } }
         Err(_) => address!("0x72ab388e2e2f6facef59e3c3fa2c4e29011c2d38"),
     };
 
-    let weth_aero = match aero_cl_factory.getPool(WETH_BASE, USDC_BASE, fee_tier_100).call().await {
-        Ok(res) => {
-            let addr: Address = res.0.into();
-            if addr.is_zero() { address!("0xcdac0d6c6c59727a65f871236188350531885c43") } else { addr }
-        }
-        Err(_) => address!("0xcdac0d6c6c59727a65f871236188350531885c43"),
-    };
-
     let cbeth_uni = match uni_factory.getPool(WETH_BASE, CBETH_BASE, fee_tier_100).call().await {
-        Ok(res) => {
-            let addr: Address = res.0.into();
-            if addr.is_zero() { address!("0x19a0aef6613524ea0761646a6a4e4be0e114a3c8") } else { addr }
-        }
+        Ok(res) => { let addr: Address = res.0.into(); if addr.is_zero() { address!("0x19a0aef6613524ea0761646a6a4e4be0e114a3c8") } else { addr } }
         Err(_) => address!("0x19a0aef6613524ea0761646a6a4e4be0e114a3c8"),
     };
-
     let cbeth_pancake = match pancake_factory.getPool(WETH_BASE, CBETH_BASE, fee_tier_100).call().await {
-        Ok(res) => {
-            let addr: Address = res.0.into();
-            if addr.is_zero() { address!("0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee") } else { addr }
-        }
+        Ok(res) => { let addr: Address = res.0.into(); if addr.is_zero() { address!("0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee") } else { addr } }
         Err(_) => address!("0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee"),
     };
 
-    let cbeth_aero = match aero_cl_factory.getPool(WETH_BASE, CBETH_BASE, fee_tier_100).call().await {
-        Ok(res) => {
-            let addr: Address = res.0.into();
-            if addr.is_zero() { address!("0x643cf6cb74e38fd98631b1e358b0541ea4970477") } else { addr }
-        }
-        Err(_) => address!("0x643cf6cb74e38fd98631b1e358b0541ea4970477"),
-    };
-
     let dai_uni = match uni_factory.getPool(DAI_BASE, USDC_BASE, fee_tier_100).call().await {
-        Ok(res) => {
-            let addr: Address = res.0.into();
-            if addr.is_zero() { address!("0x6f19cf4131599557b447432b49bc70b37feeb1b0") } else { addr }
-        }
+        Ok(res) => { let addr: Address = res.0.into(); if addr.is_zero() { address!("0x6f19cf4131599557b447432b49bc70b37feeb1b0") } else { addr } }
         Err(_) => address!("0x6f19cf4131599557b447432b49bc70b37feeb1b0"),
     };
-
-    let dai_pancake = match pancake_factory.getPool(DAI_BASE, USDC_BASE, fee_tier_100).call().await {
-        Ok(res) => {
-            let addr: Address = res.0.into();
-            if addr.is_zero() { address!("0x981504d60a1ba36512fb265538cb1b54bfa6c3a1") } else { addr }
-        }
+    let dai_pancake = match pancake_factory.getPool(DAI_BASE, USDC_BASE, _U24::from(500)).call().await {
+        Ok(res) => { let addr: Address = res.0.into(); if addr.is_zero() { address!("0x981504d60a1ba36512fb265538cb1b54bfa6c3a1") } else { addr } }
         Err(_) => address!("0x981504d60a1ba36512fb265538cb1b54bfa6c3a1"),
-    };
-
-    let dai_aero = match aero_cl_factory.getPool(DAI_BASE, USDC_BASE, fee_tier_500).call().await {
-        Ok(res) => {
-            let addr: Address = res.0.into();
-            if addr.is_zero() { address!("0xca4948af908871923cb1135ec367e9cd59bb2678") } else { addr }
-        }
-        Err(_) => address!("0xca4948af908871923cb1135ec367e9cd59bb2678"),
     };
 
     Ok(vec![
         TokenPairConfig {
             symbol: "WETH",
             target_token: WETH_BASE,
-            aero_pool: weth_aero,
+            aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"),
             uni_v3_pool: weth_uni,
             baseswap_pool: address!("ab067c01c7f5734da168c699ae9d23a4512c9fdb"),
             pancakeswap_pool: weth_pancake,
@@ -499,13 +451,13 @@ where P: Provider<Ethereum> + Clone {
             fee_tier_v3: 100,
             token0: WETH_BASE,
             token1: USDC_BASE,
-            is_v3_aero: true,
+            is_v3_aero: false,
             is_v3_baseswap: false,
         },
         TokenPairConfig {
             symbol: "cbETH",
             target_token: CBETH_BASE,
-            aero_pool: cbeth_aero,
+            aero_pool: address!("0x643cf6cb74e38fd98631b1e358b0541ea4970477"),
             uni_v3_pool: cbeth_uni,
             baseswap_pool: address!("0x24d209812c828343a23f831f24f2dee13ff6597f"),
             pancakeswap_pool: cbeth_pancake,
@@ -513,13 +465,13 @@ where P: Provider<Ethereum> + Clone {
             fee_tier_v3: 100,
             token0: WETH_BASE,
             token1: CBETH_BASE,
-            is_v3_aero: true,
+            is_v3_aero: false,
             is_v3_baseswap: false,
         },
         TokenPairConfig {
             symbol: "DAI",
             target_token: DAI_BASE,
-            aero_pool: dai_aero,
+            aero_pool: address!("0xca4948af908871923cb1135ec367e9cd59bb2678"),
             uni_v3_pool: dai_uni,
             baseswap_pool: address!("0x6291a13665ff062a4d0cb5a9167e9cd59bc216b2"),
             pancakeswap_pool: dai_pancake,
@@ -527,7 +479,7 @@ where P: Provider<Ethereum> + Clone {
             fee_tier_v3: 100,
             token0: DAI_BASE,
             token1: USDC_BASE,
-            is_v3_aero: true,
+            is_v3_aero: false,
             is_v3_baseswap: false,
         },
     ])
@@ -619,7 +571,7 @@ where P: Provider<Ethereum> + Clone {
 
 async fn trigger_cross_dex_arbitrage<P, PP>(http_provider: P, private_provider: PP, contract_address: Address, signer_address: Address, spread_gap: f64, pair_cfg: &TokenPairConfig, price_aero: f64, price_v3: f64) -> Result<(), Box<dyn std::error::Error>>
 where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
-    if spread_gap < 3.0 { return Ok(()); }
+    if spread_gap < 1.5 { return Ok(()); } // الحد الأدنى مفعل ابتداءً من $1.50
     let raw_loan = (spread_gap * 250.0) as u128 * 1_000_000;
     let dynamic_loan = raw_loan.max(1_000_000);
     let loan_amount = U256::from(dynamic_loan);
@@ -722,7 +674,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pair.symbol, p_aero, p_v3, p_baseswap, p_pancake, spread_gap
                 );
 
-                if spread_gap >= 3.0 {
+                if spread_gap >= 1.5 {
                     let _ = trigger_cross_dex_arbitrage(
                         http_provider.clone(),
                         private_provider.clone(),

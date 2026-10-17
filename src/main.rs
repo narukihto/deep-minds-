@@ -400,7 +400,7 @@ sol! {
         function triggerBalancerArbitrageMulti(address tokenToBorrow, uint256 loanAmount, address[] calldata targets, bytes[] calldata data) external;
         function setTargetWhitelist(address target, bool status) external;
         
-        error ArbitrageUnprofitable(uint256 expected, uint256 actual);
+        error ArbitrageUnprofitable(uint256 required, uint256 actual);
         error InsufficientLiquidity();
     }
 }
@@ -607,39 +607,28 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
         Err(contract_error) => {
             eprintln!("❌ [SIMULATION FAILED for {}]", pair_cfg.symbol);
             
-            // استخراج تفاصيل خطأ العقد الذكي وبيانات الـ Revert بدقة
-            match &contract_error {
-                ContractError::TransportError(err) => {
-                    eprintln!("   🌐 Transport/RPC Error: {:?}", err);
-                }
-                ContractError::DecodingError(err) => {
-                    eprintln!("   🔍 ABI Decoding Error: {:?}", err);
-                }
-                _ => {
-                    // محاولة استخراج بايتات الـ Revert الخام إذا كانت متوفرة في الخطأ
-                    if let Some(revert_bytes) = contract_error.as_revert() {
-                        eprintln!("   🛑 Raw Revert Hex Data: 0x{}", hex::encode(revert_bytes));
-                        
-                        // فحص مطابقة الأخطاء المخصصة العائدة من عقدك الذكي
-                        if let Ok(err_decoded) = BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(revert_bytes, true) {
-                            match err_decoded {
-                                BaseAtomicArbitrage::BaseAtomicArbitrageErrors::ArbitrageUnprofitable(expected, actual) => {
-                                    eprintln!("   💰 [Revert Reason]: ArbitrageUnprofitable! Expected: {}, Actual: {}", expected, actual);
-                                }
-                                BaseAtomicArbitrage::BaseAtomicArbitrageErrors::InsufficientLiquidity(_) => {
-                                    eprintln!("   💧 [Revert Reason]: InsufficientLiquidity!");
-                                }
-                                _ => {
-                                    eprintln!("   ⚠️ [Revert Reason]: Other custom contract error decoded.");
-                                }
-                            }
-                        } else {
-                            eprintln!("   ⚠️ [Revert Reason]: Could not decode into custom contract errors. Check standard revert string.");
+            // استخراج بايتات الـ Revert بطريقة صحيحة ومتوافقة مع alloy
+            if let Some(revert_bytes) = contract_error.as_revert_data() {
+                eprintln!("   🛑 Revert Data Bytes: 0x{}", alloy::hex::encode(revert_bytes));
+                
+                // فحص خطأ ArbitrageUnprofitable (يحتوي على بارامتر واحد struct أو uint256 حسب التوليد)
+                if let Ok(err_decoded) = BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode_raw(revert_bytes, true) {
+                    match err_decoded {
+                        BaseAtomicArbitrage::BaseAtomicArbitrageErrors::ArbitrageUnprofitable(err_data) => {
+                            eprintln!("   💰 [Revert Reason]: ArbitrageUnprofitable! Required: {}, Actual: {}", err_data.required, err_data.actual);
                         }
-                    } else {
-                        eprintln!("   ⚠️ General Contract Error: {:?}", contract_error);
+                        BaseAtomicArbitrage::BaseAtomicArbitrageErrors::InsufficientLiquidity(_) => {
+                            eprintln!("   💧 [Revert Reason]: InsufficientLiquidity!");
+                        }
+                        _ => {
+                            eprintln!("   ⚠️ [Revert Reason]: Other custom contract error decoded.");
+                        }
                     }
+                } else {
+                    eprintln!("   ⚠️ [Revert Reason]: Could not decode into custom contract errors. Standard revert.");
                 }
+            } else {
+                eprintln!("   ⚠️ Contract Error: {:?}", contract_error);
             }
         }
     }

@@ -64,6 +64,7 @@ pub struct CausalCollapseSystem {
     pub pair_config: TokenPairConfig,
     pub price_aero: f64,
     pub price_v3: f64,
+    pub current_target_price_usd: f64,
 }
 
 impl CausalCollapseSystem {
@@ -76,6 +77,7 @@ impl CausalCollapseSystem {
         pair_config: TokenPairConfig,
         price_aero: f64,
         price_v3: f64,
+        current_target_price_usd: f64,
     ) -> Self {
         Self {
             nodes,
@@ -88,6 +90,7 @@ impl CausalCollapseSystem {
             pair_config,
             price_aero,
             price_v3,
+            current_target_price_usd,
         }
     }
 
@@ -95,16 +98,32 @@ impl CausalCollapseSystem {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
+        if self.current_target_price_usd <= 0.0 {
+            return (vec![], vec![]);
+        }
+
+        // 1. حساب رسوم فلاش لون Balancer (0.01%) + إجمالي المبلغ المطلوب إرجاعه بالـ USDC (6 Decimals)
         let flash_loan_fee = self.loan_amount / U256::from(10000); // 0.01%
         let target_repay_amount = self.loan_amount + flash_loan_fee;
         
-        let min_amount_out_leg1 = self.loan_amount * U256::from(9985) / U256::from(10000);
-        let min_amount_out_leg2 = target_repay_amount + U256::from(100);
+        // 2. التحويل الصحيح بين USDC (6 Decimals) والـ Target Token (مثلاً WETH بـ 18 Decimals)
+        // loan_amount بالـ USDC يُقسم على سعر الـ Token بالدولار لمعرفة كمية الـ Token المتوقعة
+        let loan_usdc_f64 = self.loan_amount.to_string().parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
+        let expected_target_tokens_f64 = loan_usdc_f64 / self.current_target_price_usd;
+        
+        // تحويل الناتج المتوقع إلى الخانات العشرية الخاصة بالـ Target Token (18 Decimals للـ WETH/CBETH)
+        let target_decimals_multiplier = 10f64.powi(self.pair_config.decimals as i32);
+        let expected_target_units_u128 = (expected_target_tokens_f64 * target_decimals_multiplier) as u128;
+        let expected_target_units = U256::from(expected_target_units_u128);
 
-        // بناء مسار تبديل مؤكد وفعال بغض النظر عن تفاوت الأسعار الطفيف لتفادي المصفوفات الفارغة
-        // الساق الأولى: الشراء من منصة رخيصة (Aerodrome)
+        // السماح بـ Slippage بنسبة 0.5% للساق الأولى بدقة في وحدات الـ Target Token الحقيقية (18 Decimals)
+        let min_amount_out_leg1 = expected_target_units * U256::from(9950) / U256::from(10000);
+
+        // الساق الثانية تُخرج USDC (6 Decimals) ويجب أن تغطي أصل القرض والرسوم + هامش ربح بسيط للمحاكاة
+        let min_amount_out_leg2 = target_repay_amount + U256::from(10); 
+
+        // --- الساق الأولى: التبديل عبر Aerodrome (USDC -> WETH) ---
         addresses.push(AERODROME_ROUTER);
-
         let aero_route = IAerodromeRouter::Route {
             from: self.borrowed_token,
             to: self.pair_config.target_token,
@@ -122,7 +141,7 @@ impl CausalCollapseSystem {
         .abi_encode();
         payloads.push(payload_leg1);
 
-        // الساق الثانية: البيع في منصة ذات سعر أعلى (Uniswap V3)
+        // --- الساق الثانية: التبديل عبر Uniswap V3 (WETH -> USDC) ---
         addresses.push(UNISWAP_V3_ROUTER);
         let mut path_bytes = Vec::new();
         path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
@@ -134,8 +153,8 @@ impl CausalCollapseSystem {
             path: Bytes::from(path_bytes),
             recipient: self.contract_address,
             deadline: U256::from(u64::MAX),
-            amountIn: min_amount_out_leg1,
-            amountOutMinimum: min_amount_out_leg2,
+            amountIn: min_amount_out_leg1, // إدخال كمية الـ WETH الصحيحة (18 Decimals)
+            amountOutMinimum: min_amount_out_leg2, // اشتراط استلام الـ USDC الصحيح (6 Decimals)
         };
 
         let payload_leg2 = IUniswapV3Router::exactInputCall {
@@ -527,7 +546,7 @@ where P: Provider<Ethereum> + Clone {
     Ok((price_aero, price_v3, price_baseswap, price_pancake, spread_gap))
 }
 
-async fn trigger_cross_dex_arbitrage<P, PP>(http_provider: P, private_provider: PP, contract_address: Address, signer_address: Address, spread_gap: f64, pair_cfg: &TokenPairConfig, price_aero: f64, price_v3: f64) -> Result<(), Box<dyn std::error::Error>>
+async fn trigger_cross_dex_arbitrage<P, PP>(http_provider: P, private_provider: PP, contract_address: Address, signer_address: Address, spread_gap: f64, pair_cfg: &TokenPairConfig, price_aero: f64, price_v3: f64, target_price_usd: f64) -> Result<(), Box<dyn std::error::Error>>
 where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     if spread_gap < 1.5 { return Ok(()); }
     
@@ -538,7 +557,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     println!("🎯 [Cross-DEX {}] Gap: ${:.2} | Loan: {} USDC... Simulating!", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
 
     let nodes = vec![QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000), frequency: spread_gap, token0: USDC_BASE, token1: pair_cfg.target_token }];
-    let system = CausalCollapseSystem::new(nodes, vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, BASESWAP_ROUTER, AERODROME_ROUTER], contract_address, loan_amount, USDC_BASE, pair_cfg.clone(), price_aero, price_v3);
+    let system = CausalCollapseSystem::new(nodes, vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, BASESWAP_ROUTER, AERODROME_ROUTER], contract_address, loan_amount, USDC_BASE, pair_cfg.clone(), price_aero, price_v3, target_price_usd);
     let target_path = system.execute_collapse();
     if target_path.0.is_empty() { return Ok(()); }
 
@@ -670,6 +689,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
 
                 if spread_gap >= 1.5 {
+                    let target_price = if p_v3 > 0.0 { p_v3 } else { current_weth_price };
                     let _ = trigger_cross_dex_arbitrage(
                         http_provider.clone(),
                         private_provider.clone(),
@@ -679,6 +699,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         pair,
                         p_aero,
                         p_v3,
+                        target_price,
                     ).await;
                 }
             }

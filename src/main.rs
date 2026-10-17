@@ -94,6 +94,7 @@ impl CausalCollapseSystem {
         let min_amount_out_leg2 = self.loan_amount * U256::from(10002) / U256::from(10000);
 
         if self.price_aero <= self.price_v3 {
+            // الحالة الأولى: الشراء من Aerodrome والبيع في Uniswap V3
             addresses.push(AERODROME_ROUTER);
 
             let aero_route = IAerodromeRouter::Route {
@@ -135,6 +136,7 @@ impl CausalCollapseSystem {
             payloads.push(payload_leg2);
 
         } else {
+            // الحالة الثانية: الشراء من Uniswap V3 والبيع في Aerodrome مع تصحيح قيود الأذونات
             addresses.push(UNISWAP_V3_ROUTER);
 
             let mut path_bytes = Vec::new();
@@ -148,7 +150,7 @@ impl CausalCollapseSystem {
                 recipient: self.contract_address,
                 deadline: U256::from(u64::MAX),
                 amountIn: self.loan_amount,
-                amountOutMinimum: min_amount_out_leg1,
+                amountOutMinimum: U256::ZERO, // منع الـ Revert في الخطوة الأولى عبر قبول المخرجات بمرونة
             };
 
             let payload_leg1 = IUniswapV3Router::exactInputCall {
@@ -391,11 +393,10 @@ where
         return Ok(());
     }
 
-    // خفض عتبة تفعيل القرض الأكبر إلى $3.0 لتسريع حجم الأرباح
     let dynamic_loan = if spread_gap > 3.0 {
-        10_000_000_000u64 // 10,000 USDC
+        10_000_000_000u64 
     } else {
-        2_000_000_000u64  // 2,000 USDC
+        2_000_000_000u64  
     };
 
     let adjusted_loan = U256::from(dynamic_loan);
@@ -428,7 +429,6 @@ where
             return Ok(());
         }
         Err(e) => {
-            // طباعة السبب الخام للـ Revert لمعرفة التفاصيل بدقة
             println!("🔍 [BALANCER REVERT REASON - {}]: {:?}", pair_symbol, e);
         }
     }

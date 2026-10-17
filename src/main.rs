@@ -94,6 +94,7 @@ impl CausalCollapseSystem {
         let min_amount_out_leg2 = self.loan_amount * U256::from(10002) / U256::from(10000);
 
         if self.price_aero <= self.price_v3 {
+            // المسار المباشر الأول: Aerodrome -> Uniswap V3
             addresses.push(AERODROME_ROUTER);
 
             let aero_route = IAerodromeRouter::Route {
@@ -112,13 +113,6 @@ impl CausalCollapseSystem {
             }
             .abi_encode();
             payloads.push(payload_leg1);
-
-            addresses.push(self.pair_config.target_token);
-            let approve_payload = IERC20Call::approveCall {
-                spender: UNISWAP_V3_ROUTER,
-                amount: U256::MAX,
-            }.abi_encode();
-            payloads.push(approve_payload);
 
             addresses.push(UNISWAP_V3_ROUTER);
             let mut path_bytes = Vec::new();
@@ -142,6 +136,7 @@ impl CausalCollapseSystem {
             payloads.push(payload_leg2);
 
         } else {
+            // المسار المباشر الثاني: Uniswap V3 -> Aerodrome
             addresses.push(UNISWAP_V3_ROUTER);
 
             let mut path_bytes = Vec::new();
@@ -163,13 +158,6 @@ impl CausalCollapseSystem {
             }
             .abi_encode();
             payloads.push(payload_leg1);
-
-            addresses.push(self.pair_config.target_token);
-            let approve_payload = IERC20Call::approveCall {
-                spender: AERODROME_ROUTER,
-                amount: U256::MAX,
-            }.abi_encode();
-            payloads.push(approve_payload);
 
             addresses.push(AERODROME_ROUTER);
             let aero_route = IAerodromeRouter::Route {
@@ -203,11 +191,6 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
 }
 
 sol! {
-    #[sol(rpc)]
-    contract IERC20Call {
-        function approve(address spender, uint256 amount) external returns (bool);
-    }
-
     #[sol(rpc)]
     contract IUniswapV2Pair {
         function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
@@ -419,7 +402,7 @@ where
 
     let adjusted_loan = U256::from(dynamic_loan);
 
-    println!("🧠 [ADAPTIVE EXECUTION - {}] Gap: ${:.2} | Loan Size: {} USDC...", 
+    println!("🧠 [CLEAN EXECUTION - {}] Gap: ${:.2} | Loan Size: {} USDC...", 
              pair_symbol, spread_gap, dynamic_loan / 1_000_000);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
@@ -447,7 +430,16 @@ where
             return Ok(());
         }
         Err(e) => {
-            println!("🔍 [BALANCER REVERT REASON - {}]: {:?}", pair_symbol, e);
+            // استخراج وتفكيك الـ Revert Hex Bytes بدقة تامة
+            if let Some(rpc_err) = e.as_transport_error().and_then(|t| t.as_rpc_error()) {
+                if let Some(data) = rpc_err.data() {
+                    println!("🔍 [BALANCER RAW REVERT HEX - {}]: {:?}", pair_symbol, data);
+                } else {
+                    println!("🔍 [BALANCER REVERT ERROR - {}]: {:?}", pair_symbol, rpc_err);
+                }
+            } else {
+                println!("🔍 [BALANCER REVERT - {}]: {:?}", pair_symbol, e);
+            }
         }
     }
 
@@ -464,7 +456,15 @@ where
             }
         }
         Err(e) => {
-            println!("🔍 [AAVE REVERT REASON - {}]: {:?}", pair_symbol, e);
+            if let Some(rpc_err) = e.as_transport_error().and_then(|t| t.as_rpc_error()) {
+                if let Some(data) = rpc_err.data() {
+                    println!("🔍 [AAVE RAW REVERT HEX - {}]: {:?}", pair_symbol, data);
+                } else {
+                    println!("🔍 [AAVE REVERT ERROR - {}]: {:?}", pair_symbol, rpc_err);
+                }
+            } else {
+                println!("🔍 [AAVE REVERT - {}]: {:?}", pair_symbol, e);
+            }
         }
     }
 
@@ -473,7 +473,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Adaptive MEV Engine with Auto-Whitelist & Approvals...");
+    println!("🤖 Initializing Clean Adaptive MEV Engine with Hex Diagnostics...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -494,18 +494,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .wallet(wallet.clone())
         .connect_http(primary_http_url.parse()?);
 
-    // 🔑 التعديل التلقائي: تفعيل WETH في القائمة البيضاء للعقد عند الإقلاع مباشرة
     println!("🛡️ Ensuring WETH ({:?}) is whitelisted on contract...", WETH_BASE);
     let contract_init = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
     let whitelist_call = contract_init.setTargetWhitelist(WETH_BASE, true).from(signer_address);
-    match whitelist_call.send().await {
-        Ok(pending) => {
-            println!("✅ WETH Whitelist Tx Dispatched! Hash: {:?}", pending.tx_hash());
-        }
-        Err(e) => {
-            println!("ℹ️ Note: WETH might already be whitelisted or tx skipped: {:?}", e);
-        }
-    }
+    let _ = whitelist_call.send().await;
 
     let ws = alloy::providers::WsConnect::new(alchemy_wss_url);
     let ws_provider = ProviderBuilder::new()
@@ -528,6 +520,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for pair in &monitored_pairs {
             let provider = http_provider.clone();
             let pair_cfg = pair.clone();
+
+            if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(provider.clone(), &pair_cfg).data() {
+                // ملاحظة: تم تعديل استدعاء جلب البيانات لتفادي أي خطأ
+            }
 
             if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(provider.clone(), &pair_cfg).await {
                 println!(

@@ -2,6 +2,7 @@ use num_bigint::BigUint;
 use num_traits::One;
 use futures_util::StreamExt;
 use tokio::time::{sleep, Duration};
+use std::str::FromStr;
 use alloy::{
     providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
@@ -413,17 +414,14 @@ where P: Provider<Ethereum> + Clone {
     let fee_tier_100 = _U24::from(100);
     let fee_tier_500 = _U24::from(500);
 
-    // 1. WETH Pairs
     let weth_uni: Address = uni_factory.getPool(WETH_BASE, USDC_BASE, fee_tier_100).call().await?.0.into();
     let weth_pancake: Address = pancake_factory.getPool(WETH_BASE, USDC_BASE, fee_tier_100).call().await?.0.into();
     let weth_aero: Address = aero_cl_factory.getPool(WETH_BASE, USDC_BASE, fee_tier_100).call().await?.0.into();
 
-    // 2. cbETH Pairs (مقابل WETH)
     let cbeth_uni: Address = uni_factory.getPool(WETH_BASE, CBETH_BASE, fee_tier_100).call().await?.0.into();
     let cbeth_pancake: Address = pancake_factory.getPool(WETH_BASE, CBETH_BASE, fee_tier_100).call().await?.0.into();
     let cbeth_aero: Address = aero_cl_factory.getPool(WETH_BASE, CBETH_BASE, fee_tier_100).call().await?.0.into();
 
-    // 3. DAI Pairs (مقابل USDC)
     let dai_uni: Address = uni_factory.getPool(DAI_BASE, USDC_BASE, fee_tier_100).call().await?.0.into();
     let dai_pancake: Address = pancake_factory.getPool(DAI_BASE, USDC_BASE, fee_tier_100).call().await?.0.into();
     let dai_aero: Address = aero_cl_factory.getPool(DAI_BASE, USDC_BASE, fee_tier_500).call().await?.0.into();
@@ -560,7 +558,7 @@ where P: Provider<Ethereum> + Clone {
 
 async fn trigger_cross_dex_arbitrage<P, PP>(http_provider: P, private_provider: PP, contract_address: Address, signer_address: Address, spread_gap: f64, pair_cfg: &TokenPairConfig, price_aero: f64, price_v3: f64) -> Result<(), Box<dyn std::error::Error>>
 where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
-    if spread_gap < 6.0 { return Ok(()); }
+    if spread_gap < 3.0 { return Ok(()); } // تم خفض الحد الأدنى للتنفيذ الفوري إلى 3.0 دولار
     let raw_loan = (spread_gap * 250.0) as u128 * 1_000_000;
     let dynamic_loan = raw_loan.max(1_000_000);
     let loan_amount = U256::from(dynamic_loan);
@@ -623,7 +621,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let alchemy_wss_url = std::env::var("ALCHEMY_WSS_URL").unwrap_or_else(|_| "ws://127.0.0.1:8545".to_string());
     let private_key_str = std::env::var("PRIVATE_KEY").unwrap_or_else(|_| "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string());
     
-    let signer: PrivateKeySigner = private_key_str.parse()?;
+    let signer = PrivateKeySigner::from_str(&private_key_str)?;
     let signer_address = signer.address();
     let http_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_http(primary_http_url.parse()?);
     let private_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_http(private_http_url.parse()?);
@@ -638,7 +636,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = BaseAtomicArbitrage::new(contract_address, http_provider.clone()).setTargetWhitelist(DAI_BASE, true).from(signer_address).send().await;
 
     let ws = alloy::providers::WsConnect::new(alchemy_wss_url);
-    let ws_provider = ProviderBuilder::new().wallet(PrivateKeySigner::from_str(&private_key_str)?.into()).connect_ws(ws).await?;
+    let ws_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_ws(ws).await?;
     let sub = ws_provider.subscribe_blocks().await?;
     let mut stream = sub.into_stream();
     let mut block_counter = 0u64;
@@ -663,7 +661,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pair.symbol, p_aero, p_v3, p_baseswap, p_pancake, spread_gap
                 );
 
-                if spread_gap >= 6.0 {
+                if spread_gap >= 3.0 { // تم خفض الحد الأدنى هنا أيضًا ليبدأ المحاكاة والتنفيذ فوراً
                     let _ = trigger_cross_dex_arbitrage(
                         http_provider.clone(),
                         private_provider.clone(),

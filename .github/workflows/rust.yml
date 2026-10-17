@@ -1,4 +1,4 @@
-name: Deploy and Run Base MEV Bot
+Name: Deploy and Run Base MEV Bot
 
 on:
   workflow_dispatch:
@@ -29,8 +29,23 @@ jobs:
           echo "[*] Starting local Anvil fork of Base Mainnet..."
           nohup anvil --fork-url "$ALCHEMY_HTTP_URL" --port 8545 > anvil.log 2>&1 &
           echo "[*] Waiting for Anvil RPC to initialize..."
-          sleep 5
-          nc -z localhost 8545 && echo "[*] Anvil is up and running!" || (cat anvil.log && exit 1)
+          
+          # حلقة تحقق ذكية بديلة لـ nc تضمن جاهزية الـ RPC تماماً
+          for i in {1..20}; do
+            if curl -s -X POST -H "Content-Type: application/json" --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' http://localhost:8545 > /dev/null; then
+              echo "[*] Anvil is up and running!"
+              break
+            fi
+            echo "[*] Waiting for Anvil RPC ($i/20)..."
+            sleep 2
+          done
+
+          # التحقق النهائي وإن لم يعمل يتم طباعة السجلات والخروج
+          if ! curl -s -X POST -H "Content-Type: application/json" --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' http://localhost:8545 > /dev/null; then
+            echo "[!] Anvil failed to start. Logs:"
+            cat anvil.log
+            exit 1
+          fi
 
       - name: Inspect Execution Trace (Deep Flash Loan Check)
         env:

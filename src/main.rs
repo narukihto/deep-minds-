@@ -129,35 +129,35 @@ pub fn load_global_liquidity_graph() -> ArbitrageGraph {
     let mut graph = ArbitrageGraph::new();
 
     graph.add_pool(Pool {
-        id: address!("0x6c561b446416e1a00e8e93e221854d6ea4171372"), // Uni V3 WETH/USDC
+        id: address!("0x6c561b446416e1a00e8e93e221854d6ea4171372"),
         token0: WETH_BASE,
         token1: USDC_BASE,
         dex_type: DexType::UniswapV3,
         fee: 100,
     });
     graph.add_pool(Pool {
-        id: address!("cdac0d6c6c59727a65f871236188350531885c43"), // Aerodrome WETH/USDC
+        id: address!("cdac0d6c6c59727a65f871236188350531885c43"),
         token0: WETH_BASE,
         token1: USDC_BASE,
         dex_type: DexType::Aerodrome,
         fee: 0,
     });
     graph.add_pool(Pool {
-        id: address!("0x21198fdfbc9c3b88b0a9dfbf65449cf77cecc0df"), // Aerodrome cbETH/WETH
+        id: address!("0x21198fdfbc9c3b88b0a9dfbf65449cf77cecc0df"),
         token0: WETH_BASE,
         token1: CBETH_BASE,
         dex_type: DexType::Aerodrome,
         fee: 0,
     });
     graph.add_pool(Pool {
-        id: address!("0x53009586111164998d36371dd0349f7e44a4f806"), // Aerodrome USDC/DAI
+        id: address!("0x53009586111164998d36371dd0349f7e44a4f806"),
         token0: USDC_BASE,
         token1: DAI_BASE,
         dex_type: DexType::Aerodrome,
         fee: 1, 
     });
     graph.add_pool(Pool {
-        id: address!("0x327cd1c2c31e42f9862b535d4ff3a6af6256f081"), // Uni V3 WETH/DAI
+        id: address!("0x327cd1c2c31e42f9862b535d4ff3a6af6256f081"),
         token0: WETH_BASE,
         token1: DAI_BASE,
         dex_type: DexType::UniswapV3,
@@ -176,9 +176,7 @@ impl PayloadEncoder {
         if edges.is_empty() {
             return path;
         }
-        
         path.extend_from_slice(edges[0].from_token.as_slice());
-        
         for edge in edges {
             let fee_bytes = edge.pool.fee.to_be_bytes();
             path.extend_from_slice(&fee_bytes[1..4]);
@@ -317,7 +315,7 @@ where
                 }
             }
             DexType::UniswapV3 | DexType::PancakeSwapV3 => {
-                let default_v3_cap = U256::from(50_000_000_000u64); // 50,000 USDC
+                let default_v3_cap = U256::from(50_000_000_000u64);
                 if default_v3_cap < min_reserve { min_reserve = default_v3_cap; }
             }
         }
@@ -346,10 +344,13 @@ where
 {
     let cycles = graph.find_cycles(USDC_BASE, 3);
     if cycles.is_empty() {
+        println!("⚠️ No cycles found in graph.");
         return Ok(());
     }
 
-    for target_cycle in &cycles {
+    println!("🔍 Found {} candidate cycle(s). Analyzing prices & simulating...", cycles.len());
+
+    for (i, target_cycle) in cycles.iter().enumerate() {
         let loan_amount = fetch_live_pool_liquidity_and_compute_loan(http_provider.clone(), target_cycle).await
             .unwrap_or(U256::from(2_000_000_000u64));
 
@@ -363,8 +364,9 @@ where
             continue;
         }
 
-        println!("🎯 [LIVE MULTI-HOP SNIPER] Cycle hops: {} | Dynamic Loan: {} USDC... Simulating locally!", 
-                 target_cycle.len(), loan_amount.to::<u128>() as f64 / 1_000_000.0);
+        // طباعة تفاصيل المسار الحالي وأسماء التوكنات لترى بوضوح ماذا يفحص البوت
+        println!("   [Cycle #{}] Hops: {} | Loan: {} USDC | Pool IDs -> {:?}", 
+                 i + 1, target_cycle.len(), loan_amount.to::<u128>() as f64 / 1_000_000.0, targets);
 
         let contract_sim = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
         let simulation_builder = contract_sim
@@ -374,7 +376,7 @@ where
 
         match simulation_builder.call().await {
             Ok(_) => {
-                println!("🎉 [SIMULATION PASSED!] Live Multi-hop Arbitrage Verified! Dispatching via PRIVATE RPC...");
+                println!("🎉 [SIMULATION PASSED!] Profitable Multi-hop Arbitrage Verified! Dispatching via PRIVATE RPC...");
                 
                 let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider.clone());
                 let private_builder = contract_private
@@ -387,7 +389,10 @@ where
                 }
                 break; 
             }
-            Err(_sim_err) => {}
+            Err(sim_err) => {
+                // طباعة سبب رفض المحاكاة بوضوح لتعرف لماذا لم يتم التنفيذ
+                println!("   ❌ [Simulation Reverted] Reason: {:?}", sim_err);
+            }
         }
     }
 
@@ -396,7 +401,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Live Multi-Hop Triangular Arbitrage Engine with Real-time Reserves...");
+    println!("🤖 Initializing Live Multi-Hop Triangular Arbitrage Engine with Detailed Diagnostics...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());

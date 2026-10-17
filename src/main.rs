@@ -36,6 +36,8 @@ pub struct TokenPairConfig {
     pub fee_tier_v3: u32,
     pub token0: Address,
     pub token1: Address,
+    pub is_v3_aero: bool,
+    pub is_v3_baseswap: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -413,6 +415,8 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             fee_tier_v3: 100,
             token0: WETH_BASE,
             token1: USDC_BASE,
+            is_v3_aero: false,
+            is_v3_baseswap: false,
         },
         TokenPairConfig {
             symbol: "cbETH",
@@ -425,6 +429,8 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             fee_tier_v3: 100,
             token0: WETH_BASE,
             token1: CBETH_BASE,
+            is_v3_aero: true,
+            is_v3_baseswap: false,
         },
         TokenPairConfig {
             symbol: "DAI",
@@ -437,6 +443,8 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             fee_tier_v3: 100,
             token0: DAI_BASE,
             token1: USDC_BASE,
+            is_v3_aero: true,
+            is_v3_baseswap: false,
         },
     ]
 }
@@ -454,29 +462,24 @@ fn calculate_v2_price(
     }
     let usdc_decimals = 6;
 
-    if token0 == USDC_BASE || token1 == USDC_BASE {
-        let r0 = reserve0 as f64 / 10f64.powi(if token0 == USDC_BASE { usdc_decimals } else { target_decimals } as i32);
-        let r1 = reserve1 as f64 / 10f64.powi(if token1 == USDC_BASE { usdc_decimals } else { target_decimals } as i32);
+    let d0 = if token0 == USDC_BASE { usdc_decimals } else { target_decimals };
+    let d1 = if token1 == USDC_BASE { usdc_decimals } else { target_decimals };
 
-        return if token0 == USDC_BASE {
-            if r1 > 0.0 { r0 / r1 } else { 0.0 }
-        } else {
-            if r0 > 0.0 { r1 / r0 } else { 0.0 }
-        };
+    let r0 = reserve0 as f64 / 10f64.powi(d0 as i32);
+    let r1 = reserve1 as f64 / 10f64.powi(d1 as i32);
+
+    let price = if r0 > 0.0 { r1 / r0 } else { 0.0 };
+
+    if token0 == USDC_BASE || token1 == USDC_BASE {
+        return if token0 == USDC_BASE { if price > 0.0 { 1.0 / price } else { 0.0 } } else { price };
     }
 
     if token0 == WETH_BASE || token1 == WETH_BASE {
-        let r0 = reserve0 as f64 / 10f64.powi(18);
-        let r1 = reserve1 as f64 / 10f64.powi(18);
-        let ratio = if token0 == WETH_BASE {
-            if r1 > 0.0 { r0 / r1 } else { 0.0 }
-        } else {
-            if r0 > 0.0 { r1 / r0 } else { 0.0 }
-        };
-        return ratio * weth_price_usd;
+        let weth_ratio = if token0 == WETH_BASE { if r1 > 0.0 { r0 / r1 } else { 0.0 } } else { price };
+        return weth_ratio * weth_price_usd;
     }
 
-    0.0
+    price
 }
 
 fn calculate_v3_price(
@@ -494,29 +497,25 @@ fn calculate_v3_price(
     let price_raw = ratio * ratio;
 
     let usdc_decimals = 6;
+    let d0 = if token0 == USDC_BASE { usdc_decimals } else { target_decimals };
+    let d1 = if token1 == USDC_BASE { usdc_decimals } else { target_decimals };
+
+    let adjusted_price = price_raw * 10f64.powi((d0 as i32) - (d1 as i32));
+
+    if adjusted_price <= 0.0 {
+        return 0.0;
+    }
 
     if token0 == USDC_BASE || token1 == USDC_BASE {
-        let d0 = if token0 == USDC_BASE { usdc_decimals } else { target_decimals };
-        let d1 = if token1 == USDC_BASE { usdc_decimals } else { target_decimals };
-        let adjusted_price = price_raw * 10f64.powi((d0 as i32) - (d1 as i32));
-
-        return if token0 == USDC_BASE {
-            if adjusted_price > 0.0 { 1.0 / adjusted_price } else { 0.0 }
-        } else {
-            adjusted_price
-        };
+        return if token0 == USDC_BASE { 1.0 / adjusted_price } else { adjusted_price };
     }
 
     if token0 == WETH_BASE || token1 == WETH_BASE {
-        let cbeth_in_weth = if token0 == WETH_BASE {
-            if price_raw > 0.0 { 1.0 / price_raw } else { 0.0 }
-        } else {
-            price_raw
-        };
-        return cbeth_in_weth * weth_price_usd;
+        let base_price = if token0 == WETH_BASE { 1.0 / adjusted_price } else { adjusted_price };
+        return base_price * weth_price_usd;
     }
 
-    0.0
+    adjusted_price
 }
 
 async fn fetch_live_market_data_for_pair<P>(
@@ -528,57 +527,45 @@ where
     P: Provider<Ethereum> + Clone,
 {
     let mut price_aero = 0.0;
-    let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
-    if let Ok(res) = aero_pair.getReserves().call().await {
-        price_aero = calculate_v2_price(
-            res.reserve0.to::<u128>(),
-            res.reserve1.to::<u128>(),
-            config.token0,
-            config.token1,
-            config.decimals,
-            weth_price_usd,
-        );
+    if config.is_v3_aero {
+        let v3_pool = IUniswapV3Pool::new(config.aero_pool, http_provider.clone());
+        if let Ok(slot0) = v3_pool.slot0().call().await {
+            price_aero = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals, weth_price_usd);
+        }
+    } else {
+        let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
+        if let Ok(res) = aero_pair.getReserves().call().await {
+            price_aero = calculate_v2_price(res.reserve0.to::<u128>(), res.reserve1.to::<u128>(), config.token0, config.token1, config.decimals, weth_price_usd);
+        }
     }
 
     let mut price_v3 = 0.0;
     let v3_pool = IUniswapV3Pool::new(config.uni_v3_pool, http_provider.clone());
     if let Ok(slot0) = v3_pool.slot0().call().await {
-        price_v3 = calculate_v3_price(
-            slot0.sqrtPriceX96,
-            config.token0,
-            config.token1,
-            config.decimals,
-            weth_price_usd,
-        );
+        price_v3 = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals, weth_price_usd);
     }
 
     let mut price_baseswap = 0.0;
-    let baseswap_pair = IUniswapV2Pair::new(config.baseswap_pool, http_provider.clone());
-    if let Ok(res) = baseswap_pair.getReserves().call().await {
-        price_baseswap = calculate_v2_price(
-            res.reserve0.to::<u128>(),
-            res.reserve1.to::<u128>(),
-            config.token0,
-            config.token1,
-            config.decimals,
-            weth_price_usd,
-        );
+    if config.is_v3_baseswap {
+        let v3_pool = IUniswapV3Pool::new(config.baseswap_pool, http_provider.clone());
+        if let Ok(slot0) = v3_pool.slot0().call().await {
+            price_baseswap = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals, weth_price_usd);
+        }
+    } else {
+        let baseswap_pair = IUniswapV2Pair::new(config.baseswap_pool, http_provider.clone());
+        if let Ok(res) = baseswap_pair.getReserves().call().await {
+            price_baseswap = calculate_v2_price(res.reserve0.to::<u128>(), res.reserve1.to::<u128>(), config.token0, config.token1, config.decimals, weth_price_usd);
+        }
     }
 
     let mut price_pancake = 0.0;
     let pancake_pool = IUniswapV3Pool::new(config.pancakeswap_pool, http_provider.clone());
     if let Ok(slot0) = pancake_pool.slot0().call().await {
-        price_pancake = calculate_v3_price(
-            slot0.sqrtPriceX96,
-            config.token0,
-            config.token1,
-            config.decimals,
-            weth_price_usd,
-        );
+        price_pancake = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals, weth_price_usd);
     }
 
     let mut prices = vec![price_aero, price_v3, price_baseswap, price_pancake];
-    prices.retain(|&p| p > 0.0 && p <= 100000.0);
+    prices.retain(|&p| p > 0.1 && p <= 100000.0);
 
     let max_price = prices.iter().cloned().fold(0.0, f64::max);
     let min_price = prices.iter().cloned().fold(f64::INFINITY, f64::min);
@@ -663,7 +650,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Unified Dual-Engine Arbitrage Bot with Verified Hex-Sorted Pools...");
+    println!("🤖 Initializing Dual-Engine Bot with Robust V2/V3 Price Math...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
     let contract_address: Address = contract_addr_str.parse()?;

@@ -88,8 +88,8 @@ impl CausalCollapseSystem {
         // Leg 1: Aerodrome Router (USDC -> Target Token)
         addresses.push(AERODROME_ROUTER);
         
-        // تعديل السليباج ليكون مرناً جداً (99.8%) لتجنب رفض الصفقات ذات الانزلاق البسيط
-        let min_amount_out_leg1 = self.loan_amount * U256::from(9980) / U256::from(10000);
+        // مرونة الانزلاق للخطوة الأولى (99.7%)
+        let min_amount_out_leg1 = self.loan_amount * U256::from(9970) / U256::from(10000);
 
         let aero_route = IAerodromeRouter::Route {
             from: self.borrowed_token,
@@ -109,12 +109,13 @@ impl CausalCollapseSystem {
 
         payloads.push(payload_leg1);
 
-        // Leg 2: Uniswap V3 / PancakeSwap V3 (Target Token -> USDC)
+        // Leg 2: Uniswap V3 Router (Target Token -> USDC)
         addresses.push(UNISWAP_V3_ROUTER);
 
         let estimated_token_received = min_amount_out_leg1; 
-        // اشتراط حد أدنى إيجابي لتغطية القرض وفائض بسيط (100.01%)
-        let min_amount_out_leg2 = self.loan_amount * U256::from(10001) / U256::from(10000);
+        
+        // تعديل الحد الأدنى للمخرج لضمان تغطية القرض الأصلي + رسوم الفلاش + هامش أمان (100.09%)
+        let min_amount_out_leg2 = self.loan_amount * U256::from(10009) / U256::from(10000);
 
         let mut path_bytes = Vec::new();
         path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
@@ -452,7 +453,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = sub.into_stream();
     let mut block_counter = 0u64;
 
-    // رفع القرض رسمياً إلى 10,000 USDC
     let loan_amount = U256::from(10_000_000_000u64);
 
     while let Some(block) = stream.next().await {

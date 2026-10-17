@@ -94,7 +94,6 @@ impl CausalCollapseSystem {
         let min_amount_out_leg2 = self.loan_amount * U256::from(10002) / U256::from(10000);
 
         if self.price_aero <= self.price_v3 {
-            // الحالة الأولى: الشراء من Aerodrome والبيع في Uniswap V3
             addresses.push(AERODROME_ROUTER);
 
             let aero_route = IAerodromeRouter::Route {
@@ -113,6 +112,13 @@ impl CausalCollapseSystem {
             }
             .abi_encode();
             payloads.push(payload_leg1);
+
+            addresses.push(self.pair_config.target_token);
+            let approve_payload = IERC20Call::approveCall {
+                spender: UNISWAP_V3_ROUTER,
+                amount: U256::MAX,
+            }.abi_encode();
+            payloads.push(approve_payload);
 
             addresses.push(UNISWAP_V3_ROUTER);
             let mut path_bytes = Vec::new();
@@ -136,7 +142,6 @@ impl CausalCollapseSystem {
             payloads.push(payload_leg2);
 
         } else {
-            // الحالة الثانية: الشراء من Uniswap V3 والبيع في Aerodrome مع تصحيح قيود الأذونات
             addresses.push(UNISWAP_V3_ROUTER);
 
             let mut path_bytes = Vec::new();
@@ -150,7 +155,7 @@ impl CausalCollapseSystem {
                 recipient: self.contract_address,
                 deadline: U256::from(u64::MAX),
                 amountIn: self.loan_amount,
-                amountOutMinimum: U256::ZERO, // منع الـ Revert في الخطوة الأولى عبر قبول المخرجات بمرونة
+                amountOutMinimum: U256::ZERO,
             };
 
             let payload_leg1 = IUniswapV3Router::exactInputCall {
@@ -158,6 +163,13 @@ impl CausalCollapseSystem {
             }
             .abi_encode();
             payloads.push(payload_leg1);
+
+            addresses.push(self.pair_config.target_token);
+            let approve_payload = IERC20Call::approveCall {
+                spender: AERODROME_ROUTER,
+                amount: U256::MAX,
+            }.abi_encode();
+            payloads.push(approve_payload);
 
             addresses.push(AERODROME_ROUTER);
             let aero_route = IAerodromeRouter::Route {
@@ -191,6 +203,11 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
 }
 
 sol! {
+    #[sol(rpc)]
+    contract IERC20Call {
+        function approve(address spender, uint256 amount) external returns (bool);
+    }
+
     #[sol(rpc)]
     contract IUniswapV2Pair {
         function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
@@ -234,6 +251,7 @@ sol! {
     contract BaseAtomicArbitrage {
         function triggerBalancerArbitrage(address tokenToBorrow, uint256 loanAmount, bytes calldata swapPathData) external;
         function triggerAaveArbitrage(address tokenToBorrow, uint256 loanAmount, bytes calldata swapPathData) external;
+        function setTargetWhitelist(address target, bool status) external;
         
         error ArbitrageUnprofitable(uint256 expected, uint256 actual);
         error InsufficientLiquidity();
@@ -455,7 +473,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Adaptive MEV Engine with Revert Diagnostics...");
+    println!("🤖 Initializing Adaptive MEV Engine with Auto-Whitelist & Approvals...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -475,6 +493,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let http_provider = ProviderBuilder::new()
         .wallet(wallet.clone())
         .connect_http(primary_http_url.parse()?);
+
+    // 🔑 التعديل التلقائي: تفعيل WETH في القائمة البيضاء للعقد عند الإقلاع مباشرة
+    println!("🛡️ Ensuring WETH ({:?}) is whitelisted on contract...", WETH_BASE);
+    let contract_init = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
+    let whitelist_call = contract_init.setTargetWhitelist(WETH_BASE, true).from(signer_address);
+    match whitelist_call.send().await {
+        Ok(pending) => {
+            println!("✅ WETH Whitelist Tx Dispatched! Hash: {:?}", pending.tx_hash());
+        }
+        Err(e) => {
+            println!("ℹ️ Note: WETH might already be whitelisted or tx skipped: {:?}", e);
+        }
+    }
 
     let ws = alloy::providers::WsConnect::new(alchemy_wss_url);
     let ws_provider = ProviderBuilder::new()

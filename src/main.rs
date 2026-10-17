@@ -375,8 +375,9 @@ where
     Ok((price_aero, price_v3, price_baseswap, price_pancake, spread_gap))
 }
 
-async fn trigger_on_chain_arbitrage<P>(
+async fn trigger_on_chain_arbitrage<P, PP>(
     http_provider: P,
+    private_provider: PP,
     contract_address: Address,
     signer_address: Address,
     token_to_borrow: Address,
@@ -387,14 +388,19 @@ async fn trigger_on_chain_arbitrage<P>(
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     P: Provider<Ethereum> + Clone,
+    PP: Provider<Ethereum> + Clone,
 {
-    // القرض الديناميكي المعتمد على الفجوة السعرية
-    let raw_loan = (spread_gap * 2500.0) as u64 * 1_000_000;
-    let dynamic_loan = raw_loan.clamp(1_000_000_000, 50_000_000_000);
+    if spread_gap < 15.0 {
+        println!("💤 [WETH] Gap (${:.2}) below threshold ($15.0). Skipping.", spread_gap);
+        return Ok(());
+    }
+
+    let raw_loan = (spread_gap * 3000.0) as u64 * 1_000_000;
+    let dynamic_loan = raw_loan.clamp(5_000_000_000, 100_000_000_000);
     let loan_amount = U256::from(dynamic_loan);
 
-    println!("🚀 [DIRECT EXECUTION MODE - {}] Gap: ${:.2} | Dynamic Loan: {} USDC... Dispatching Real TX!", 
-             pair_cfg.symbol, spread_gap, dynamic_loan / 1_000_000);
+    println!("🎯 [WETH PRIVATE SNIPER] High Value Gap: ${:.2} | Dynamic Loan: {} USDC... Simulating locally!", 
+             spread_gap, dynamic_loan / 1_000_000);
 
     let nodes = vec![QuantumNode {
         id: 1,
@@ -430,36 +436,30 @@ where
         ),
     ]).abi_encode();
 
-    let contract = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
-
-    // 🔑 إرسال المعاملة الحقيقية مباشرة عبر Balancer دون محاكاة مسبقة لتفادي الـ Reverts الوهمية
-    let balancer_builder = contract
+    // 1️⃣ المحاكاة المحلية باستخدام مزود القراءة العام لتفادي أي استهلاك رسوم
+    let contract_sim = BaseAtomicArbitrage::new(contract_address, http_provider);
+    let simulation_builder = contract_sim
         .triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
         .from(signer_address)
         .gas(1_500_000);
 
-    match balancer_builder.send().await {
-        Ok(pending_tx) => {
-            println!("🎉 [BALANCER TX DISPATCHED!] Real Hash: {:?}", pending_tx.tx_hash());
-            return Ok(());
-        }
-        Err(e) => {
-            println!("⚠️ [BALANCER SEND FAILED - {}]: {:?}. Trying Aave...", pair_cfg.symbol, e);
-        }
-    }
+    match simulation_builder.call().await {
+        Ok(_) => {
+            println!("🎉 [SIMULATION PASSED!] Profitable WETH Trade Verified. Dispatching via PRIVATE RPC (MEV Protected)...");
+            
+            // 2️⃣ الإرسال الفعلي عبر الـ Private Provider الحصري لمنع الـ Front-running
+            let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider);
+            let private_builder = contract_private
+                .triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
+                .from(signer_address)
+                .gas(1_500_000);
 
-    // الاحتياطي: إرسال عبر Aave مباشرة
-    let aave_builder = contract
-        .triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
-        .from(signer_address)
-        .gas(1_500_000);
-
-    match aave_builder.send().await {
-        Ok(pending_tx) => {
-            println!("🎉 [AAVE TX DISPATCHED!] Real Hash: {:?}", pending_tx.tx_hash());
+            if let Ok(pending_tx) = private_builder.send().await {
+                println!("🚀 [PRIVATE MEV-PROTECTED TX DISPATCHED!] Real Hash: {:?}", pending_tx.tx_hash());
+            }
         }
-        Err(e) => {
-            println!("❌ [AAVE SEND FAILED - {}]: {:?}", pair_cfg.symbol, e);
+        Err(sim_err) => {
+            println!("🛡️ [GAS SAVED] Simulation reverted locally. No gas wasted. Reason: {:?}", sim_err);
         }
     }
 
@@ -468,7 +468,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Direct Execution MEV Engine...");
+    println!("🤖 Initializing WETH Sniper Engine with Private MEV Protection...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -476,6 +476,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let primary_http_url = std::env::var("ALCHEMY_HTTP_URL")
         .unwrap_or_else(|_| "https://mainnet.base.org".to_string());
+    
+    // رابط القناة الخاصة (إن لم يوجد يتم افتراضه مطادقاً للرابط الأساسي)
+    let private_http_url = std::env::var("PRIVATE_RPC_URL")
+        .unwrap_or_else(|_| primary_http_url.clone());
+
     let alchemy_wss_url = std::env::var("ALCHEMY_WSS_URL")
         .unwrap_or_else(|_| "ws://127.0.0.1:8545".to_string());
 
@@ -483,11 +488,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string());
     let signer: PrivateKeySigner = private_key_str.parse()?;
     let signer_address = signer.address();
-    let wallet = EthereumWallet::from(signer);
+    let wallet = EthereumWallet::from(signer.clone());
+    let wallet_private = EthereumWallet::from(signer);
 
+    // المزود العام لجلب البيانات والمحاكاة
     let http_provider = ProviderBuilder::new()
-        .wallet(wallet.clone())
+        .wallet(wallet)
         .connect_http(primary_http_url.parse()?);
+
+    // المزود الخاص (Private RPC Provider) للإرسال المعزول
+    let private_provider = ProviderBuilder::new()
+        .wallet(wallet_private)
+        .connect_http(private_http_url.parse()?);
 
     println!("🛡️ Ensuring WETH ({:?}) is whitelisted on contract...", WETH_BASE);
     let contract_init = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
@@ -496,7 +508,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ws = alloy::providers::WsConnect::new(alchemy_wss_url);
     let ws_provider = ProviderBuilder::new()
-        .wallet(wallet)
+        .wallet(EthereumWallet::from(private_key_str.parse::<PrivateKeySigner>()?))
         .connect_ws(ws)
         .await?;
 
@@ -512,6 +524,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         for pair in &monitored_pairs {
             let provider = http_provider.clone();
+            let priv_provider = private_provider.clone();
             let pair_cfg = pair.clone();
 
             if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(provider.clone(), &pair_cfg).await {
@@ -520,9 +533,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pair_cfg.symbol, p_aero, p_v3, p_baseswap, p_pancake, spread_gap
                 );
 
-                if spread_gap > 0.5 { 
+                if spread_gap >= 15.0 { 
                     let _ = trigger_on_chain_arbitrage(
                         provider,
+                        priv_provider,
                         contract_address,
                         signer_address,
                         USDC_BASE,

@@ -16,7 +16,7 @@ type _U160 = Uint<160, 3>;
 
 const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
-const CBETH_BASE: Address = address!("2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22"); // العنوان الصحيح والمحدث لـ cbETH
+const CBETH_BASE: Address = address!("2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22"); 
 const DAI_BASE: Address = address!("50c5725949a6f0c72e6c4a641f24049a917db0cb");
 
 const UNISWAP_V3_FACTORY: Address = address!("0x33128a8fC17869897dcE68Ed026d694621f6FDfD");
@@ -404,17 +404,15 @@ sol! {
     }
 }
 
-// دالة لجلب عناوين المسبحات ديناميكياً من الـ Factories لتجنب قيم الأصفار
 async fn get_monitored_pairs<P>(http_provider: P) -> Result<Vec<TokenPairConfig>, Box<dyn std::error::Error>>
 where P: Provider<Ethereum> + Clone {
     let uni_factory = IUniswapV3Factory::new(UNISWAP_V3_FACTORY, http_provider.clone());
 
-    // جلب مسبح WETH/USDC ديناميكياً
-    let weth_uni = uni_factory.getPool(WETH_BASE, USDC_BASE, 100).call().await._0;
-    // جلب مسبح cbETH/WETH ديناميكياً
-    let cbeth_uni = uni_factory.getPool(WETH_BASE, CBETH_BASE, 100).call().await._0;
-    // جلب مسبح DAI/USDC ديناميكياً
-    let dai_uni = uni_factory.getPool(DAI_BASE, USDC_BASE, 100).call().await._0;
+    // تصحيح نوع الـ Uint24 واستخدام unwrap() للحصول على العنوان الناتج
+    let fee_tier = _U24::from(100);
+    let weth_uni = uni_factory.getPool(WETH_BASE, USDC_BASE, fee_tier).call().await?.pool;
+    let cbeth_uni = uni_factory.getPool(WETH_BASE, CBETH_BASE, fee_tier).call().await?.pool;
+    let dai_uni = uni_factory.getPool(DAI_BASE, USDC_BASE, fee_tier).call().await?.pool;
 
     Ok(vec![
         TokenPairConfig {
@@ -616,7 +614,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let http_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_http(primary_http_url.parse()?);
     let private_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_http(private_http_url.parse()?);
 
-    // جلب أزواج التداول ديناميكياً عند بدء التشغيل باستخدام الـ Factory
     let monitored_pairs = get_monitored_pairs(http_provider.clone()).await?;
     let liquidity_graph = load_global_liquidity_graph();
 

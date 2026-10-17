@@ -363,7 +363,6 @@ where
 
     let contract = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
 
-    // 1. محاولة الاقتراض عبر Balancer أولاً
     let balancer_builder = contract
         .triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
         .from(signer_address)
@@ -378,12 +377,10 @@ where
             return Ok(());
         }
         Err(_) => {
-            // إذا فشل Balancer أو لم تتوفر السيولة الكافية، يحول تلقائياً إلى Aave V3 لتجربتها!
             println!("🔄 [SWITCHING TO AAVE V3] Trying Aave flash loan simulation for {}...", pair_symbol);
         }
     }
 
-    // 2. محاولة الاقتراض عبر Aave V3 بديلة
     let aave_builder = contract
         .triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
         .from(signer_address)
@@ -483,7 +480,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         USDC_BASE,
                         loan_amount,
                         spread_gap,
-                        pair_symbol,
+                        pair_cfg.symbol, // <-- تم التعديل هنا لاستخدام pair_cfg.symbol الصحيح بدلاً من pair_symbol غير المعرف
                     ).await;
                 }
             }

@@ -70,7 +70,7 @@ impl CausalCollapseSystem {
     ) -> Self {
         Self {
             nodes,
-            threshold_limit: 0.0, // بلا قيود ثابتة، التكيف المطلق
+            threshold_limit: 0.0,
             buffer_capacity: 16,
             dynamic_pools,
             contract_address,
@@ -90,9 +90,8 @@ impl CausalCollapseSystem {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        // سليباج مرن يتكيف مع حجم القرض الديناميكي
         let min_amount_out_leg1 = self.loan_amount * U256::from(9980) / U256::from(10000);
-        let min_amount_out_leg2 = self.loan_amount * U256::from(10002) / U256::from(10000); // هامش ربح ديناميكي دقيق
+        let min_amount_out_leg2 = self.loan_amount * U256::from(10002) / U256::from(10000);
 
         if self.price_aero <= self.price_v3 {
             addresses.push(AERODROME_ROUTER);
@@ -392,16 +391,16 @@ where
         return Ok(());
     }
 
-    // حساب حجم القرض الديناميكي بناءً على حجم الفجوة اللحظية
-    let dynamic_loan = if spread_gap > 5.0 {
-        10_000_000_000u64 // 10,000 USDC للفجوات الكبيرة
+    // خفض عتبة تفعيل القرض الأكبر إلى $3.0 لتسريع حجم الأرباح
+    let dynamic_loan = if spread_gap > 3.0 {
+        10_000_000_000u64 // 10,000 USDC
     } else {
-        2_000_000_000u64  // 2,000 USDC للفجوات الصغيرة لضمان سلاسة التنفيذ
+        2_000_000_000u64  // 2,000 USDC
     };
 
     let adjusted_loan = U256::from(dynamic_loan);
 
-    println!("🧠 [DYNAMIC ADAPTIVE EXECUTION - {}] Gap: ${:.2} | Adapting Loan Size: {} USDC...", 
+    println!("🧠 [ADAPTIVE EXECUTION - {}] Gap: ${:.2} | Loan Size: {} USDC...", 
              pair_symbol, spread_gap, dynamic_loan / 1_000_000);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
@@ -422,13 +421,16 @@ where
 
     match balancer_builder.call().await {
         Ok(_) => {
-            println!("🎉 [BALANCER DYNAMIC SUCCESS!] نجح التنفيذ والتكيف مع الفجوة لـ {}!", pair_symbol);
+            println!("🎉 [BALANCER SUCCESS!] نجح تنفيذ المعاملة لـ {}!", pair_symbol);
             if let Ok(pending_tx) = balancer_builder.send().await {
-                println!("✅ Balancer Dynamic Tx Dispatched! Hash: {:?}", pending_tx.tx_hash());
+                println!("✅ Balancer Real Tx Dispatched! Hash: {:?}", pending_tx.tx_hash());
             }
             return Ok(());
         }
-        Err(_) => {}
+        Err(e) => {
+            // طباعة السبب الخام للـ Revert لمعرفة التفاصيل بدقة
+            println!("🔍 [BALANCER REVERT REASON - {}]: {:?}", pair_symbol, e);
+        }
     }
 
     let aave_builder = contract
@@ -438,13 +440,13 @@ where
 
     match aave_builder.call().await {
         Ok(_) => {
-            println!("🎉 [AAVE DYNAMIC SUCCESS!] نجح التنفيذ والتكيف مع الفجوة لـ {}!", pair_symbol);
+            println!("🎉 [AAVE SUCCESS!] نجح تنفيذ المعاملة لـ {}!", pair_symbol);
             if let Ok(pending_tx) = aave_builder.send().await {
-                println!("✅ Aave Dynamic Tx Dispatched! Hash: {:?}", pending_tx.tx_hash());
+                println!("✅ Aave Real Tx Dispatched! Hash: {:?}", pending_tx.tx_hash());
             }
         }
-        Err(_) => {
-            println!("📡 [ADAPTIVE RESPONSE - {}]: Gap ${:.2} evaluated dynamically.", pair_symbol, spread_gap);
+        Err(e) => {
+            println!("🔍 [AAVE REVERT REASON - {}]: {:?}", pair_symbol, e);
         }
     }
 
@@ -453,7 +455,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Fully Adaptive Dynamic MEV Engine...");
+    println!("🤖 Initializing Adaptive MEV Engine with Revert Diagnostics...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -502,7 +504,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pair_cfg.symbol, p_aero, p_v3, p_baseswap, p_pancake, spread_gap
                 );
 
-                // إلغاء السقف الثابت تماماً: البوت يتكيف مع أي فجوة موجبة
                 if spread_gap > 0.5 { 
                     let nodes = vec![QuantumNode {
                         id: 1,

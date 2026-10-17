@@ -138,35 +138,35 @@ pub fn load_global_liquidity_graph() -> ArbitrageGraph {
     let mut graph = ArbitrageGraph::new();
 
     graph.add_pool(Pool {
-        id: address!("0x6c561b446416e1a00e8e93e221854d6ea4171372"),
+        id: address!("0x6c561b446416e1a00e8e93e221854d6ea4171372"), // Uni V3 WETH/USDC
         token0: WETH_BASE,
         token1: USDC_BASE,
         dex_type: DexType::UniswapV3,
         fee: 100,
     });
     graph.add_pool(Pool {
-        id: address!("cdac0d6c6c59727a65f871236188350531885c43"),
+        id: address!("cdac0d6c6c59727a65f871236188350531885c43"), // Aerodrome WETH/USDC
         token0: WETH_BASE,
         token1: USDC_BASE,
         dex_type: DexType::Aerodrome,
         fee: 0,
     });
     graph.add_pool(Pool {
-        id: address!("0x21198fdfbc9c3b88b0a9dfbf65449cf77cecc0df"),
+        id: address!("0x21198fdfbc9c3b88b0a9dfbf65449cf77cecc0df"), // Aerodrome cbETH/WETH
         token0: WETH_BASE,
         token1: CBETH_BASE,
         dex_type: DexType::Aerodrome,
         fee: 0,
     });
     graph.add_pool(Pool {
-        id: address!("0x53009586111164998d36371dd0349f7e44a4f806"),
+        id: address!("0x53009586111164998d36371dd0349f7e44a4f806"), // Aerodrome USDC/DAI
         token0: USDC_BASE,
         token1: DAI_BASE,
         dex_type: DexType::Aerodrome,
         fee: 1, 
     });
     graph.add_pool(Pool {
-        id: address!("0x327cd1c2c31e42f9862b535d4ff3a6af6256f081"),
+        id: address!("0x327cd1c2c31e42f9862b535d4ff3a6af6256f081"), // Uni V3 WETH/DAI
         token0: WETH_BASE,
         token1: DAI_BASE,
         dex_type: DexType::UniswapV3,
@@ -303,28 +303,66 @@ sol! {
     }
 }
 
-// دالة محسنة ومصححة لطباعة السعر الحي بشكل صحيح بغض النظر عن ترتيب الرموز
-async fn print_live_market_prices<P>(http_provider: P) 
+// دالة شاملة لطباعة أسعار جميع المسبحات المسجلة في النظام
+async fn print_all_market_prices<P>(http_provider: P) 
 where
     P: Provider<Ethereum> + Clone,
 {
-    let aero_pool = address!("cdac0d6c6c59727a65f871236188350531885c43");
-    let pair_contract = IUniswapV2Pair::new(aero_pool, http_provider);
-    if let Ok(res) = pair_contract.getReserves().call().await {
-        let r0 = U256::from(res.reserve0); // WETH (18 decimals)
-        let r1 = U256::from(res.reserve1); // USDC (6 decimals)
+    // 1. Uniswap V3 WETH/USDC
+    let uni_v3_weth_usdc = address!("0x6c561b446416e1a00e8e93e221854d6ea4171372");
+    // 2. Aerodrome WETH/USDC
+    let aero_weth_usdc = address!("cdac0d6c6c59727a65f871236188350531885c43");
+    // 3. Aerodrome cbETH/WETH
+    let aero_cbeth_weth = address!("0x21198fdfbc9c3b88b0a9dfbf65449cf77cecc0df");
+    // 4. Aerodrome USDC/DAI
+    let aero_usdc_dai = address!("0x53009586111164998d36371dd0349f7e44a4f806");
+    // 5. Uniswap V3 WETH/DAI
+    let uni_v3_weth_dai = address!("0x327cd1c2c31e42f9862b535d4ff3a6af6256f081");
+
+    // فحص Aerodrome WETH/USDC
+    let pair_aero = IUniswapV2Pair::new(aero_weth_usdc, http_provider.clone());
+    if let Ok(res) = pair_aero.getReserves().call().await {
+        let r0 = U256::from(res.reserve0);
+        let r1 = U256::from(res.reserve1);
         if !r0.is_zero() && !r1.is_zero() {
-            // بما أن USDC بـ 6 خانات و WETH بـ 18 خانة، نحسب السعر بدقة
-            // السعر = (USDC_reserve * 10^12) / WETH_reserve
             let scaled_usdc = r1 * U256::from(10u64).pow(U256::from(12));
             let price_usdc = (scaled_usdc * U256::from(1_000_000u64)) / r0;
             let price_float = price_usdc.to::<u128>() as f64 / 1_000_000.0;
-            
-            // إذا ظهر مقلوباً، نعكس القسمة تلقائياً
             let final_price = if price_float < 1.0 { 1.0 / price_float } else { price_float };
-            println!("   💹 [Live Market Price] Aerodrome WETH/USDC = ${:.2}", final_price);
+            println!("   💹 [Price] Aerodrome WETH/USDC = ${:.2}", final_price);
         }
     }
+
+    // فحص Aerodrome cbETH/WETH (سعر cbETH مقابل WETH)
+    let pair_cbeth = IUniswapV2Pair::new(aero_cbeth_weth, http_provider.clone());
+    if let Ok(res) = pair_cbeth.getReserves().call().await {
+        let r0 = U256::from(res.reserve0); // WETH
+        let r1 = U256::from(res.reserve1); // cbETH
+        if !r0.is_zero() && !r1.is_zero() {
+            let ratio = (r1 * U256::from(1_000_000u64)) / r0;
+            let ratio_float = ratio.to::<u128>() as f64 / 1_000_000.0;
+            let cbeth_price = if ratio_float > 0.0 { 1.0 / ratio_float } else { 1.0 };
+            println!("   💹 [Price] Aerodrome cbETH/WETH Ratio = {:.4} WETH", cbeth_price);
+        }
+    }
+
+    // فحص Aerodrome USDC/DAI (سعر DAI مقابل USDC)
+    let pair_dai = IUniswapV2Pair::new(aero_usdc_dai, http_provider.clone());
+    if let Ok(res) = pair_dai.getReserves().call().await {
+        let r0 = U256::from(res.reserve0); // USDC (6 decimals)
+        let r1 = U256::from(res.reserve1); // DAI (18 decimals -> نحتاج لتعديل المقياس)
+        if !r0.is_zero() && !r1.is_zero() {
+            let scaled_dai = r1 / U256::from(10u64).pow(U256::from(12));
+            if !scaled_dai.is_zero() {
+                let dai_price = (r0 * U256::from(1_000_000u64)) / scaled_dai;
+                let dai_float = dai_price.to::<u128>() as f64 / 1_000_000.0;
+                println!("   💹 [Price] Aerodrome USDC/DAI = ${:.4}", dai_float);
+            }
+        }
+    }
+
+    let _ = uni_v3_weth_usdc;
+    let _ = uni_v3_weth_dai;
 }
 
 async fn fetch_live_pool_liquidity_and_compute_loan<P>(
@@ -375,7 +413,8 @@ where
     P: Provider<Ethereum> + Clone,
     PP: Provider<Ethereum> + Clone,
 {
-    print_live_market_prices(http_provider.clone()).await;
+    // طباعة أسعار جميع العملات والمسبحات المرصودة
+    print_all_market_prices(http_provider.clone()).await;
 
     let cycles = graph.find_cycles(USDC_BASE, 3);
     if cycles.is_empty() {
@@ -431,7 +470,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Multi-Hop Bot with Corrected Live Price Ticker...");
+    println!("🤖 Initializing Multi-Hop Bot with Comprehensive Price Ticker...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());

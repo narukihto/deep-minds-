@@ -409,10 +409,9 @@ where P: Provider<Ethereum> + Clone {
     let uni_factory = IUniswapV3Factory::new(UNISWAP_V3_FACTORY, http_provider.clone());
 
     let fee_tier = _U24::from(100);
-    // استبدال .pool بـ .0 لأن النتيجة تعود كـ Tuple
-    let weth_uni = uni_factory.getPool(WETH_BASE, USDC_BASE, fee_tier).call().await?.0;
-    let cbeth_uni = uni_factory.getPool(WETH_BASE, CBETH_BASE, fee_tier).call().await?.0;
-    let dai_uni = uni_factory.getPool(DAI_BASE, USDC_BASE, fee_tier).call().await?.0;
+    let weth_uni: Address = uni_factory.getPool(WETH_BASE, USDC_BASE, fee_tier).call().await?.0.into();
+    let cbeth_uni: Address = uni_factory.getPool(WETH_BASE, CBETH_BASE, fee_tier).call().await?.0.into();
+    let dai_uni: Address = uni_factory.getPool(DAI_BASE, USDC_BASE, fee_tier).call().await?.0.into();
 
     Ok(vec![
         TokenPairConfig {

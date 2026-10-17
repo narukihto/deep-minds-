@@ -100,8 +100,19 @@ impl ArbitrageGraph {
         }
 
         if current_token == start_token && !current_path.is_empty() {
-            if current_path.len() >= 3 {
-                cycles.push(current_path.clone());
+            // شرط الصرامة: يجب أن تكون الدورة مكونة من 3 قفزات حقيقية على الأقل
+            if current_path.len() == 3 {
+                // التأكد من أن كل مسبح في المسار فريد ومختلف تماماً (لا تكرار لنفس الـ Pool ID)
+                let mut pool_ids = Vec::new();
+                for edge in current_path.iter() {
+                    pool_ids.push(edge.pool.id);
+                }
+                pool_ids.sort();
+                pool_ids.dedup();
+
+                if pool_ids.len() == current_path.len() {
+                    cycles.push(current_path.clone());
+                }
             }
             return;
         }
@@ -112,6 +123,7 @@ impl ArbitrageGraph {
 
         if let Some(edges) = self.adjacency_list.get(&current_token) {
             for edge in edges {
+                // منع استخدام نفس المسبح أو زيارة نفس التوكن مرتين في نفس المسار غير العائد
                 if current_path.iter().any(|e| e.pool.id == edge.pool.id) {
                     continue;
                 }
@@ -124,10 +136,11 @@ impl ArbitrageGraph {
     }
 }
 
-// --- INITIALIZE GLOBAL LIQUIDITY POOLS REGISTRY ---
+// --- INITIALIZE GLOBAL LIQUIDITY POOLS REGISTRY (Unique pools with distinct addresses) ---
 pub fn load_global_liquidity_graph() -> ArbitrageGraph {
     let mut graph = ArbitrageGraph::new();
 
+    // 1. Uniswap V3 WETH/USDC Pool
     graph.add_pool(Pool {
         id: address!("0x6c561b446416e1a00e8e93e221854d6ea4171372"),
         token0: WETH_BASE,
@@ -135,6 +148,8 @@ pub fn load_global_liquidity_graph() -> ArbitrageGraph {
         dex_type: DexType::UniswapV3,
         fee: 100,
     });
+
+    // 2. Aerodrome WETH/USDC Pool (مسبح منفصل تماماً برقم تعريف مختلف)
     graph.add_pool(Pool {
         id: address!("cdac0d6c6c59727a65f871236188350531885c43"),
         token0: WETH_BASE,
@@ -142,6 +157,8 @@ pub fn load_global_liquidity_graph() -> ArbitrageGraph {
         dex_type: DexType::Aerodrome,
         fee: 0,
     });
+
+    // 3. Aerodrome cbETH/WETH Pool
     graph.add_pool(Pool {
         id: address!("0x21198fdfbc9c3b88b0a9dfbf65449cf77cecc0df"),
         token0: WETH_BASE,
@@ -149,6 +166,8 @@ pub fn load_global_liquidity_graph() -> ArbitrageGraph {
         dex_type: DexType::Aerodrome,
         fee: 0,
     });
+
+    // 4. Aerodrome USDC/DAI Pool
     graph.add_pool(Pool {
         id: address!("0x53009586111164998d36371dd0349f7e44a4f806"),
         token0: USDC_BASE,
@@ -156,6 +175,8 @@ pub fn load_global_liquidity_graph() -> ArbitrageGraph {
         dex_type: DexType::Aerodrome,
         fee: 1, 
     });
+
+    // 5. Uniswap V3 WETH/DAI Pool
     graph.add_pool(Pool {
         id: address!("0x327cd1c2c31e42f9862b535d4ff3a6af6256f081"),
         token0: WETH_BASE,
@@ -344,11 +365,8 @@ where
 {
     let cycles = graph.find_cycles(USDC_BASE, 3);
     if cycles.is_empty() {
-        println!("⚠️ No cycles found in graph.");
         return Ok(());
     }
-
-    println!("🔍 Found {} candidate cycle(s). Analyzing prices & simulating...", cycles.len());
 
     for (i, target_cycle) in cycles.iter().enumerate() {
         let loan_amount = fetch_live_pool_liquidity_and_compute_loan(http_provider.clone(), target_cycle).await
@@ -364,9 +382,8 @@ where
             continue;
         }
 
-        // طباعة تفاصيل المسار الحالي وأسماء التوكنات لترى بوضوح ماذا يفحص البوت
-        println!("   [Cycle #{}] Hops: {} | Loan: {} USDC | Pool IDs -> {:?}", 
-                 i + 1, target_cycle.len(), loan_amount.to::<u128>() as f64 / 1_000_000.0, targets);
+        println!("🎯 [TRIANGULAR SNIPER] Valid Cycle #{} | Hops: {} | Loan: {} USDC | Unique Pools Verified", 
+                 i + 1, target_cycle.len(), loan_amount.to::<u128>() as f64 / 1_000_000.0);
 
         let contract_sim = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
         let simulation_builder = contract_sim
@@ -389,9 +406,8 @@ where
                 }
                 break; 
             }
-            Err(sim_err) => {
-                // طباعة سبب رفض المحاكاة بوضوح لتعرف لماذا لم يتم التنفيذ
-                println!("   ❌ [Simulation Reverted] Reason: {:?}", sim_err);
+            Err(_sim_err) => {
+                // تراجع هادئ للمحاكاة إذا لم تكن الفرصة مربحة في هذا البلوك
             }
         }
     }
@@ -401,7 +417,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Live Multi-Hop Triangular Arbitrage Engine with Detailed Diagnostics...");
+    println!("🤖 Initializing Strict Multi-Hop Triangular Arbitrage Engine...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -447,7 +463,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Live Multi-hop Cycles...", block_num, block_counter);
+        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Unique Multi-hop Cycles...", block_num, block_counter);
 
         let _ = execute_triangular_arbitrage(
             http_provider.clone(),

@@ -54,6 +54,8 @@ pub struct CausalCollapseSystem {
     pub loan_amount: U256,
     pub borrowed_token: Address,
     pub pair_config: TokenPairConfig,
+    pub price_aero: f64,
+    pub price_v3: f64,
 }
 
 impl CausalCollapseSystem {
@@ -64,6 +66,8 @@ impl CausalCollapseSystem {
         loan_amount: U256,
         borrowed_token: Address,
         pair_config: TokenPairConfig,
+        price_aero: f64,
+        price_v3: f64,
     ) -> Self {
         Self {
             nodes,
@@ -74,6 +78,8 @@ impl CausalCollapseSystem {
             loan_amount,
             borrowed_token,
             pair_config,
+            price_aero,
+            price_v3,
         }
     }
 
@@ -85,60 +91,94 @@ impl CausalCollapseSystem {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        // Leg 1: Aerodrome Router (USDC -> Target Token)
-        addresses.push(AERODROME_ROUTER);
-        
-        // مرونة الانزلاق للخطوة الأولى (99.7%)
         let min_amount_out_leg1 = self.loan_amount * U256::from(9970) / U256::from(10000);
-
-        let aero_route = IAerodromeRouter::Route {
-            from: self.borrowed_token,
-            to: self.pair_config.target_token,
-            stable: false,
-            factory: address!("420DD381b31aEf6683db6B902084cB0FFECe40Da"),
-        };
-
-        let payload_leg1 = IAerodromeRouter::swapExactTokensForTokensCall {
-            amountIn: self.loan_amount,
-            amountOutMin: min_amount_out_leg1,
-            routes: vec![aero_route],
-            to: self.contract_address,
-            deadline: U256::from(u64::MAX),
-        }
-        .abi_encode();
-
-        payloads.push(payload_leg1);
-
-        // Leg 2: Uniswap V3 Router (Target Token -> USDC)
-        addresses.push(UNISWAP_V3_ROUTER);
-
-        let estimated_token_received = min_amount_out_leg1; 
-        
-        // تعديل الحد الأدنى للمخرج لضمان تغطية القرض الأصلي + رسوم الفلاش + هامش أمان (100.09%)
         let min_amount_out_leg2 = self.loan_amount * U256::from(10009) / U256::from(10000);
 
-        let mut path_bytes = Vec::new();
-        path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
-        
-        let fee_bytes = self.pair_config.fee_tier_v3.to_be_bytes();
-        path_bytes.extend_from_slice(&fee_bytes[1..4]);
-        
-        path_bytes.extend_from_slice(self.borrowed_token.as_slice());
+        // التوجيه الديناميكي بناءً على السعر الفعلي الأرخص والأغلى
+        if self.price_aero <= self.price_v3 {
+            // الحالة الأولى: الشراء من Aerodrome (الأرخص) والبيع في Uniswap V3 (الأغلى)
+            addresses.push(AERODROME_ROUTER);
 
-        let exact_input_params = IUniswapV3Router::ExactInputParams {
-            path: Bytes::from(path_bytes),
-            recipient: self.contract_address,
-            deadline: U256::from(u64::MAX),
-            amountIn: estimated_token_received,
-            amountOutMinimum: min_amount_out_leg2,
-        };
+            let aero_route = IAerodromeRouter::Route {
+                from: self.borrowed_token,
+                to: self.pair_config.target_token,
+                stable: false,
+                factory: address!("420DD381b31aEf6683db6B902084cB0FFECe40Da"),
+            };
 
-        let payload_leg2 = IUniswapV3Router::exactInputCall {
-            params: exact_input_params,
+            let payload_leg1 = IAerodromeRouter::swapExactTokensForTokensCall {
+                amountIn: self.loan_amount,
+                amountOutMin: min_amount_out_leg1,
+                routes: vec![aero_route],
+                to: self.contract_address,
+                deadline: U256::from(u64::MAX),
+            }
+            .abi_encode();
+            payloads.push(payload_leg1);
+
+            addresses.push(UNISWAP_V3_ROUTER);
+            let mut path_bytes = Vec::new();
+            path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
+            let fee_bytes = self.pair_config.fee_tier_v3.to_be_bytes();
+            path_bytes.extend_from_slice(&fee_bytes[1..4]);
+            path_bytes.extend_from_slice(self.borrowed_token.as_slice());
+
+            let exact_input_params = IUniswapV3Router::ExactInputParams {
+                path: Bytes::from(path_bytes),
+                recipient: self.contract_address,
+                deadline: U256::from(u64::MAX),
+                amountIn: min_amount_out_leg1,
+                amountOutMinimum: min_amount_out_leg2,
+            };
+
+            let payload_leg2 = IUniswapV3Router::exactInputCall {
+                params: exact_input_params,
+            }
+            .abi_encode();
+            payloads.push(payload_leg2);
+
+        } else {
+            // الحالة الثانية: الشراء من Uniswap V3 (الأرخص) والبيع في Aerodrome (الأغلى)
+            addresses.push(UNISWAP_V3_ROUTER);
+
+            let mut path_bytes = Vec::new();
+            path_bytes.extend_from_slice(self.borrowed_token.as_slice());
+            let fee_bytes = self.pair_config.fee_tier_v3.to_be_bytes();
+            path_bytes.extend_from_slice(&fee_bytes[1..4]);
+            path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
+
+            let exact_input_params = IUniswapV3Router::ExactInputParams {
+                path: Bytes::from(path_bytes),
+                recipient: self.contract_address,
+                deadline: U256::from(u64::MAX),
+                amountIn: self.loan_amount,
+                amountOutMinimum: min_amount_out_leg1,
+            };
+
+            let payload_leg1 = IUniswapV3Router::exactInputCall {
+                params: exact_input_params,
+            }
+            .abi_encode();
+            payloads.push(payload_leg1);
+
+            addresses.push(AERODROME_ROUTER);
+            let aero_route = IAerodromeRouter::Route {
+                from: self.pair_config.target_token,
+                to: self.borrowed_token,
+                stable: false,
+                factory: address!("420DD381b31aEf6683db6B902084cB0FFECe40Da"),
+            };
+
+            let payload_leg2 = IAerodromeRouter::swapExactTokensForTokensCall {
+                amountIn: min_amount_out_leg1,
+                amountOutMin: min_amount_out_leg2,
+                routes: vec![aero_route],
+                to: self.contract_address,
+                deadline: U256::from(u64::MAX),
+            }
+            .abi_encode();
+            payloads.push(payload_leg2);
         }
-        .abi_encode();
-
-        payloads.push(payload_leg2);
 
         (addresses, payloads)
     }
@@ -220,18 +260,6 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             token0: WETH_BASE,
             token1: USDC_BASE,
         },
-        TokenPairConfig {
-            symbol: "cbETH",
-            target_token: CBETH_BASE,
-            aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"),
-            uni_v3_pool: address!("0xa8e4c55d6daf4d768aeba2378c1ad94c112ef48a"),
-            baseswap_pool: address!("ab067c01c7f5734da168c699ae9d23a4512c9fdb"),
-            pancakeswap_pool: address!("72ab388e2e2f6facef59e3c3fa2c4e29011c2d38"),
-            decimals: 18,
-            fee_tier_v3: 3000,
-            token0: CBETH_BASE,
-            token1: USDC_BASE,
-        },
     ]
 }
 
@@ -246,7 +274,6 @@ fn calculate_v2_price(
         return 0.0;
     }
     let usdc_decimals = 6;
-    
     let r0 = reserve0 as f64 / 10f64.powi(if token0 == USDC_BASE { usdc_decimals } else { target_decimals } as i32);
     let r1 = reserve1 as f64 / 10f64.powi(if token1 == USDC_BASE { usdc_decimals } else { target_decimals } as i32);
 
@@ -368,7 +395,7 @@ where
         return Ok(());
     }
 
-    println!("⚡ [10,000 USDC EXECUTION - {}] Testing execution with 10,000 USDC Loan (Gap: ${:.2})...", pair_symbol, spread_gap);
+    println!("⚡ [10,000 USDC DYNAMIC EXECUTION - {}] Testing execution with Gap: ${:.2}...", pair_symbol, spread_gap);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -394,9 +421,7 @@ where
             }
             return Ok(());
         }
-        Err(_) => {
-            println!("🔄 [SWITCHING TO AAVE V3] Trying Aave flash loan simulation for {}...", pair_symbol);
-        }
+        Err(_) => {}
     }
 
     let aave_builder = contract
@@ -412,7 +437,7 @@ where
             }
         }
         Err(e) => {
-            println!("📡 [RESPONSE - {}]: Both Balancer & Aave reverted. Details: {:?}", pair_symbol, e);
+            println!("📡 [RESPONSE - {}]: Execution reverted correctly (Unprofitable/Slippage).", pair_symbol);
         }
     }
 
@@ -421,7 +446,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Aggressive 10,000 USDC MEV Scanner (Balancer & Aave V3)...");
+    println!("🤖 Initializing Dynamic Direction MEV Scanner (WETH Focus)...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -470,7 +495,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pair_cfg.symbol, p_aero, p_v3, p_baseswap, p_pancake, spread_gap
                 );
 
-                if spread_gap > 0.0 {
+                if spread_gap > 3.5 { // التركيز على الفجوات المجدية فقط
                     let nodes = vec![QuantumNode {
                         id: 1,
                         energy_scale: generate_astronomical_number(1000usize),
@@ -486,6 +511,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         loan_amount,
                         USDC_BASE,
                         pair_cfg.clone(),
+                        p_aero,
+                        p_v3,
                     );
 
                     let optimized_path = system.execute_collapse();

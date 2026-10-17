@@ -407,34 +407,49 @@ sol! {
 async fn get_monitored_pairs<P>(http_provider: P) -> Result<Vec<TokenPairConfig>, Box<dyn std::error::Error>>
 where P: Provider<Ethereum> + Clone {
     let uni_factory = IUniswapV3Factory::new(UNISWAP_V3_FACTORY, http_provider.clone());
+    let pancake_factory = IUniswapV3Factory::new(address!("0x41ebdCbb4802521A392742417441411ce903fF02"), http_provider.clone());
+    let aero_cl_factory = IUniswapV3Factory::new(AERODROME_CL_FACTORY, http_provider.clone());
 
-    let fee_tier = _U24::from(100);
-    let weth_uni: Address = uni_factory.getPool(WETH_BASE, USDC_BASE, fee_tier).call().await?.0.into();
-    let cbeth_uni: Address = uni_factory.getPool(WETH_BASE, CBETH_BASE, fee_tier).call().await?.0.into();
-    let dai_uni: Address = uni_factory.getPool(DAI_BASE, USDC_BASE, fee_tier).call().await?.0.into();
+    let fee_tier_100 = _U24::from(100);
+    let fee_tier_500 = _U24::from(500);
+
+    // 1. WETH Pairs
+    let weth_uni: Address = uni_factory.getPool(WETH_BASE, USDC_BASE, fee_tier_100).call().await?.0.into();
+    let weth_pancake: Address = pancake_factory.getPool(WETH_BASE, USDC_BASE, fee_tier_100).call().await?.0.into();
+    let weth_aero: Address = aero_cl_factory.getPool(WETH_BASE, USDC_BASE, fee_tier_100).call().await?.0.into();
+
+    // 2. cbETH Pairs (مقابل WETH)
+    let cbeth_uni: Address = uni_factory.getPool(WETH_BASE, CBETH_BASE, fee_tier_100).call().await?.0.into();
+    let cbeth_pancake: Address = pancake_factory.getPool(WETH_BASE, CBETH_BASE, fee_tier_100).call().await?.0.into();
+    let cbeth_aero: Address = aero_cl_factory.getPool(WETH_BASE, CBETH_BASE, fee_tier_100).call().await?.0.into();
+
+    // 3. DAI Pairs (مقابل USDC)
+    let dai_uni: Address = uni_factory.getPool(DAI_BASE, USDC_BASE, fee_tier_100).call().await?.0.into();
+    let dai_pancake: Address = pancake_factory.getPool(DAI_BASE, USDC_BASE, fee_tier_100).call().await?.0.into();
+    let dai_aero: Address = aero_cl_factory.getPool(DAI_BASE, USDC_BASE, fee_tier_500).call().await?.0.into();
 
     Ok(vec![
         TokenPairConfig {
             symbol: "WETH",
             target_token: WETH_BASE,
-            aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"),
+            aero_pool: weth_aero,
             uni_v3_pool: weth_uni,
             baseswap_pool: address!("ab067c01c7f5734da168c699ae9d23a4512c9fdb"),
-            pancakeswap_pool: address!("72ab388e2e2f6facef59e3c3fa2c4e29011c2d38"),
+            pancakeswap_pool: weth_pancake,
             decimals: 18,
             fee_tier_v3: 100,
             token0: WETH_BASE,
             token1: USDC_BASE,
-            is_v3_aero: false,
+            is_v3_aero: true,
             is_v3_baseswap: false,
         },
         TokenPairConfig {
             symbol: "cbETH",
             target_token: CBETH_BASE,
-            aero_pool: address!("0x643cf6cb74e38fd98631b1e358b0541ea4970477"),
+            aero_pool: cbeth_aero,
             uni_v3_pool: cbeth_uni,
             baseswap_pool: address!("0x24d209812c828343a23f831f24f2dee13ff6597f"),
-            pancakeswap_pool: address!("0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee"),
+            pancakeswap_pool: cbeth_pancake,
             decimals: 18,
             fee_tier_v3: 100,
             token0: WETH_BASE,
@@ -445,10 +460,10 @@ where P: Provider<Ethereum> + Clone {
         TokenPairConfig {
             symbol: "DAI",
             target_token: DAI_BASE,
-            aero_pool: address!("0xca4948af908871923cb1135ec367e9cd59bb2678"),
+            aero_pool: dai_aero,
             uni_v3_pool: dai_uni,
             baseswap_pool: address!("0x6291a13665ff062a4d0cb5a9167e9cd59bc216b2"),
-            pancakeswap_pool: address!("0x981504d60a1ba36512fb265538cb1b54bfa6c3a1"),
+            pancakeswap_pool: dai_pancake,
             decimals: 18,
             fee_tier_v3: 100,
             token0: DAI_BASE,
@@ -623,7 +638,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = BaseAtomicArbitrage::new(contract_address, http_provider.clone()).setTargetWhitelist(DAI_BASE, true).from(signer_address).send().await;
 
     let ws = alloy::providers::WsConnect::new(alchemy_wss_url);
-    let ws_provider = ProviderBuilder::new().wallet(EthereumWallet::from(private_key_str.parse::<PrivateKeySigner>()?)).connect_ws(ws).await?;
+    let ws_provider = ProviderBuilder::new().wallet(PrivateKeySigner::from_str(&private_key_str)?.into()).connect_ws(ws).await?;
     let sub = ws_provider.subscribe_blocks().await?;
     let mut stream = sub.into_stream();
     let mut block_counter = 0u64;

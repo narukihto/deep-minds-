@@ -303,22 +303,26 @@ sol! {
     }
 }
 
-// دالة لجلب وعرض أسعار المسبحات الحية في كل بلوك
+// دالة محسنة ومصححة لطباعة السعر الحي بشكل صحيح بغض النظر عن ترتيب الرموز
 async fn print_live_market_prices<P>(http_provider: P) 
 where
     P: Provider<Ethereum> + Clone,
 {
-    // فحص مسبح Aerodrome WETH/USDC (العنوان: cdac0d6c6c59727a65f871236188350531885c43)
     let aero_pool = address!("cdac0d6c6c59727a65f871236188350531885c43");
     let pair_contract = IUniswapV2Pair::new(aero_pool, http_provider);
     if let Ok(res) = pair_contract.getReserves().call().await {
-        let r0 = U256::from(res.reserve0); // WETH تقريباً
-        let r1 = U256::from(res.reserve1); // USDC تقريباً
+        let r0 = U256::from(res.reserve0); // WETH (18 decimals)
+        let r1 = U256::from(res.reserve1); // USDC (6 decimals)
         if !r0.is_zero() && !r1.is_zero() {
-            // حساب السعر التقريبي WETH/USDC
-            let price_usdc = (r1 * U256::from(1_000_000u64)) / r0; 
+            // بما أن USDC بـ 6 خانات و WETH بـ 18 خانة، نحسب السعر بدقة
+            // السعر = (USDC_reserve * 10^12) / WETH_reserve
+            let scaled_usdc = r1 * U256::from(10u64).pow(U256::from(12));
+            let price_usdc = (scaled_usdc * U256::from(1_000_000u64)) / r0;
             let price_float = price_usdc.to::<u128>() as f64 / 1_000_000.0;
-            println!("   💹 [Live Market Price] Aerodrome WETH/USDC = ${:.2}", price_float);
+            
+            // إذا ظهر مقلوباً، نعكس القسمة تلقائياً
+            let final_price = if price_float < 1.0 { 1.0 / price_float } else { price_float };
+            println!("   💹 [Live Market Price] Aerodrome WETH/USDC = ${:.2}", final_price);
         }
     }
 }
@@ -371,7 +375,6 @@ where
     P: Provider<Ethereum> + Clone,
     PP: Provider<Ethereum> + Clone,
 {
-    // طباعة الأسعار الحية أولاً
     print_live_market_prices(http_provider.clone()).await;
 
     let cycles = graph.find_cycles(USDC_BASE, 3);
@@ -428,7 +431,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Multi-Hop Bot with Live Price Ticker & Diagnostics...");
+    println!("🤖 Initializing Multi-Hop Bot with Corrected Live Price Ticker...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());

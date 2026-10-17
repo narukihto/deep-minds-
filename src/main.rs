@@ -390,18 +390,18 @@ where
     P: Provider<Ethereum> + Clone,
     PP: Provider<Ethereum> + Clone,
 {
-    // تم خفض شرط الفجوة لتفعيل البوت حتى على الفروق الصغيرة (مثل 1 دولار فما فوق) متى ما وجد ربحاً
-    if spread_gap < 1.0 {
-        println!("💤 [WETH] Gap (${:.2}) too small. Skipping.", spread_gap);
+    // تم تحديث الحد الأدنى بدقة رياضية ليغطي رسوم الفلاش لون (0.05%) والغاز الحقيقي (~$2.30)
+    if spread_gap < 3.0 {
+        println!("💤 [WETH] Gap (${:.2}) below fee threshold ($3.0). Skipping to avoid dust reverts.", spread_gap);
         return Ok(());
     }
 
-    // 🚀 حجم قرض ديناميكي بالكامل يبدأ من أدنى قيمة (حتى أقل من 100$) ويصعد بلا أي سقف أعلى
+    // حجم قرض ديناميكي مرن يتناسب مع الفجوة وبدون أي سقف أعلى
     let raw_loan = (spread_gap * 1000.0) as u128 * 1_000_000;
-    let dynamic_loan = raw_loan.max(100_000); // أدنى قيمة ممكنة (تبدأ من $0.1 لتشمل المبالغ الصغيرة جداً) وبدون سقف أعلى!
+    let dynamic_loan = raw_loan.max(100_000); 
     let loan_amount = U256::from(dynamic_loan);
 
-    println!("🎯 [WETH FULLY DYNAMIC SNIPER] Gap: ${:.2} | Dynamic Loan: {} USDC... Simulating locally!", 
+    println!("🎯 [WETH OPTIMIZED SNIPER] Gap: ${:.2} | Dynamic Loan: {} USDC... Simulating locally!", 
              spread_gap, dynamic_loan as f64 / 1_000_000.0);
 
     let nodes = vec![QuantumNode {
@@ -438,7 +438,6 @@ where
         ),
     ]).abi_encode();
 
-    // 1️⃣ المحاكاة المحلية الصامتة للتحقق من الربح قبل دفع أي غاز
     let contract_sim = BaseAtomicArbitrage::new(contract_address, http_provider);
     let simulation_builder = contract_sim
         .triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
@@ -447,9 +446,8 @@ where
 
     match simulation_builder.call().await {
         Ok(_) => {
-            println!("🎉 [SIMULATION PASSED!] Profitable Trade Verified (Even Small/Large). Dispatching via PRIVATE RPC...");
+            println!("🎉 [SIMULATION PASSED!] Profitable Verified. Dispatching via PRIVATE RPC...");
             
-            // 2️⃣ الإرسال الفعلي عبر الـ Private Provider الحصري لمنع الـ Front-running
             let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider);
             let private_builder = contract_private
                 .triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
@@ -461,7 +459,7 @@ where
             }
         }
         Err(sim_err) => {
-            println!("🛡️ [GAS SAVED] Simulation reverted locally. No gas wasted. Reason: {:?}", sim_err);
+            println!("🛡️ [GAS SAVED] Simulation reverted locally. Reason: {:?}", sim_err);
         }
     }
 
@@ -470,7 +468,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing WETH Sniper Engine with Fully Flexible Dynamic Scaling...");
+    println!("🤖 Initializing WETH Sniper Engine with Fee-Optimized Dynamic Scaling...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -532,8 +530,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pair_cfg.symbol, p_aero, p_v3, p_baseswap, p_pancake, spread_gap
                 );
 
-                // إزالة الشروط الصارمة القديمة ومتابعة التحقق متى ما وجد أي فرق سعري
-                if spread_gap >= 1.0 { 
+                if spread_gap >= 3.0 { 
                     let _ = trigger_on_chain_arbitrage(
                         provider,
                         priv_provider,

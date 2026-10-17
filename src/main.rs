@@ -378,30 +378,48 @@ where
 async fn trigger_on_chain_arbitrage<P>(
     http_provider: P,
     contract_address: Address,
-    target_path: (Vec<Address>, Vec<Vec<u8>>),
     signer_address: Address,
     token_to_borrow: Address,
-    loan_amount: U256,
     spread_gap: f64,
-    pair_symbol: &str,
+    pair_cfg: &TokenPairConfig,
+    price_aero: f64,
+    price_v3: f64,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     P: Provider<Ethereum> + Clone,
 {
-    if loan_amount == U256::ZERO || target_path.0.is_empty() {
+    // 🔑 معادلة القرض الديناميكي: القرض يتناسب طردياً مع حجم الفجوة السعرية
+    let raw_loan = (spread_gap * 2500.0) as u64 * 1_000_000;
+    let dynamic_loan = raw_loan.clamp(1_000_000_000, 50_000_000_000); // بين 1,000 USDC و 50,000 USDC
+    let loan_amount = U256::from(dynamic_loan);
+
+    println!("🧠 [DYNAMIC EXECUTION - {}] Gap: ${:.2} | Calculated Loan: {} USDC...", 
+             pair_cfg.symbol, spread_gap, dynamic_loan / 1_000_000);
+
+    let nodes = vec![QuantumNode {
+        id: 1,
+        energy_scale: generate_astronomical_number(1000usize),
+        frequency: spread_gap,
+        token0: USDC_BASE,
+        token1: pair_cfg.target_token,
+    }];
+
+    let system = CausalCollapseSystem::new(
+        nodes,
+        vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, BASESWAP_ROUTER, AERODROME_ROUTER],
+        contract_address,
+        loan_amount,
+        USDC_BASE,
+        pair_cfg.clone(),
+        price_aero,
+        price_v3,
+    );
+
+    let target_path = system.execute_collapse();
+
+    if target_path.0.is_empty() {
         return Ok(());
     }
-
-    let dynamic_loan = if spread_gap > 3.0 {
-        10_000_000_000u64 
-    } else {
-        2_000_000_000u64  
-    };
-
-    let adjusted_loan = U256::from(dynamic_loan);
-
-    println!("🧠 [CLEAN EXECUTION - {}] Gap: ${:.2} | Loan Size: {} USDC...", 
-             pair_symbol, spread_gap, dynamic_loan / 1_000_000);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -415,38 +433,37 @@ where
     let contract = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
 
     let balancer_builder = contract
-        .triggerBalancerArbitrage(token_to_borrow, adjusted_loan, swap_path_data.clone().into())
+        .triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
         .from(signer_address)
         .gas(1_500_000);
 
     match balancer_builder.call().await {
         Ok(_) => {
-            println!("🎉 [BALANCER SUCCESS!] نجح تنفيذ المعاملة لـ {}!", pair_symbol);
+            println!("🎉 [BALANCER SUCCESS!] Dynamic Trade Validated for {}!", pair_cfg.symbol);
             if let Ok(pending_tx) = balancer_builder.send().await {
                 println!("✅ Balancer Real Tx Dispatched! Hash: {:?}", pending_tx.tx_hash());
             }
             return Ok(());
         }
         Err(e) => {
-            // طباعة تفاصيل الخطأ مباشرة باستخدام الـ Debug الخاص بـ Alloy Contract Error
-            println!("🔍 [BALANCER REVERT - {}]: {:?}", pair_symbol, e);
+            println!("🔍 [BALANCER REVERT - {}]: {:?}", pair_cfg.symbol, e);
         }
     }
 
     let aave_builder = contract
-        .triggerAaveArbitrage(token_to_borrow, adjusted_loan, swap_path_data.into())
+        .triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
         .from(signer_address)
         .gas(1_500_000);
 
     match aave_builder.call().await {
         Ok(_) => {
-            println!("🎉 [AAVE SUCCESS!] نجح تنفيذ المعاملة لـ {}!", pair_symbol);
+            println!("🎉 [AAVE SUCCESS!] Dynamic Trade Validated for {}!", pair_cfg.symbol);
             if let Ok(pending_tx) = aave_builder.send().await {
                 println!("✅ Aave Real Tx Dispatched! Hash: {:?}", pending_tx.tx_hash());
             }
         }
         Err(e) => {
-            println!("🔍 [AAVE REVERT - {}]: {:?}", pair_symbol, e);
+            println!("🔍 [AAVE REVERT - {}]: {:?}", pair_cfg.symbol, e);
         }
     }
 
@@ -455,7 +472,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Clean Adaptive MEV Engine with Hex Diagnostics...");
+    println!("🤖 Initializing Pure Dynamic Loan MEV Engine...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -492,8 +509,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = sub.into_stream();
     let mut block_counter = 0u64;
 
-    let base_loan = U256::from(10_000_000_000u64);
-
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
@@ -503,7 +518,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let provider = http_provider.clone();
             let pair_cfg = pair.clone();
 
-            // التصحيح: استدعاء الدالة المتزامنة بشكل صحيح دون استخدام .data()
             if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(provider.clone(), &pair_cfg).await {
                 println!(
                     " 📈 [{}] Aero: ${:.2} | UniV3: ${:.2} | BaseSwap: ${:.2} | Pancake: ${:.2} | Max Gap: ${:.2}",
@@ -511,36 +525,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
 
                 if spread_gap > 0.5 { 
-                    let nodes = vec![QuantumNode {
-                        id: 1,
-                        energy_scale: generate_astronomical_number(1000usize),
-                        frequency: spread_gap,
-                        token0: USDC_BASE,
-                        token1: pair_cfg.target_token,
-                    }];
-
-                    let system = CausalCollapseSystem::new(
-                        nodes,
-                        vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, BASESWAP_ROUTER, AERODROME_ROUTER],
-                        contract_address,
-                        base_loan,
-                        USDC_BASE,
-                        pair_cfg.clone(),
-                        p_aero,
-                        p_v3,
-                    );
-
-                    let optimized_path = system.execute_collapse();
-
                     let _ = trigger_on_chain_arbitrage(
                         provider,
                         contract_address,
-                        optimized_path,
                         signer_address,
                         USDC_BASE,
-                        base_loan,
                         spread_gap,
-                        pair_cfg.symbol,
+                        &pair_cfg,
+                        p_aero,
+                        p_v3,
                     ).await;
                 }
             }

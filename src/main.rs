@@ -591,7 +591,6 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
     let contract_sim = BaseAtomicArbitrage::new(contract_address, http_provider);
     
-    // تنفيذ محاكاة واضحة تفضح سبب الرفض بالكامل بدلاً من إخفائه بـ is_ok()
     let simulation_call = contract_sim
         .triggerBalancerArbitrage(USDC_BASE, loan_amount, swap_path_data.clone().into())
         .from(signer_address)
@@ -606,24 +605,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
             }
         }
         Err(contract_error) => {
-            eprintln!("❌ [SIMULATION FAILED for {}]", pair_cfg.symbol);
-            match contract_error {
-                ContractError::TransportError(e) => {
-                    eprintln!("   🌐 Transport/RPC Error: {:?}", e);
-                }
-                ContractError::RpcError(rpc_err) => {
-                    eprintln!("   💻 RPC Execution Error: {}", rpc_err.message);
-                    if let Some(data) = rpc_err.data {
-                        eprintln!("   🔍 Revert Raw Hex Data: {}", data);
-                    }
-                }
-                ContractError::Revert(revert) => {
-                    eprintln!("   🛑 EVM Revert Reason: {:?}", revert);
-                }
-                custom_err => {
-                    eprintln!("   ⚠️ Custom Contract Revert/Error: {:?}", custom_err);
-                }
-            }
+            eprintln!("❌ [SIMULATION FAILED for {}]: {:?}", pair_cfg.symbol, contract_error);
         }
     }
 
@@ -652,9 +634,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
                 }
                 break;
             }
-            Err(e) => {
-                // صامت أو طباعة خفيفة لكي لا تملأ الشاشة
-            }
+            Err(_e) => {}
         }
     }
     Ok(())
@@ -705,7 +685,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-    for pair in &monitored_pairs {
+        for pair in &monitored_pairs {
             if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(http_provider.clone(), pair, current_weth_price).await {
                 println!(
                     " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} | BaseSwap: ${:.4} | Pancake: ${:.4} | Max Gap: ${:.2}",

@@ -303,6 +303,26 @@ sol! {
     }
 }
 
+// دالة لجلب وعرض أسعار المسبحات الحية في كل بلوك
+async fn print_live_market_prices<P>(http_provider: P) 
+where
+    P: Provider<Ethereum> + Clone,
+{
+    // فحص مسبح Aerodrome WETH/USDC (العنوان: cdac0d6c6c59727a65f871236188350531885c43)
+    let aero_pool = address!("cdac0d6c6c59727a65f871236188350531885c43");
+    let pair_contract = IUniswapV2Pair::new(aero_pool, http_provider);
+    if let Ok(res) = pair_contract.getReserves().call().await {
+        let r0 = U256::from(res.reserve0); // WETH تقريباً
+        let r1 = U256::from(res.reserve1); // USDC تقريباً
+        if !r0.is_zero() && !r1.is_zero() {
+            // حساب السعر التقريبي WETH/USDC
+            let price_usdc = (r1 * U256::from(1_000_000u64)) / r0; 
+            let price_float = price_usdc.to::<u128>() as f64 / 1_000_000.0;
+            println!("   💹 [Live Market Price] Aerodrome WETH/USDC = ${:.2}", price_float);
+        }
+    }
+}
+
 async fn fetch_live_pool_liquidity_and_compute_loan<P>(
     http_provider: P,
     cycle: &[DirectedEdge],
@@ -351,6 +371,9 @@ where
     P: Provider<Ethereum> + Clone,
     PP: Provider<Ethereum> + Clone,
 {
+    // طباعة الأسعار الحية أولاً
+    print_live_market_prices(http_provider.clone()).await;
+
     let cycles = graph.find_cycles(USDC_BASE, 3);
     if cycles.is_empty() {
         return Ok(());
@@ -380,8 +403,8 @@ where
             .gas(1_800_000);
 
         match simulation_builder.call().await {
-            Ok(result) => {
-                println!("🎉 [SIMULATION PASSED!] Profitable Multi-hop Arbitrage Verified! Result: {:?}", result);
+            Ok(_) => {
+                println!("🎉 [SIMULATION PASSED!] Profitable Multi-hop Arbitrage Verified! Dispatching via PRIVATE RPC...");
                 
                 let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider.clone());
                 let private_builder = contract_private
@@ -395,7 +418,7 @@ where
                 break; 
             }
             Err(_sim_err) => {
-                println!("   💤 [Unprofitable / Reverted] Cycle #{}: صفقة غير مربحة حالياً في هذا البلوك (العائد أقل من القرض + الرسوم)", i + 1);
+                println!("   💤 [Unprofitable / Reverted] Cycle #{}: صفقة غير مربحة حالياً في هذا البلوك", i + 1);
             }
         }
     }
@@ -405,7 +428,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Strict Multi-Hop Triangular Arbitrage Engine with Diagnostics...");
+    println!("🤖 Initializing Multi-Hop Bot with Live Price Ticker & Diagnostics...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -451,7 +474,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Unique Multi-hop Cycles...", block_num, block_counter);
+        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Prices & Cycles...", block_num, block_counter);
 
         let _ = execute_triangular_arbitrage(
             http_provider.clone(),

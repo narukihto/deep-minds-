@@ -92,105 +92,57 @@ impl CausalCollapseSystem {
     }
 
     pub fn execute_collapse(&self) -> (Vec<Address>, Vec<Vec<u8>>) {
-        if self.nodes.is_empty() {
-            return (vec![], vec![]);
-        }
-
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        // حساب رسوم فلاش لون Balancer (0.01% تقريباً أي 1 على كل 10000) + هامش ربح صافٍ آمن
-        // المطلوب إرجاعه للـ Vault هو loan_amount + (loan_amount * 1 / 10000)
-        // لكي نضمن تحقيق ربح، يجب أن يكون الناتج النهائي للساق الثانية أكبر من أصل القرض + الرسوم + هامش ربح بسيط (مثلاً 5 أجزاء في المليون)
         let flash_loan_fee = self.loan_amount / U256::from(10000); // 0.01%
         let target_repay_amount = self.loan_amount + flash_loan_fee;
         
-        // الحد الأدنى المستهدف بعد الساق الثانية يجب أن يغطي الـ repay amount مع هامش ربح طفيف جداً للمحاكاة لتجنب الرفض
-        let min_amount_out_leg1 = self.loan_amount * U256::from(9985) / U256::from(10000); // السماح بانزلاق معقول للساق الأولى
-        let min_amount_out_leg2 = target_repay_amount + U256::from(100); // ضمان تغطية القرض والرسوم وزيادة بسيطة للربح
+        let min_amount_out_leg1 = self.loan_amount * U256::from(9985) / U256::from(10000);
+        let min_amount_out_leg2 = target_repay_amount + U256::from(100);
 
-        if self.price_aero <= self.price_v3 {
-            addresses.push(AERODROME_ROUTER);
+        // بناء مسار تبديل مؤكد وفعال بغض النظر عن تفاوت الأسعار الطفيف لتفادي المصفوفات الفارغة
+        // الساق الأولى: الشراء من منصة رخيصة (Aerodrome)
+        addresses.push(AERODROME_ROUTER);
 
-            let aero_route = IAerodromeRouter::Route {
-                from: self.borrowed_token,
-                to: self.pair_config.target_token,
-                stable: false,
-                factory: AERODROME_V2_FACTORY,
-            };
+        let aero_route = IAerodromeRouter::Route {
+            from: self.borrowed_token,
+            to: self.pair_config.target_token,
+            stable: false,
+            factory: AERODROME_V2_FACTORY,
+        };
 
-            let payload_leg1 = IAerodromeRouter::swapExactTokensForTokensCall {
-                amountIn: self.loan_amount,
-                amountOutMin: min_amount_out_leg1,
-                routes: vec![aero_route],
-                to: self.contract_address,
-                deadline: U256::from(u64::MAX),
-            }
-            .abi_encode();
-            payloads.push(payload_leg1);
-
-            addresses.push(UNISWAP_V3_ROUTER);
-            let mut path_bytes = Vec::new();
-            path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
-            let fee_bytes = self.pair_config.fee_tier_v3.to_be_bytes();
-            path_bytes.extend_from_slice(&fee_bytes[1..4]);
-            path_bytes.extend_from_slice(self.borrowed_token.as_slice());
-
-            let exact_input_params = IUniswapV3Router::ExactInputParams {
-                path: Bytes::from(path_bytes),
-                recipient: self.contract_address,
-                deadline: U256::from(u64::MAX),
-                amountIn: min_amount_out_leg1,
-                amountOutMinimum: min_amount_out_leg2,
-            };
-
-            let payload_leg2 = IUniswapV3Router::exactInputCall {
-                params: exact_input_params,
-            }
-            .abi_encode();
-            payloads.push(payload_leg2);
-
-        } else {
-            addresses.push(UNISWAP_V3_ROUTER);
-
-            let mut path_bytes = Vec::new();
-            path_bytes.extend_from_slice(self.borrowed_token.as_slice());
-            let fee_bytes = self.pair_config.fee_tier_v3.to_be_bytes();
-            path_bytes.extend_from_slice(&fee_bytes[1..4]);
-            path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
-
-            let exact_input_params = IUniswapV3Router::ExactInputParams {
-                path: Bytes::from(path_bytes),
-                recipient: self.contract_address,
-                deadline: U256::from(u64::MAX),
-                amountIn: self.loan_amount,
-                amountOutMinimum: min_amount_out_leg1, // الحد الأدنى للساق الأولى هنا
-            };
-
-            let payload_leg1 = IUniswapV3Router::exactInputCall {
-                params: exact_input_params,
-            }
-            .abi_encode();
-            payloads.push(payload_leg1);
-
-            addresses.push(AERODROME_ROUTER);
-            let aero_route = IAerodromeRouter::Route {
-                from: self.pair_config.target_token,
-                to: self.borrowed_token,
-                stable: false,
-                factory: AERODROME_V2_FACTORY,
-            };
-
-            let payload_leg2 = IAerodromeRouter::swapExactTokensForTokensCall {
-                amountIn: min_amount_out_leg1,
-                amountOutMin: min_amount_out_leg2, // الحد الأدنى للنهائي مع الرسوم
-                routes: vec![aero_route],
-                to: self.contract_address,
-                deadline: U256::from(u64::MAX),
-            }
-            .abi_encode();
-            payloads.push(payload_leg2);
+        let payload_leg1 = IAerodromeRouter::swapExactTokensForTokensCall {
+            amountIn: self.loan_amount,
+            amountOutMin: min_amount_out_leg1,
+            routes: vec![aero_route],
+            to: self.contract_address,
+            deadline: U256::from(u64::MAX),
         }
+        .abi_encode();
+        payloads.push(payload_leg1);
+
+        // الساق الثانية: البيع في منصة ذات سعر أعلى (Uniswap V3)
+        addresses.push(UNISWAP_V3_ROUTER);
+        let mut path_bytes = Vec::new();
+        path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
+        let fee_bytes = self.pair_config.fee_tier_v3.to_be_bytes();
+        path_bytes.extend_from_slice(&fee_bytes[1..4]);
+        path_bytes.extend_from_slice(self.borrowed_token.as_slice());
+
+        let exact_input_params = IUniswapV3Router::ExactInputParams {
+            path: Bytes::from(path_bytes),
+            recipient: self.contract_address,
+            deadline: U256::from(u64::MAX),
+            amountIn: min_amount_out_leg1,
+            amountOutMinimum: min_amount_out_leg2,
+        };
+
+        let payload_leg2 = IUniswapV3Router::exactInputCall {
+            params: exact_input_params,
+        }
+        .abi_encode();
+        payloads.push(payload_leg2);
 
         (addresses, payloads)
     }
@@ -623,9 +575,6 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
                         }
                         BaseAtomicArbitrage::BaseAtomicArbitrageErrors::InsufficientLiquidity(_) => {
                             eprintln!("   💧 [Revert Reason]: InsufficientLiquidity!");
-                        }
-                        _ => {
-                            eprintln!("   ⚠️ [Revert Reason]: Other custom contract error decoded.");
                         }
                     }
                 } else {

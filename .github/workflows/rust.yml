@@ -1,4 +1,4 @@
-Name: Deploy and Run Base MEV Bot
+name: Deploy and Run Base MEV Bot
 
 on:
   workflow_dispatch:
@@ -41,12 +41,10 @@ jobs:
           echo "🔍 [DEEP TRACE] Inspecting EVM Calls & Flash Loan Execution..."
           echo "======================================================="
           
-          # استخراج عنوان المحفظة من المفتاح الخاص
           ACCOUNT_ADDR=$(cast wallet address --private-key "$PRIVATE_KEY")
           USDC_BASE="0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913"
-          LOAN_AMOUNT="2000000000" # 2,000 USDC
+          LOAN_AMOUNT="2000000000"
 
-          # استدعاء دالة العقد مع تفعيل خيار --trace لرؤية شجرة الاستدعاءات الكاملة
           cast call "$CONTRACT_ADDR" \
             "triggerBalancerArbitrage(address,uint256,bytes)" \
             "$USDC_BASE" "$LOAN_AMOUNT" "0x" \

@@ -390,18 +390,18 @@ where
     P: Provider<Ethereum> + Clone,
     PP: Provider<Ethereum> + Clone,
 {
-    // تم تحديث الحد الأدنى بدقة رياضية ليغطي رسوم الفلاش لون (0.05%) والغاز الحقيقي (~$2.30)
-    if spread_gap < 3.0 {
-        println!("💤 [WETH] Gap (${:.2}) below fee threshold ($3.0). Skipping to avoid dust reverts.", spread_gap);
+    // رفع عتبة الفجوة إلى 6.0$ لتجنب الـ Dust والتأكد من تغطية الرسوم تماماً
+    if spread_gap < 6.0 {
+        println!("💤 [WETH] Gap (${:.2}) below safe profit threshold ($6.0). Skipping.", spread_gap);
         return Ok(());
     }
 
-    // حجم قرض ديناميكي مرن يتناسب مع الفجوة وبدون أي سقف أعلى
-    let raw_loan = (spread_gap * 1000.0) as u128 * 1_000_000;
-    let dynamic_loan = raw_loan.max(100_000); 
+    // 🚀 تحسين حجم القرض الديناميكي ليتناسب منطقياً مع الفجوة وبدون مبالغة تسبب الانزلاق السعري
+    let raw_loan = (spread_gap * 250.0) as u128 * 1_000_000;
+    let dynamic_loan = raw_loan.max(1_000_000); // الحد الأدنى قرض بـ 1 USDC وبدون سقف أعلى للأرباح الكبرى
     let loan_amount = U256::from(dynamic_loan);
 
-    println!("🎯 [WETH OPTIMIZED SNIPER] Gap: ${:.2} | Dynamic Loan: {} USDC... Simulating locally!", 
+    println!("🎯 [WETH BALANCED SNIPER] Gap: ${:.2} | Dynamic Loan: {} USDC... Simulating locally!", 
              spread_gap, dynamic_loan as f64 / 1_000_000.0);
 
     let nodes = vec![QuantumNode {
@@ -468,7 +468,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing WETH Sniper Engine with Fee-Optimized Dynamic Scaling...");
+    println!("🤖 Initializing WETH Sniper Engine with Balanced Dynamic Scaling...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -530,7 +530,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pair_cfg.symbol, p_aero, p_v3, p_baseswap, p_pancake, spread_gap
                 );
 
-                if spread_gap >= 3.0 { 
+                if spread_gap >= 6.0 { 
                     let _ = trigger_on_chain_arbitrage(
                         provider,
                         priv_provider,

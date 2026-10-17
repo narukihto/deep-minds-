@@ -99,8 +99,15 @@ impl CausalCollapseSystem {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        let min_amount_out_leg1 = self.loan_amount * U256::from(9980) / U256::from(10000);
-        let min_amount_out_leg2 = self.loan_amount * U256::from(10002) / U256::from(10000);
+        // حساب رسوم فلاش لون Balancer (0.01% تقريباً أي 1 على كل 10000) + هامش ربح صافٍ آمن
+        // المطلوب إرجاعه للـ Vault هو loan_amount + (loan_amount * 1 / 10000)
+        // لكي نضمن تحقيق ربح، يجب أن يكون الناتج النهائي للساق الثانية أكبر من أصل القرض + الرسوم + هامش ربح بسيط (مثلاً 5 أجزاء في المليون)
+        let flash_loan_fee = self.loan_amount / U256::from(10000); // 0.01%
+        let target_repay_amount = self.loan_amount + flash_loan_fee;
+        
+        // الحد الأدنى المستهدف بعد الساق الثانية يجب أن يغطي الـ repay amount مع هامش ربح طفيف جداً للمحاكاة لتجنب الرفض
+        let min_amount_out_leg1 = self.loan_amount * U256::from(9985) / U256::from(10000); // السماح بانزلاق معقول للساق الأولى
+        let min_amount_out_leg2 = target_repay_amount + U256::from(100); // ضمان تغطية القرض والرسوم وزيادة بسيطة للربح
 
         if self.price_aero <= self.price_v3 {
             addresses.push(AERODROME_ROUTER);
@@ -157,7 +164,7 @@ impl CausalCollapseSystem {
                 recipient: self.contract_address,
                 deadline: U256::from(u64::MAX),
                 amountIn: self.loan_amount,
-                amountOutMinimum: U256::ZERO,
+                amountOutMinimum: min_amount_out_leg1, // الحد الأدنى للساق الأولى هنا
             };
 
             let payload_leg1 = IUniswapV3Router::exactInputCall {
@@ -176,7 +183,7 @@ impl CausalCollapseSystem {
 
             let payload_leg2 = IAerodromeRouter::swapExactTokensForTokensCall {
                 amountIn: min_amount_out_leg1,
-                amountOutMin: min_amount_out_leg2,
+                amountOutMin: min_amount_out_leg2, // الحد الأدنى للنهائي مع الرسوم
                 routes: vec![aero_route],
                 to: self.contract_address,
                 deadline: U256::from(u64::MAX),
@@ -609,7 +616,6 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
             if let Some(revert_bytes) = contract_error.as_revert_data() {
                 eprintln!("   🛑 Revert Data Bytes: 0x{}", alloy::hex::encode(&revert_bytes));
                 
-                // تم تمرير البايتات بالشكل الصحيح باستخدام as_ref() لتتوافق مع &[u8]
                 if let Ok(err_decoded) = BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(revert_bytes.as_ref()) {
                     match err_decoded {
                         BaseAtomicArbitrage::BaseAtomicArbitrageErrors::ArbitrageUnprofitable(err_data) => {

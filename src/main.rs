@@ -607,10 +607,10 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
             eprintln!("❌ [SIMULATION FAILED for {}]", pair_cfg.symbol);
             
             if let Some(revert_bytes) = contract_error.as_revert_data() {
-                eprintln!("   🛑 Revert Data Bytes: 0x{}", alloy::hex::encode(revert_bytes));
+                eprintln!("   🛑 Revert Data Bytes: 0x{}", alloy::hex::encode(&revert_bytes));
                 
-                // تم تصحيح تمرير الوسيط هنا (تمرير مرجع البايتات فقط بدون الوسيط الزائد)
-                if let Ok(err_decoded) = BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(revert_bytes) {
+                // تم تمرير البايتات بالشكل الصحيح باستخدام as_ref() لتتوافق مع &[u8]
+                if let Ok(err_decoded) = BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(revert_bytes.as_ref()) {
                     match err_decoded {
                         BaseAtomicArbitrage::BaseAtomicArbitrageErrors::ArbitrageUnprofitable(err_data) => {
                             eprintln!("   💰 [Revert Reason]: ArbitrageUnprofitable! Required: {}, Actual: {}", err_data.required, err_data.actual);

@@ -605,7 +605,42 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
             }
         }
         Err(contract_error) => {
-            eprintln!("❌ [SIMULATION FAILED for {}]: {:?}", pair_cfg.symbol, contract_error);
+            eprintln!("❌ [SIMULATION FAILED for {}]", pair_cfg.symbol);
+            
+            // استخراج تفاصيل خطأ العقد الذكي وبيانات الـ Revert بدقة
+            match &contract_error {
+                ContractError::TransportError(err) => {
+                    eprintln!("   🌐 Transport/RPC Error: {:?}", err);
+                }
+                ContractError::DecodingError(err) => {
+                    eprintln!("   🔍 ABI Decoding Error: {:?}", err);
+                }
+                _ => {
+                    // محاولة استخراج بايتات الـ Revert الخام إذا كانت متوفرة في الخطأ
+                    if let Some(revert_bytes) = contract_error.as_revert() {
+                        eprintln!("   🛑 Raw Revert Hex Data: 0x{}", hex::encode(revert_bytes));
+                        
+                        // فحص مطابقة الأخطاء المخصصة العائدة من عقدك الذكي
+                        if let Ok(err_decoded) = BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(revert_bytes, true) {
+                            match err_decoded {
+                                BaseAtomicArbitrage::BaseAtomicArbitrageErrors::ArbitrageUnprofitable(expected, actual) => {
+                                    eprintln!("   💰 [Revert Reason]: ArbitrageUnprofitable! Expected: {}, Actual: {}", expected, actual);
+                                }
+                                BaseAtomicArbitrage::BaseAtomicArbitrageErrors::InsufficientLiquidity(_) => {
+                                    eprintln!("   💧 [Revert Reason]: InsufficientLiquidity!");
+                                }
+                                _ => {
+                                    eprintln!("   ⚠️ [Revert Reason]: Other custom contract error decoded.");
+                                }
+                            }
+                        } else {
+                            eprintln!("   ⚠️ [Revert Reason]: Could not decode into custom contract errors. Check standard revert string.");
+                        }
+                    } else {
+                        eprintln!("   ⚠️ General Contract Error: {:?}", contract_error);
+                    }
+                }
+            }
         }
     }
 

@@ -411,7 +411,6 @@ where P: Provider<Ethereum> + Clone {
 
     let fee_tier_100 = _U24::from(100);
 
-    // جلب آمن مع Fallback لتجنب خطأ ZeroData نهائياً لمسبحات V3
     let weth_uni = match uni_factory.getPool(WETH_BASE, USDC_BASE, fee_tier_100).call().await {
         Ok(res) => { let addr: Address = res.0.into(); if addr.is_zero() { address!("0x19a0aef6613524ea0761646a6a4e4be0e114a3c8") } else { addr } }
         Err(_) => address!("0x19a0aef6613524ea0761646a6a4e4be0e114a3c8"),
@@ -571,8 +570,10 @@ where P: Provider<Ethereum> + Clone {
 
 async fn trigger_cross_dex_arbitrage<P, PP>(http_provider: P, private_provider: PP, contract_address: Address, signer_address: Address, spread_gap: f64, pair_cfg: &TokenPairConfig, price_aero: f64, price_v3: f64) -> Result<(), Box<dyn std::error::Error>>
 where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
-    if spread_gap < 1.5 { return Ok(()); } // الحد الأدنى مفعل ابتداءً من $1.50
-    let raw_loan = (spread_gap * 250.0) as u128 * 1_000_000;
+    if spread_gap < 1.5 { return Ok(()); }
+    
+    // تم تصغير حجم القرض (ضرب الفجوة في 50 بدلاً من 250) لتقليل الانزلاق السعري ونجاح المحاكاة
+    let raw_loan = (spread_gap * 50.0) as u128 * 1_000_000;
     let dynamic_loan = raw_loan.max(1_000_000);
     let loan_amount = U256::from(dynamic_loan);
 

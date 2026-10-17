@@ -189,6 +189,7 @@ sol! {
     #[sol(rpc)]
     contract BaseAtomicArbitrage {
         function triggerBalancerArbitrage(address tokenToBorrow, uint256 loanAmount, bytes calldata swapPathData) external;
+        function triggerAaveArbitrage(address tokenToBorrow, uint256 loanAmount, bytes calldata swapPathData) external;
         
         error ArbitrageUnprofitable(uint256 expected, uint256 actual);
         error InsufficientLiquidity();
@@ -362,6 +363,7 @@ where
 
     let contract = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
 
+    // 1. محاولة الاقتراض عبر Balancer أولاً
     let balancer_builder = contract
         .triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data.clone().into())
         .from(signer_address)
@@ -369,13 +371,33 @@ where
 
     match balancer_builder.call().await {
         Ok(_) => {
-            println!("🎉 [SUCCESS!] نجح اجتياز شروط العقد الذكي وتحقيق الربح الصافي لـ {}!", pair_symbol);
+            println!("🎉 [BALANCER SUCCESS!] نجح اجتياز شروط Balancer لـ {}!", pair_symbol);
             if let Ok(pending_tx) = balancer_builder.send().await {
-                println!("✅ Real Tx Dispatched on Base! Hash: {:?}", pending_tx.tx_hash());
+                println!("✅ Balancer Real Tx Dispatched! Hash: {:?}", pending_tx.tx_hash());
+            }
+            return Ok(());
+        }
+        Err(_) => {
+            // إذا فشل Balancer أو لم تتوفر السيولة الكافية، يحول تلقائياً إلى Aave V3 لتجربتها!
+            println!("🔄 [SWITCHING TO AAVE V3] Trying Aave flash loan simulation for {}...", pair_symbol);
+        }
+    }
+
+    // 2. محاولة الاقتراض عبر Aave V3 بديلة
+    let aave_builder = contract
+        .triggerAaveArbitrage(token_to_borrow, loan_amount, swap_path_data.into())
+        .from(signer_address)
+        .gas(1_500_000);
+
+    match aave_builder.call().await {
+        Ok(_) => {
+            println!("🎉 [AAVE SUCCESS!] نجح اجتياز شروط Aave V3 لـ {}!", pair_symbol);
+            if let Ok(pending_tx) = aave_builder.send().await {
+                println!("✅ Aave Real Tx Dispatched! Hash: {:?}", pending_tx.tx_hash());
             }
         }
         Err(e) => {
-            println!("📡 [RESPONSE - {}]: الاتصال ناجح. تفاصيل الرد: {:?}", pair_symbol, e);
+            println!("📡 [RESPONSE - {}]: Both Balancer & Aave reverted. Details: {:?}", pair_symbol, e);
         }
     }
 
@@ -384,7 +406,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Optimized MEV Scanner Engine with Reduced Loan Size...");
+    println!("🤖 Initializing Multi-Protocol MEV Scanner (Balancer & Aave V3)...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -416,7 +438,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = sub.into_stream();
     let mut block_counter = 0u64;
 
-    // تم تخفيض حجم القرض إلى 2,000 USDC لتغطية الفجوات السعرية الضيقة الحالية
     let loan_amount = U256::from(2_000_000_000u64);
 
     while let Some(block) = stream.next().await {
@@ -462,7 +483,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         USDC_BASE,
                         loan_amount,
                         spread_gap,
-                        pair_cfg.symbol,
+                        pair_symbol,
                     ).await;
                 }
             }

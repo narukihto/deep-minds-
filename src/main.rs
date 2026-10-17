@@ -16,8 +16,12 @@ type _U160 = Uint<160, 3>;
 
 const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
-const CBETH_BASE: Address = address!("be9895146f7af43049ca1c1ae358b0541ea49704");
+const CBETH_BASE: Address = address!("2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22"); // العنوان الصحيح والمحدث لـ cbETH
 const DAI_BASE: Address = address!("50c5725949a6f0c72e6c4a641f24049a917db0cb");
+
+const UNISWAP_V3_FACTORY: Address = address!("0x33128a8fC17869897dcE68Ed026d694621f6FDfD");
+const AERODROME_CL_FACTORY: Address = address!("0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A");
+const AERODROME_V2_FACTORY: Address = address!("0x420DD381b31aEf6683db6B902084cB0FFECe40Da");
 
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
 const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
@@ -105,7 +109,7 @@ impl CausalCollapseSystem {
                 from: self.borrowed_token,
                 to: self.pair_config.target_token,
                 stable: false,
-                factory: address!("420DD381b31aEf6683db6B902084cB0FFECe40Da"),
+                factory: AERODROME_V2_FACTORY,
             };
 
             let payload_leg1 = IAerodromeRouter::swapExactTokensForTokensCall {
@@ -167,7 +171,7 @@ impl CausalCollapseSystem {
                 from: self.pair_config.target_token,
                 to: self.borrowed_token,
                 stable: false,
-                factory: address!("420DD381b31aEf6683db6B902084cB0FFECe40Da"),
+                factory: AERODROME_V2_FACTORY,
             };
 
             let payload_leg2 = IAerodromeRouter::swapExactTokensForTokensCall {
@@ -185,7 +189,7 @@ impl CausalCollapseSystem {
     }
 }
 
-// --- هياكل المراجحة المثلثية (Triangular Arbitrage Engine) ---
+// --- هياكل المراجحة المثلثية ---
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DexType {
     UniswapV3,
@@ -276,9 +280,7 @@ impl ArbitrageGraph {
 pub fn load_global_liquidity_graph() -> ArbitrageGraph {
     let mut graph = ArbitrageGraph::new();
     graph.add_pool(Pool { id: address!("0x19a0aef6613524ea0761646a6a4e4be0e114a3c8"), token0: WETH_BASE, token1: CBETH_BASE, dex_type: DexType::UniswapV3, fee: 100 });
-    graph.add_pool(Pool { id: address!("0x643cf6cb74e38fd98631b1e358b0541ea4970477"), token0: WETH_BASE, token1: CBETH_BASE, dex_type: DexType::Aerodrome, fee: 0 });
     graph.add_pool(Pool { id: address!("0x6f19cf4131599557b447432b49bc70b37feeb1b0"), token0: DAI_BASE, token1: USDC_BASE, dex_type: DexType::UniswapV3, fee: 100 });
-    graph.add_pool(Pool { id: address!("0xca4948af908871923cb1135ec367e9cd59bb2678"), token0: DAI_BASE, token1: USDC_BASE, dex_type: DexType::Aerodrome, fee: 1 });
     graph
 }
 
@@ -323,7 +325,7 @@ impl TriangularPayloadEncoder {
                         from: edge.from_token,
                         to: edge.to_token,
                         stable: edge.pool.fee == 1,
-                        factory: address!("420DD381b31aEf6683db6B902084cB0FFECe40Da"),
+                        factory: AERODROME_V2_FACTORY,
                     };
                     data.push(Bytes::from(IAerodromeRouter::swapExactTokensForTokensCall {
                         amountIn: current_amount,
@@ -347,6 +349,11 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
 }
 
 sol! {
+    #[sol(rpc)]
+    contract IUniswapV3Factory {
+        function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool);
+    }
+
     #[sol(rpc)]
     contract IUniswapV2Pair {
         function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
@@ -390,25 +397,31 @@ sol! {
     contract BaseAtomicArbitrage {
         function triggerBalancerArbitrage(address tokenToBorrow, uint256 loanAmount, bytes calldata swapPathData) external;
         function triggerBalancerArbitrageMulti(address tokenToBorrow, uint256 loanAmount, address[] calldata targets, bytes[] calldata data) external;
-        function triggerAaveArbitrage(address tokenToBorrow, uint256 loanAmount, bytes calldata swapPathData) external;
         function setTargetWhitelist(address target, bool status) external;
         
         error ArbitrageUnprofitable(uint256 expected, uint256 actual);
         error InsufficientLiquidity();
-        error TargetUnauthorized();
-        error UntrustedInitiator();
-        error NotAuthorized();
-        error ExternalCallFailed(bytes reason);
     }
 }
 
-pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
-    vec![
+// دالة لجلب عناوين المسبحات ديناميكياً من الـ Factories لتجنب قيم الأصفار
+async fn get_monitored_pairs<P>(http_provider: P) -> Result<Vec<TokenPairConfig>, Box<dyn std::error::Error>>
+where P: Provider<Ethereum> + Clone {
+    let uni_factory = IUniswapV3Factory::new(UNISWAP_V3_FACTORY, http_provider.clone());
+
+    // جلب مسبح WETH/USDC ديناميكياً
+    let weth_uni = uni_factory.getPool(WETH_BASE, USDC_BASE, 100).call().await._0;
+    // جلب مسبح cbETH/WETH ديناميكياً
+    let cbeth_uni = uni_factory.getPool(WETH_BASE, CBETH_BASE, 100).call().await._0;
+    // جلب مسبح DAI/USDC ديناميكياً
+    let dai_uni = uni_factory.getPool(DAI_BASE, USDC_BASE, 100).call().await._0;
+
+    Ok(vec![
         TokenPairConfig {
             symbol: "WETH",
             target_token: WETH_BASE,
             aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"),
-            uni_v3_pool: address!("0x6c561b446416e1a00e8e93e221854d6ea4171372"),
+            uni_v3_pool: weth_uni,
             baseswap_pool: address!("ab067c01c7f5734da168c699ae9d23a4512c9fdb"),
             pancakeswap_pool: address!("72ab388e2e2f6facef59e3c3fa2c4e29011c2d38"),
             decimals: 18,
@@ -422,7 +435,7 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             symbol: "cbETH",
             target_token: CBETH_BASE,
             aero_pool: address!("0x643cf6cb74e38fd98631b1e358b0541ea4970477"),
-            uni_v3_pool: address!("0x19a0aef6613524ea0761646a6a4e4be0e114a3c8"),
+            uni_v3_pool: cbeth_uni,
             baseswap_pool: address!("0x24d209812c828343a23f831f24f2dee13ff6597f"),
             pancakeswap_pool: address!("0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee"),
             decimals: 18,
@@ -436,7 +449,7 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             symbol: "DAI",
             target_token: DAI_BASE,
             aero_pool: address!("0xca4948af908871923cb1135ec367e9cd59bb2678"),
-            uni_v3_pool: address!("0x6f19cf4131599557b447432b49bc70b37feeb1b0"),
+            uni_v3_pool: dai_uni,
             baseswap_pool: address!("0x6291a13665ff062a4d0cb5a9167e9cd59bc216b2"),
             pancakeswap_pool: address!("0x981504d60a1ba36512fb265538cb1b54bfa6c3a1"),
             decimals: 18,
@@ -446,86 +459,52 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             is_v3_aero: true,
             is_v3_baseswap: false,
         },
-    ]
+    ])
 }
 
-fn calculate_v2_price(
-    reserve0: u128,
-    reserve1: u128,
-    token0: Address,
-    token1: Address,
-    target_decimals: u32,
-    weth_price_usd: f64,
-) -> f64 {
-    if reserve0 == 0 || reserve1 == 0 {
-        return 0.0;
-    }
+fn calculate_v2_price(reserve0: u128, reserve1: u128, token0: Address, token1: Address, target_decimals: u32, weth_price_usd: f64) -> f64 {
+    if reserve0 == 0 || reserve1 == 0 { return 0.0; }
     let usdc_decimals = 6;
-
     let d0 = if token0 == USDC_BASE { usdc_decimals } else { target_decimals };
     let d1 = if token1 == USDC_BASE { usdc_decimals } else { target_decimals };
-
     let r0 = reserve0 as f64 / 10f64.powi(d0 as i32);
     let r1 = reserve1 as f64 / 10f64.powi(d1 as i32);
-
     let price = if r0 > 0.0 { r1 / r0 } else { 0.0 };
 
     if token0 == USDC_BASE || token1 == USDC_BASE {
         return if token0 == USDC_BASE { if price > 0.0 { 1.0 / price } else { 0.0 } } else { price };
     }
-
     if token0 == WETH_BASE || token1 == WETH_BASE {
         let weth_ratio = if token0 == WETH_BASE { if r1 > 0.0 { r0 / r1 } else { 0.0 } } else { price };
         return weth_ratio * weth_price_usd;
     }
-
     price
 }
 
-fn calculate_v3_price(
-    sqrt_price_x96: _U160,
-    token0: Address,
-    token1: Address,
-    target_decimals: u32,
-    weth_price_usd: f64,
-) -> f64 {
+fn calculate_v3_price(sqrt_price_x96: _U160, token0: Address, token1: Address, target_decimals: u32, weth_price_usd: f64) -> f64 {
     let sqrt_f64 = sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0);
-    if sqrt_f64 <= 0.0 {
-        return 0.0;
-    }
+    if sqrt_f64 <= 0.0 { return 0.0; }
     let ratio = sqrt_f64 / 2.0f64.powi(96);
     let price_raw = ratio * ratio;
 
     let usdc_decimals = 6;
     let d0 = if token0 == USDC_BASE { usdc_decimals } else { target_decimals };
     let d1 = if token1 == USDC_BASE { usdc_decimals } else { target_decimals };
-
     let adjusted_price = price_raw * 10f64.powi((d0 as i32) - (d1 as i32));
 
-    if adjusted_price <= 0.0 {
-        return 0.0;
-    }
-
+    if adjusted_price <= 0.0 { return 0.0; }
     if token0 == USDC_BASE || token1 == USDC_BASE {
         return if token0 == USDC_BASE { 1.0 / adjusted_price } else { adjusted_price };
     }
-
     if token0 == WETH_BASE || token1 == WETH_BASE {
         let base_price = if token0 == WETH_BASE { 1.0 / adjusted_price } else { adjusted_price };
         return base_price * weth_price_usd;
     }
-
     adjusted_price
 }
 
-async fn fetch_live_market_data_for_pair<P>(
-    http_provider: P,
-    config: &TokenPairConfig,
-    weth_price_usd: f64,
-) -> Result<(f64, f64, f64, f64, f64), Box<dyn std::error::Error>>
-where
-    P: Provider<Ethereum> + Clone,
-{
+async fn fetch_live_market_data_for_pair<P>(http_provider: P, config: &TokenPairConfig, weth_price_usd: f64) -> Result<(f64, f64, f64, f64, f64), Box<dyn std::error::Error>>
+where P: Provider<Ethereum> + Clone {
     let mut price_aero = 0.0;
     if config.is_v3_aero {
         let v3_pool = IUniswapV3Pool::new(config.aero_pool, http_provider.clone());
@@ -546,16 +525,9 @@ where
     }
 
     let mut price_baseswap = 0.0;
-    if config.is_v3_baseswap {
-        let v3_pool = IUniswapV3Pool::new(config.baseswap_pool, http_provider.clone());
-        if let Ok(slot0) = v3_pool.slot0().call().await {
-            price_baseswap = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals, weth_price_usd);
-        }
-    } else {
-        let baseswap_pair = IUniswapV2Pair::new(config.baseswap_pool, http_provider.clone());
-        if let Ok(res) = baseswap_pair.getReserves().call().await {
-            price_baseswap = calculate_v2_price(res.reserve0.to::<u128>(), res.reserve1.to::<u128>(), config.token0, config.token1, config.decimals, weth_price_usd);
-        }
+    let baseswap_pair = IUniswapV2Pair::new(config.baseswap_pool, http_provider.clone());
+    if let Ok(res) = baseswap_pair.getReserves().call().await {
+        price_baseswap = calculate_v2_price(res.reserve0.to::<u128>(), res.reserve1.to::<u128>(), config.token0, config.token1, config.decimals, weth_price_usd);
     }
 
     let mut price_pancake = 0.0;
@@ -569,29 +541,14 @@ where
 
     let max_price = prices.iter().cloned().fold(0.0, f64::max);
     let min_price = prices.iter().cloned().fold(f64::INFINITY, f64::min);
-
-    let spread_gap = if !prices.is_empty() && min_price != f64::INFINITY {
-        max_price - min_price
-    } else {
-        0.0
-    };
+    let spread_gap = if !prices.is_empty() && min_price != f64::INFINITY { max_price - min_price } else { 0.0 };
 
     Ok((price_aero, price_v3, price_baseswap, price_pancake, spread_gap))
 }
 
-async fn trigger_cross_dex_arbitrage<P, PP>(
-    http_provider: P,
-    private_provider: PP,
-    contract_address: Address,
-    signer_address: Address,
-    spread_gap: f64,
-    pair_cfg: &TokenPairConfig,
-    price_aero: f64,
-    price_v3: f64,
-) -> Result<(), Box<dyn std::error::Error>>
+async fn trigger_cross_dex_arbitrage<P, PP>(http_provider: P, private_provider: PP, contract_address: Address, signer_address: Address, spread_gap: f64, pair_cfg: &TokenPairConfig, price_aero: f64, price_v3: f64) -> Result<(), Box<dyn std::error::Error>>
 where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     if spread_gap < 6.0 { return Ok(()); }
-
     let raw_loan = (spread_gap * 250.0) as u128 * 1_000_000;
     let dynamic_loan = raw_loan.max(1_000_000);
     let loan_amount = U256::from(dynamic_loan);
@@ -619,13 +576,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     Ok(())
 }
 
-async fn trigger_triangular_arbitrage<P, PP>(
-    http_provider: P,
-    private_provider: PP,
-    contract_address: Address,
-    signer_address: Address,
-    graph: &ArbitrageGraph,
-) -> Result<(), Box<dyn std::error::Error>>
+async fn trigger_triangular_arbitrage<P, PP>(http_provider: P, private_provider: PP, contract_address: Address, signer_address: Address, graph: &ArbitrageGraph) -> Result<(), Box<dyn std::error::Error>>
 where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     let cycles = graph.find_cycles(USDC_BASE, 3);
     if cycles.is_empty() { return Ok(()); }
@@ -650,7 +601,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Dual-Engine Bot with Robust V2/V3 Price Math...");
+    println!("🤖 Initializing Dual-Engine Bot with Dynamic Factory-Fetched Pools...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -665,7 +616,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let http_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_http(primary_http_url.parse()?);
     let private_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_http(private_http_url.parse()?);
 
-    let monitored_pairs = get_monitored_pairs();
+    // جلب أزواج التداول ديناميكياً عند بدء التشغيل باستخدام الـ Factory
+    let monitored_pairs = get_monitored_pairs(http_provider.clone()).await?;
     let liquidity_graph = load_global_liquidity_graph();
 
     for pair in &monitored_pairs {

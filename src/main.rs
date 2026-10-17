@@ -16,8 +16,8 @@ type _U160 = Uint<160, 3>;
 
 const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
-const CBETH_BASE: Address = address!("0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22");
-const DAI_BASE: Address = address!("0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb");
+const CBETH_BASE: Address = address!("be9895146f7af43049ca1c1ae358b0541ea49704");
+const DAI_BASE: Address = address!("50c5725949a6f0c72e6c4a641f24049a917db0cb");
 
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
 const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
@@ -273,11 +273,11 @@ impl ArbitrageGraph {
 
 pub fn load_global_liquidity_graph() -> ArbitrageGraph {
     let mut graph = ArbitrageGraph::new();
-    graph.add_pool(Pool { id: address!("0x6c561b446416e1a00e8e93e221854d6ea4171372"), token0: WETH_BASE, token1: USDC_BASE, dex_type: DexType::UniswapV3, fee: 100 });
-    graph.add_pool(Pool { id: address!("cdac0d6c6c59727a65f871236188350531885c43"), token0: WETH_BASE, token1: USDC_BASE, dex_type: DexType::Aerodrome, fee: 0 });
-    graph.add_pool(Pool { id: address!("0x21198fdfbc9c3b88b0a9dfbf65449cf77cecc0df"), token0: WETH_BASE, token1: CBETH_BASE, dex_type: DexType::Aerodrome, fee: 0 });
-    graph.add_pool(Pool { id: address!("0x53009586111164998d36371dd0349f7e44a4f806"), token0: USDC_BASE, token1: DAI_BASE, dex_type: DexType::Aerodrome, fee: 1 });
-    graph.add_pool(Pool { id: address!("0x327cd1c2c31e42f9862b535d4ff3a6af6256f081"), token0: WETH_BASE, token1: DAI_BASE, dex_type: DexType::UniswapV3, fee: 500 });
+    // استخدام العناوين الحقيقية للمسبحات
+    graph.add_pool(Pool { id: address!("0x10648ba41b8565907cfa1496765fa4d95390aa0d"), token0: WETH_BASE, token1: CBETH_BASE, dex_type: DexType::UniswapV3, fee: 500 });
+    graph.add_pool(Pool { id: address!("0x47cA96Ea59C13F72745928887f84C9F52C3D7348"), token0: WETH_BASE, token1: CBETH_BASE, dex_type: DexType::Aerodrome, fee: 0 });
+    graph.add_pool(Pool { id: address!("0x098679E131333D72E6C4a11f24049A917dB0cBfc"), token0: USDC_BASE, token1: DAI_BASE, dex_type: DexType::UniswapV3, fee: 100 });
+    graph.add_pool(Pool { id: address!("0x485E973B43bbD185b0dC255552DDeFbeCC253cfC"), token0: USDC_BASE, token1: DAI_BASE, dex_type: DexType::Aerodrome, fee: 1 });
     graph
 }
 
@@ -401,6 +401,7 @@ sol! {
     }
 }
 
+// تحديث مصفوفة المزودين بالعناوين المعتمدة الجديدة
 pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
     vec![
         TokenPairConfig {
@@ -418,24 +419,24 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
         TokenPairConfig {
             symbol: "cbETH",
             target_token: CBETH_BASE,
-            aero_pool: address!("0x21198fdfbc9c3b88b0a9dfbf65449cf77cecc0df"),
-            uni_v3_pool: address!("0x21198fdfbc9c3b88b0a9dfbf65449cf77cecc0df"),
-            baseswap_pool: address!("0x21198fdfbc9c3b88b0a9dfbf65449cf77cecc0df"),
-            pancakeswap_pool: address!("0x21198fdfbc9c3b88b0a9dfbf65449cf77cecc0df"),
+            aero_pool: address!("0x47cA96Ea59C13F72745928887f84C9F52C3D7348"),
+            uni_v3_pool: address!("0x10648ba41b8565907cfa1496765fa4d95390aa0d"),
+            baseswap_pool: address!("0x24bc6E1f22eE5743c399Fd6Ddf52044F406085a6"),
+            pancakeswap_pool: address!("0x946BeE7D2BfE8b7899667794A6E89eEa72C42B98"),
             decimals: 18,
-            fee_tier_v3: 100,
+            fee_tier_v3: 500,
             token0: WETH_BASE,
             token1: CBETH_BASE,
         },
         TokenPairConfig {
             symbol: "DAI",
             target_token: DAI_BASE,
-            aero_pool: address!("0x53009586111164998d36371dd0349f7e44a4f806"),
-            uni_v3_pool: address!("0x327cd1c2c31e42f9862b535d4ff3a6af6256f081"),
-            baseswap_pool: address!("0x53009586111164998d36371dd0349f7e44a4f806"),
-            pancakeswap_pool: address!("0x327cd1c2c31e42f9862b535d4ff3a6af6256f081"),
+            aero_pool: address!("0x485E973B43bbD185b0dC255552DDeFbeCC253cfC"),
+            uni_v3_pool: address!("0x098679E131333D72E6C4a11f24049A917dB0cBfc"),
+            baseswap_pool: address!("0x1A09D5d0445047Da3ab4994262b22404288A3BfC"),
+            pancakeswap_pool: address!("0x446B84A6fC0D7dbbCEE32f6bCbFbf7fbaFECC253"),
             decimals: 18,
-            fee_tier_v3: 500,
+            fee_tier_v3: 100,
             token0: USDC_BASE,
             token1: DAI_BASE,
         },
@@ -497,7 +498,6 @@ where P: Provider<Ethereum> + Clone {
     Ok((price_aero, price_v3, price_baseswap, price_pancake, spread_gap))
 }
 
-// تنفيذ المراجحة الثنائية
 async fn trigger_cross_dex_arbitrage<P, PP>(
     http_provider: P,
     private_provider: PP,
@@ -538,7 +538,6 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     Ok(())
 }
 
-// تنفيذ المراجحة المثلثية
 async fn trigger_triangular_arbitrage<P, PP>(
     http_provider: P,
     private_provider: PP,
@@ -551,7 +550,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     if cycles.is_empty() { return Ok(()); }
 
     for (i, target_cycle) in cycles.iter().enumerate() {
-        let loan_amount = U256::from(2_000_000_000u64); // 2000 USDC مبدئياً للدورات
+        let loan_amount = U256::from(2_000_000_000u64);
         let (targets, data) = TriangularPayloadEncoder::build_execution_payload(target_cycle, contract_address, loan_amount);
         if targets.is_empty() || data.is_empty() { continue; }
 
@@ -570,7 +569,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Unified Dual-Engine Arbitrage Bot (Cross-DEX + Triangular)...");
+    println!("🤖 Initializing Unified Dual-Engine Arbitrage Bot (Cross-DEX + Triangular) with Verified Pools...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -591,6 +590,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for pair in &monitored_pairs {
         let _ = BaseAtomicArbitrage::new(contract_address, http_provider.clone()).setTargetWhitelist(pair.target_token, true).from(signer_address).send().await;
     }
+    // Whitelist cbETH explicitly
+    let _ = BaseAtomicArbitrage::new(contract_address, http_provider.clone()).setTargetWhitelist(CBETH_BASE, true).from(signer_address).send().await;
 
     let ws = alloy::providers::WsConnect::new(alchemy_wss_url);
     let ws_provider = ProviderBuilder::new().wallet(EthereumWallet::from(private_key_str.parse::<PrivateKeySigner>()?)).connect_ws(ws).await?;
@@ -603,7 +604,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let block_num = block.inner.number;
         println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Dual Engine Scanning...", block_num, block_counter);
 
-        // 1. تشغيل محرك المراجحة الثنائية لكل العملات
+        // 1. مراقبة الفجوات والأسعار لكل الأصول (WETH, cbETH, DAI)
         for pair in &monitored_pairs {
             if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(http_provider.clone(), pair).await {
                 println!(
@@ -626,7 +627,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // 2. تشغيل محرك المراجحة المثلثية (Triangular) في نفس البلوك
+        // 2. فحص الدورات المثلثية
         let _ = trigger_triangular_arbitrage(
             http_provider.clone(),
             private_provider.clone(),

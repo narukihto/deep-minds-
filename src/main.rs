@@ -408,11 +408,11 @@ async fn get_monitored_pairs<P>(http_provider: P) -> Result<Vec<TokenPairConfig>
 where P: Provider<Ethereum> + Clone {
     let uni_factory = IUniswapV3Factory::new(UNISWAP_V3_FACTORY, http_provider.clone());
 
-    // تصحيح نوع الـ Uint24 واستخدام unwrap() للحصول على العنوان الناتج
     let fee_tier = _U24::from(100);
-    let weth_uni = uni_factory.getPool(WETH_BASE, USDC_BASE, fee_tier).call().await?.pool;
-    let cbeth_uni = uni_factory.getPool(WETH_BASE, CBETH_BASE, fee_tier).call().await?.pool;
-    let dai_uni = uni_factory.getPool(DAI_BASE, USDC_BASE, fee_tier).call().await?.pool;
+    // استبدال .pool بـ .0 لأن النتيجة تعود كـ Tuple
+    let weth_uni = uni_factory.getPool(WETH_BASE, USDC_BASE, fee_tier).call().await?.0;
+    let cbeth_uni = uni_factory.getPool(WETH_BASE, CBETH_BASE, fee_tier).call().await?.0;
+    let dai_uni = uni_factory.getPool(DAI_BASE, USDC_BASE, fee_tier).call().await?.0;
 
     Ok(vec![
         TokenPairConfig {

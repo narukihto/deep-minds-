@@ -88,7 +88,8 @@ impl CausalCollapseSystem {
         // Leg 1: Aerodrome Router (USDC -> Target Token)
         addresses.push(AERODROME_ROUTER);
         
-        let min_amount_out_leg1 = self.loan_amount * U256::from(9990) / U256::from(10000);
+        // تعديل السليباج ليكون مرناً جداً (99.8%) لتجنب رفض الصفقات ذات الانزلاق البسيط
+        let min_amount_out_leg1 = self.loan_amount * U256::from(9980) / U256::from(10000);
 
         let aero_route = IAerodromeRouter::Route {
             from: self.borrowed_token,
@@ -109,16 +110,15 @@ impl CausalCollapseSystem {
         payloads.push(payload_leg1);
 
         // Leg 2: Uniswap V3 / PancakeSwap V3 (Target Token -> USDC)
-        // استخدام الموجه المناسب واستخراج Fee Tier المطابق للزوج
         addresses.push(UNISWAP_V3_ROUTER);
 
         let estimated_token_received = min_amount_out_leg1; 
+        // اشتراط حد أدنى إيجابي لتغطية القرض وفائض بسيط (100.01%)
         let min_amount_out_leg2 = self.loan_amount * U256::from(10001) / U256::from(10000);
 
         let mut path_bytes = Vec::new();
         path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
         
-        // تحويل fee_tier_v3 الخاص بالزوج (سواء 3000 لـ cbETH أو 100 لـ WETH) إلى 3 Bytes
         let fee_bytes = self.pair_config.fee_tier_v3.to_be_bytes();
         path_bytes.extend_from_slice(&fee_bytes[1..4]);
         
@@ -223,11 +223,11 @@ pub fn get_monitored_pairs() -> Vec<TokenPairConfig> {
             symbol: "cbETH",
             target_token: CBETH_BASE,
             aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"),
-            uni_v3_pool: address!("0xa8e4c55d6daf4d768aeba2378c1ad94c112ef48a"), // مسبح cbETH / USDC الموثق
+            uni_v3_pool: address!("0xa8e4c55d6daf4d768aeba2378c1ad94c112ef48a"),
             baseswap_pool: address!("ab067c01c7f5734da168c699ae9d23a4512c9fdb"),
             pancakeswap_pool: address!("72ab388e2e2f6facef59e3c3fa2c4e29011c2d38"),
             decimals: 18,
-            fee_tier_v3: 3000, // Fee Tier الصحيح 0.3% المخصص لـ Uniswap V3 cbETH
+            fee_tier_v3: 3000,
             token0: CBETH_BASE,
             token1: USDC_BASE,
         },
@@ -367,7 +367,7 @@ where
         return Ok(());
     }
 
-    println!("⚡ [EXPLOITING GAP - {}] Testing execution with 5,000 USDC Loan (Gap: ${:.2})...", pair_symbol, spread_gap);
+    println!("⚡ [10,000 USDC EXECUTION - {}] Testing execution with 10,000 USDC Loan (Gap: ${:.2})...", pair_symbol, spread_gap);
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(
@@ -420,7 +420,7 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing High-Precision Multi-Protocol MEV Scanner (Balancer & Aave V3)...");
+    println!("🤖 Initializing Aggressive 10,000 USDC MEV Scanner (Balancer & Aave V3)...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR")
         .unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
@@ -452,7 +452,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = sub.into_stream();
     let mut block_counter = 0u64;
 
-    let loan_amount = U256::from(5_000_000_000u64);
+    // رفع القرض رسمياً إلى 10,000 USDC
+    let loan_amount = U256::from(10_000_000_000u64);
 
     while let Some(block) = stream.next().await {
         block_counter += 1;

@@ -9,6 +9,7 @@ use alloy::{
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256, Bytes, Uint},
     sol, sol_types::SolCall,
+    contract::Error as ContractError,
 };
 use std::collections::HashMap;
 
@@ -572,7 +573,6 @@ async fn trigger_cross_dex_arbitrage<P, PP>(http_provider: P, private_provider: 
 where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     if spread_gap < 1.5 { return Ok(()); }
     
-    // تم تصغير حجم القرض (ضرب الفجوة في 50 بدلاً من 250) لتقليل الانزلاق السعري ونجاح المحاكاة
     let raw_loan = (spread_gap * 50.0) as u128 * 1_000_000;
     let dynamic_loan = raw_loan.max(1_000_000);
     let loan_amount = U256::from(dynamic_loan);
@@ -590,13 +590,43 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     ]).abi_encode();
 
     let contract_sim = BaseAtomicArbitrage::new(contract_address, http_provider);
-    if contract_sim.triggerBalancerArbitrage(USDC_BASE, loan_amount, swap_path_data.clone().into()).from(signer_address).gas(1_500_000).call().await.is_ok() {
-        println!("🎉 [Cross-DEX SIMULATION PASSED!] Dispatching via Private RPC...");
-        let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider);
-        if let Ok(tx) = contract_private.triggerBalancerArbitrage(USDC_BASE, loan_amount, swap_path_data.into()).from(signer_address).gas(1_500_000).send().await {
-            println!("🚀 [Dispatched] Hash: {:?}", tx.tx_hash());
+    
+    // تنفيذ محاكاة واضحة تفضح سبب الرفض بالكامل بدلاً من إخفائه بـ is_ok()
+    let simulation_call = contract_sim
+        .triggerBalancerArbitrage(USDC_BASE, loan_amount, swap_path_data.clone().into())
+        .from(signer_address)
+        .gas(1_500_000);
+
+    match simulation_call.call().await {
+        Ok(_) => {
+            println!("🎉 [Cross-DEX SIMULATION PASSED!] Dispatching via Private RPC...");
+            let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider);
+            if let Ok(tx) = contract_private.triggerBalancerArbitrage(USDC_BASE, loan_amount, swap_path_data.into()).from(signer_address).gas(1_500_000).send().await {
+                println!("🚀 [Dispatched] Hash: {:?}", tx.tx_hash());
+            }
+        }
+        Err(contract_error) => {
+            eprintln!("❌ [SIMULATION FAILED for {}]", pair_cfg.symbol);
+            match contract_error {
+                ContractError::TransportError(e) => {
+                    eprintln!("   🌐 Transport/RPC Error: {:?}", e);
+                }
+                ContractError::RpcError(rpc_err) => {
+                    eprintln!("   💻 RPC Execution Error: {}", rpc_err.message);
+                    if let Some(data) = rpc_err.data {
+                        eprintln!("   🔍 Revert Raw Hex Data: {}", data);
+                    }
+                }
+                ContractError::Revert(revert) => {
+                    eprintln!("   🛑 EVM Revert Reason: {:?}", revert);
+                }
+                custom_err => {
+                    eprintln!("   ⚠️ Custom Contract Revert/Error: {:?}", custom_err);
+                }
+            }
         }
     }
+
     Ok(())
 }
 
@@ -611,13 +641,20 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
         if targets.is_empty() || data.is_empty() { continue; }
 
         let contract_sim = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
-        if contract_sim.triggerBalancerArbitrageMulti(USDC_BASE, loan_amount, targets.clone(), data.clone()).from(signer_address).gas(1_800_000).call().await.is_ok() {
-            println!("🎉 [Triangular SIMULATION PASSED!] Cycle #{}. Dispatching...", i + 1);
-            let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider.clone());
-            if let Ok(tx) = contract_private.triggerBalancerArbitrageMulti(USDC_BASE, loan_amount, targets, data).from(signer_address).gas(1_800_000).send().await {
-                println!("🚀 [Triangular Dispatched] Hash: {:?}", tx.tx_hash());
+        let sim_call = contract_sim.triggerBalancerArbitrageMulti(USDC_BASE, loan_amount, targets.clone(), data.clone()).from(signer_address).gas(1_800_000);
+        
+        match sim_call.call().await {
+            Ok(_) => {
+                println!("🎉 [Triangular SIMULATION PASSED!] Cycle #{}. Dispatching...", i + 1);
+                let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider.clone());
+                if let Ok(tx) = contract_private.triggerBalancerArbitrageMulti(USDC_BASE, loan_amount, targets, data).from(signer_address).gas(1_800_000).send().await {
+                    println!("🚀 [Triangular Dispatched] Hash: {:?}", tx.tx_hash());
+                }
+                break;
             }
-            break;
+            Err(e) => {
+                // صامت أو طباعة خفيفة لكي لا تملأ الشاشة
+            }
         }
     }
     Ok(())
@@ -668,7 +705,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        for pair in &monitored_pairs {
+    for pair in &monitored_pairs {
             if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(http_provider.clone(), pair, current_weth_price).await {
                 println!(
                     " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} | BaseSwap: ${:.4} | Pancake: ${:.4} | Max Gap: ${:.2}",

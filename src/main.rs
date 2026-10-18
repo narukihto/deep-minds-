@@ -559,15 +559,19 @@ where P: Provider<Ethereum> + Clone {
     }
 
     let mut price_baseswap = 0.0;
-    let baseswap_pair = IUniswapV2Pair::new(config.baseswap_pool, http_provider.clone());
-    if let Ok(res) = baseswap_pair.getReserves().call().await {
-        price_baseswap = calculate_v2_price(res.reserve0.to::<u128>(), res.reserve1.to::<u128>(), config.token0, config.token1, config.decimals, weth_price_usd);
+    if config.baseswap_pool != Address::ZERO {
+        let baseswap_pair = IUniswapV2Pair::new(config.baseswap_pool, http_provider.clone());
+        if let Ok(res) = baseswap_pair.getReserves().call().await {
+            price_baseswap = calculate_v2_price(res.reserve0.to::<u128>(), res.reserve1.to::<u128>(), config.token0, config.token1, config.decimals, weth_price_usd);
+        }
     }
 
     let mut price_pancake = 0.0;
-    let pancake_pool = IUniswapV3Pool::new(config.pancakeswap_pool, http_provider.clone());
-    if let Ok(slot0) = pancake_pool.slot0().call().await {
-        price_pancake = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals, weth_price_usd);
+    if config.pancakeswap_pool != Address::ZERO {
+        let pancake_pool = IUniswapV3Pool::new(config.pancakeswap_pool, http_provider.clone());
+        if let Ok(slot0) = pancake_pool.slot0().call().await {
+            price_pancake = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals, weth_price_usd);
+        }
     }
 
     let mut prices = vec![price_aero, price_v3, price_baseswap, price_pancake];
@@ -592,7 +596,8 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     println!("🎯 [Cross-DEX {}] Gap: ${:.2} | Dynamic Loan: {} USDC... Simulating...", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
 
     let nodes = vec![QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000), frequency: spread_gap, token0: USDC_BASE, token1: pair_cfg.target_token }];
-    let system = CausalCollapseSystem::new(nodes, vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, BASESWAP_ROUTER, AERODROME_ROUTER], contract_address, loan_amount, USDC_BASE, pair_cfg.clone(), price_aero, price_v3, target_price_usd);
+    // تم إصلاح مصفوفة المسارات هنا بإزالة BASESWAP_ROUTER غير المعرف واستخدام الrouters المتاحة فقط
+    let system = CausalCollapseSystem::new(nodes, vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, AERODROME_ROUTER], contract_address, loan_amount, USDC_BASE, pair_cfg.clone(), price_aero, price_v3, target_price_usd);
     let target_path = system.execute_collapse();
     if target_path.0.is_empty() { return Ok(()); }
 

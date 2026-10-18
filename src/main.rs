@@ -531,7 +531,8 @@ where P: Provider<Ethereum> + Clone {
         if config.is_v3_aero {
             let v3_pool = IUniswapV3Pool::new(config.aero_pool, http_provider.clone());
             if let (Ok(slot0), Ok(p_token0)) = (v3_pool.slot0().call().await, v3_pool.token0().call().await) {
-                price_aero = calculate_v3_price_dynamic(slot0.sqrtPriceX96, p_token0.0, config.target_token, weth_price_usd, config.symbol);
+                let token0_addr: Address = p_token0.0.into();
+                price_aero = calculate_v3_price_dynamic(slot0.sqrtPriceX96, token0_addr, config.target_token, weth_price_usd, config.symbol);
             }
         } else {
             let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
@@ -545,7 +546,8 @@ where P: Provider<Ethereum> + Clone {
     if config.uni_v3_pool != Address::ZERO {
         let v3_pool = IUniswapV3Pool::new(config.uni_v3_pool, http_provider.clone());
         if let (Ok(slot0), Ok(p_token0)) = (v3_pool.slot0().call().await, v3_pool.token0().call().await) {
-            price_v3 = calculate_v3_price_dynamic(slot0.sqrtPriceX96, p_token0.0, config.target_token, weth_price_usd, config.symbol);
+            let token0_addr: Address = p_token0.0.into();
+            price_v3 = calculate_v3_price_dynamic(slot0.sqrtPriceX96, token0_addr, config.target_token, weth_price_usd, config.symbol);
         }
     }
 

@@ -1,3 +1,4 @@
+
 use num_bigint::BigUint;
 use num_traits::One;
 use futures_util::StreamExt;
@@ -576,12 +577,12 @@ async fn trigger_cross_dex_arbitrage<P, PP>(http_provider: P, private_provider: 
 where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     if spread_gap < 8.0 { return Ok(()); }
 
-    let base_multiplier = if spread_gap > 12.0 { 400.0 } else { 250.0 };
-    let raw_loan = (spread_gap * base_multiplier) as u128 * 1_000_000;
-    let dynamic_loan = raw_loan.clamp(2_000_000_000, 5_000_000_000); 
+    // تعديل القرض الديناميكي ليكون بحد أقصى آمن $2,400 USDC (Optimal Loan Amount) لعدم تجاوز عمق Ticks السيولة
+    let raw_loan = (spread_gap * 150.0) as u128 * 1_000_000;
+    let dynamic_loan = raw_loan.clamp(1_000_000_000, 2_400_000_000); 
     let loan_amount = U256::from(dynamic_loan);
 
-    println!("🎯 [Cross-DEX {}] Gap: ${:.2} | Dynamic Loan: {} USDC... Simulating...", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
+    println!("🎯 [Cross-DEX {}] Gap: ${:.2} | Optimal Loan: {} USDC... Simulating...", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
 
     let nodes = vec![QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000), frequency: spread_gap, token0: USDC_BASE, token1: pair_cfg.target_token }];
     let system = CausalCollapseSystem::new(nodes, vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, AERODROME_ROUTER], contract_address, loan_amount, USDC_BASE, pair_cfg.clone(), price_aero, price_v3, target_price_usd);
@@ -633,7 +634,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     if cycles.is_empty() { return Ok(()); }
 
     for (i, target_cycle) in cycles.iter().enumerate() {
-        let loan_amount = U256::from(2_000_000_000u64);
+        let loan_amount = U256::from(1_500_000_000u64); // تخفيض القرض لتناسب عمق السيولة المثلثية
         let (targets, data) = TriangularPayloadEncoder::build_execution_payload(target_cycle, contract_address, loan_amount);
         if targets.is_empty() || data.is_empty() { continue; }
 
@@ -693,7 +694,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Ultimate Markets...", block_num, block_counter);
 
         let mut current_weth_price = 2416.28;
-        if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {
+        if let Some(weth_pair) > monitored_pairs.iter().find(|p| p.symbol == "WETH") {
             if let Ok((_, p_v3, _, _, _)) = fetch_live_market_data_for_pair(http_provider.clone(), weth_pair, 1.0).await {
                 if p_v3 > 0.0 { current_weth_price = p_v3; }
             }

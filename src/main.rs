@@ -20,7 +20,7 @@ type _U160 = Uint<160, 3>;
 pub const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
 pub const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
 pub const CBETH_BASE: Address = address!("2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22");
-pub const AERO_BASE: Address = address!("940181a94A35A4569E4529A3CDfB74e38FD98631"); // <-- تم التصحيح بدقة
+pub const AERO_BASE: Address = address!("940181a94A35A4569E4529A3CDfB74e38FD98631");
 pub const DEGEN_BASE: Address = address!("4ed4E862860beD51a9570b96d89aF5E1B0Efefed");
 pub const BRETT_BASE: Address = address!("532f27101965dd16442E59d40670FaF5ebb142E4");
 pub const VIRTUAL_BASE: Address = address!("0b3e328455c4059EEb9e3f84b5543F74E24e7E1b");
@@ -28,8 +28,8 @@ pub const DAI_BASE: Address = address!("50c5725949a6f0c72e6c4a641f24049a917db0cb
 
 // --- [DEX Factories & Routers on Base - Verified & Corrected] ---
 const UNISWAP_V3_FACTORY: Address = address!("33128a8fC17869897dcE68Ed026d694621f6FDfD");
-const UNISWAP_V3_ROUTER: Address = address!("2626664c2603336E57B271c5C0b26F421741e481"); // <-- تم التصحيح
-const AERODROME_ROUTER: Address = address!("cF77a3Ba9Aab7D3E44917635033322DF3f564171"); // <-- تم التصحيح
+const UNISWAP_V3_ROUTER: Address = address!("2626664c2603336E57B271c5C0b26F421741e481");
+const AERODROME_ROUTER: Address = address!("cF77a3Ba9Aab7D3E44917635033322DF3f564171");
 const AERODROME_V2_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFECe40Da");
 const PANCAKESWAP_V3_ROUTER: Address = address!("1b81D678ffb9C0263b24A97847620C99d213eB14"); 
 
@@ -407,6 +407,19 @@ sol! {
     }
 }
 
+// دالة مساعدة عامة لجلب الـ Pool لتجنب مشاكل نقل الملكية (Move / E0382)
+async fn fetch_v3_pool<P: Provider<Ethereum> + Clone>(
+    uni_factory: &IUniswapV3Factory::IUniswapV3FactoryInstance<P>,
+    token_a: Address,
+    token_b: Address,
+    fee: _U24,
+) -> Address {
+    match uni_factory.getPool(token_a, token_b, fee).call().await {
+        Ok(res) => { let addr: Address = res.0.into(); addr },
+        Err(_) => Address::ZERO,
+    }
+}
+
 async fn get_monitored_pairs<P>(http_provider: P) -> Result<Vec<TokenPairConfig>, Box<dyn std::error::Error>>
 where P: Provider<Ethereum> + Clone {
     let uni_factory = IUniswapV3Factory::new(UNISWAP_V3_FACTORY, http_provider.clone());
@@ -414,19 +427,12 @@ where P: Provider<Ethereum> + Clone {
     let fee_tier_10000 = _U24::from(10000);
     let fee_tier_500 = _U24::from(500);
 
-    let get_v3_pool = move |token_a, token_b, fee| async move {
-        match uni_factory.getPool(token_a, token_b, fee).call().await {
-            Ok(res) => { let addr: Address = res.0.into(); addr },
-            Err(_) => Address::ZERO,
-        }
-    };
-
     Ok(vec![
         TokenPairConfig {
             symbol: "WETH",
             target_token: WETH_BASE,
             aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"),
-            uni_v3_pool: get_v3_pool(WETH_BASE, USDC_BASE, fee_tier_500).await,
+            uni_v3_pool: fetch_v3_pool(&uni_factory, WETH_BASE, USDC_BASE, fee_tier_500).await,
             baseswap_pool: Address::ZERO,
             pancakeswap_pool: Address::ZERO,
             decimals: 18,
@@ -440,7 +446,7 @@ where P: Provider<Ethereum> + Clone {
             symbol: "AERO",
             target_token: AERO_BASE,
             aero_pool: address!("7f6dBb6fa91176b6C1Ad3767B40A39c294136C70"),
-            uni_v3_pool: get_v3_pool(AERO_BASE, WETH_BASE, fee_tier_3000).await,
+            uni_v3_pool: fetch_v3_pool(&uni_factory, AERO_BASE, WETH_BASE, fee_tier_3000).await,
             baseswap_pool: Address::ZERO,
             pancakeswap_pool: Address::ZERO,
             decimals: 18,
@@ -454,7 +460,7 @@ where P: Provider<Ethereum> + Clone {
             symbol: "DEGEN",
             target_token: DEGEN_BASE,
             aero_pool: address!("51E2Eb7A31853B0B7F83296c0D29E8FdEb57a7da"),
-            uni_v3_pool: get_v3_pool(DEGEN_BASE, WETH_BASE, fee_tier_10000).await,
+            uni_v3_pool: fetch_v3_pool(&uni_factory, DEGEN_BASE, WETH_BASE, fee_tier_10000).await,
             baseswap_pool: Address::ZERO,
             pancakeswap_pool: Address::ZERO,
             decimals: 18,
@@ -468,7 +474,7 @@ where P: Provider<Ethereum> + Clone {
             symbol: "BRETT",
             target_token: BRETT_BASE,
             aero_pool: Address::ZERO,
-            uni_v3_pool: get_v3_pool(BRETT_BASE, WETH_BASE, fee_tier_10000).await,
+            uni_v3_pool: fetch_v3_pool(&uni_factory, BRETT_BASE, WETH_BASE, fee_tier_10000).await,
             baseswap_pool: Address::ZERO,
             pancakeswap_pool: Address::ZERO,
             decimals: 18,
@@ -482,7 +488,7 @@ where P: Provider<Ethereum> + Clone {
             symbol: "VIRTUAL",
             target_token: VIRTUAL_BASE,
             aero_pool: Address::ZERO,
-            uni_v3_pool: get_v3_pool(VIRTUAL_BASE, WETH_BASE, fee_tier_10000).await,
+            uni_v3_pool: fetch_v3_pool(&uni_factory, VIRTUAL_BASE, WETH_BASE, fee_tier_10000).await,
             baseswap_pool: Address::ZERO,
             pancakeswap_pool: Address::ZERO,
             decimals: 18,
@@ -496,7 +502,7 @@ where P: Provider<Ethereum> + Clone {
             symbol: "cbETH",
             target_token: CBETH_BASE,
             aero_pool: address!("47cA96EA59C13f72745928887F84c9F52C3D7348"),
-            uni_v3_pool: get_v3_pool(WETH_BASE, CBETH_BASE, fee_tier_500).await,
+            uni_v3_pool: fetch_v3_pool(&uni_factory, WETH_BASE, CBETH_BASE, fee_tier_500).await,
             baseswap_pool: Address::ZERO,
             pancakeswap_pool: Address::ZERO,
             decimals: 18,

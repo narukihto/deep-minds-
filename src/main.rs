@@ -435,7 +435,7 @@ where P: Provider<Ethereum> + Clone {
         TokenPairConfig {
             symbol: "VIRTUAL",
             target_token: VIRTUAL_BASE,
-            aero_pool: Address::ZERO,
+            aero_pool: address!("3f0296bf652e19bca772ec3df08b32732f93014a"), // مجمع VIRTUAL V3 على Aerodrome
             uni_v3_pool: fetch_v3_pool(&uni_factory, VIRTUAL_BASE, WETH_BASE, fee_tier_10000).await,
             baseswap_pool: Address::ZERO,
             pancakeswap_pool: Address::ZERO,
@@ -443,21 +443,21 @@ where P: Provider<Ethereum> + Clone {
             fee_tier_v3: 10000,
             token0: VIRTUAL_BASE,
             token1: WETH_BASE,
-            is_v3_aero: false,
+            is_v3_aero: true, // تفعيل مجمع V3 لـ Aerodrome
             is_v3_baseswap: false,
         },
         TokenPairConfig {
             symbol: "cbETH",
             target_token: CBETH_BASE,
-            aero_pool: address!("47cA96EA59C13f72745928887F84c9F52C3D7348"),
+            aero_pool: address!("47cA96EA59C13f72745928887F84c9F52C3D7348"), // مجمع cbETH V3 على Aerodrome
             uni_v3_pool: fetch_v3_pool(&uni_factory, WETH_BASE, CBETH_BASE, fee_tier_500).await,
             baseswap_pool: Address::ZERO,
             pancakeswap_pool: Address::ZERO,
             decimals: 18,
             fee_tier_v3: 500,
-            token0: WETH_BASE,
-            token1: CBETH_BASE,
-            is_v3_aero: false,
+            token0: CBETH_BASE,
+            token1: WETH_BASE,
+            is_v3_aero: true, // تفعيل مجمع V3 لـ Aerodrome
             is_v3_baseswap: false,
         },
     ])
@@ -483,7 +483,7 @@ fn calculate_v2_price(reserve0: u128, reserve1: u128, token0: Address, token1: A
 }
 
 // دالة حساب أسعار V3 الحكيمة مع التحقق الذاتي المنطقي (Self-Correcting Sanity Check Engine)
-fn calculate_v3_price(sqrt_price_x96: _U160, _token0: Address, _token1: Address, _target_decimals: u32, weth_price_usd: f64, symbol: &str) -> f64 {
+fn calculate_v3_price(sqrt_price_x96: _U160, token0: Address, _token1: Address, _target_decimals: u32, weth_price_usd: f64, symbol: &str) -> f64 {
     let sqrt_f64 = sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0);
     if sqrt_f64 <= 0.0 { return 0.0; }
     
@@ -493,7 +493,14 @@ fn calculate_v3_price(sqrt_price_x96: _U160, _token0: Address, _token1: Address,
 
     let raw_usd = match symbol {
         "WETH" => price_raw * 10f64.powi(12),
-        "cbETH" => price_raw * weth_price_usd,
+        "cbETH" => {
+            let p_weth = if token0 == WETH_BASE { if price_raw > 0.0 { 1.0 / price_raw } else { 0.0 } } else { price_raw };
+            p_weth * weth_price_usd
+        }
+        "VIRTUAL" => {
+            let p_weth = if token0 == WETH_BASE { if price_raw > 0.0 { 1.0 / price_raw } else { 0.0 } } else { price_raw };
+            p_weth * weth_price_usd
+        }
         _ => price_raw * weth_price_usd,
     };
 

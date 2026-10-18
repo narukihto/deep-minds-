@@ -112,8 +112,9 @@ impl CausalCollapseSystem {
         let expected_target_units_u128 = (expected_target_tokens_f64 * target_decimals_multiplier) as u128;
         let expected_target_units = U256::from(expected_target_units_u128);
 
-        let min_amount_out_leg1 = expected_target_units * U256::from(9960) / U256::from(10000); // تحسين هامش الانزلاق لـ 0.4%
-        let min_amount_out_leg2 = target_repay_amount + U256::from(100); // هامش ربح محاكاة آمن
+        // تعديل طفيف لهامش الأمان للساق الأولى لضمان عدم رفض الراوتر
+        let min_amount_out_leg1 = expected_target_units * U256::from(9940) / U256::from(10000); // 0.6% Slippage
+        let min_amount_out_leg2 = target_repay_amount + U256::from(50); // ربح محاكاة آمن
 
         // --- الساق الأولى: Aerodrome (USDC -> Target) ---
         addresses.push(AERODROME_ROUTER);
@@ -543,12 +544,11 @@ async fn trigger_cross_dex_arbitrage<P, PP>(http_provider: P, private_provider: 
 where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     if spread_gap < 1.5 { return Ok(()); }
     
-    // رفع الحد الأدنى للقرض ليكون 1,000 USDC على الأقل لتجنب فشل الهوامش والرسوم الثابتة
     let raw_loan = (spread_gap * 150.0) as u128 * 1_000_000;
-    let dynamic_loan = raw_loan.max(1_000_000_000); // 1,000 USDC (6 decimals)
+    let dynamic_loan = raw_loan.max(1_000_000_000); // 1,000 USDC
     let loan_amount = U256::from(dynamic_loan);
 
-    println!("🎯 [Cross-DEX {}] Gap: ${:.2} | Loan: {} USDC... Simulating!", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
+    println!("🎯 [Cross-DEX {}] Gap: ${:.2} | Loan: {} USDC... Simulating with EVM Trace...", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
 
     let nodes = vec![QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000), frequency: spread_gap, token0: USDC_BASE, token1: pair_cfg.target_token }];
     let system = CausalCollapseSystem::new(nodes, vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, BASESWAP_ROUTER, AERODROME_ROUTER], contract_address, loan_amount, USDC_BASE, pair_cfg.clone(), price_aero, price_v3, target_price_usd);
@@ -559,6 +559,9 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
         alloy::dyn_abi::DynSolValue::Array(target_path.0.into_iter().map(alloy::dyn_abi::DynSolValue::Address).collect()),
         alloy::dyn_abi::DynSolValue::Array(target_path.1.into_iter().map(alloy::dyn_abi::DynSolValue::Bytes).collect()),
     ]).abi_encode();
+
+    // طباعة تفاصيل الحمولة والمسارات للتشخيص الفوري
+    println!("   🔍 [Debug Payload]: Contract: {:?} | Loan: {} | Targets Count: {}", contract_address, loan_amount, target_path.0.len());
 
     let contract_sim = BaseAtomicArbitrage::new(contract_address, http_provider);
     
@@ -577,6 +580,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
         }
         Err(contract_error) => {
             eprintln!("❌ [SIMULATION FAILED for {}]", pair_cfg.symbol);
+            eprintln!("   📦 Full Payload Hex: 0x{}", alloy::hex::encode(&swap_path_data));
             
             if let Some(revert_bytes) = contract_error.as_revert_data() {
                 eprintln!("   🛑 Revert Data Bytes: 0x{}", alloy::hex::encode(&revert_bytes));
@@ -591,10 +595,10 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
                         }
                     }
                 } else {
-                    eprintln!("   ⚠️ [Revert Reason]: Could not decode into custom contract errors. Standard revert.");
+                    eprintln!("   ⚠️ [Revert Reason]: Standard EVM revert or router rejection (Slippage/Pool check failed).");
                 }
             } else {
-                eprintln!("   ⚠️ Contract Error: {:?}", contract_error);
+                eprintln!("   ⚠️ Contract Error (Transport/RPC): {:?}", contract_error);
             }
         }
     }
@@ -632,7 +636,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Dual-Engine Bot with Dynamic Factory-Fetched Pools...");
+    println!("🤖 Initializing Dual-Engine Bot with EVM Diagnostics & Trace...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -665,7 +669,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Dual Engine Scanning...", block_num, block_counter);
+        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning with Diagnostics...", block_num, block_counter);
 
         let mut current_weth_price = 2425.0;
         if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {

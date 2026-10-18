@@ -95,7 +95,7 @@ impl CausalCollapseSystem {
     }
 
     /// دالة حساب رسوم L1 Data Fee التقريبية بناءً على حجم الـ Payload (Calldata)
-    pub fn estimate_l1_data_fee(payload_len: usize) -> u256 {
+    pub fn estimate_l1_data_fee(payload_len: usize) -> U256 {
         // حساب تقريبي لرسوم نشر البيانات على L1 لشبكة Base بناءً على متوسط أسعار الكاز الحالي
         let base_gas_per_byte = 16; 
         let estimated_l1_gas = (payload_len as u64) * base_gas_per_byte;
@@ -588,7 +588,6 @@ where P: Provider<Ethereum> + Clone {
 
 async fn trigger_cross_dex_arbitrage<P, PP>(http_provider: P, private_provider: PP, contract_address: Address, signer_address: Address, spread_gap: f64, pair_cfg: &TokenPairConfig, price_aero: f64, price_v3: f64, target_price_usd: f64) -> Result<(), Box<dyn std::error::Error>>
 where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
-    // رفع عتبة التفعيل إلى $8 لضمان تغطية رسوم Aerodrome الديناميكية (0.3%) ورسوم L1 Data Fee
     if spread_gap < 8.0 { return Ok(()); }
     
     let base_multiplier = if spread_gap > 12.0 { 400.0 } else { 250.0 };

@@ -2,7 +2,6 @@ use num_bigint::BigUint;
 use num_traits::One;
 use futures_util::StreamExt;
 use tokio::time::{sleep, Duration};
-use std::str::FromStr;
 use alloy::{
     providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
@@ -23,6 +22,7 @@ pub const AERO_BASE: Address = address!("94017f86360288571845a7443274e0d49a79e2c
 pub const DEGEN_BASE: Address = address!("4ed4E862860beD51a9570b96d89aF5E1B0Efefed");
 pub const BRETT_BASE: Address = address!("532f27101965dd16442E59d40670FaF5ebb142E4");
 pub const VIRTUAL_BASE: Address = address!("0b3e328455c4059EEb9e3f84b5543F74E24e7E1b");
+pub const DAI_BASE: Address = address!("50c5725949a6f0c72e6c4a641f24049a917db0cb");
 
 // --- [DEX Factories & Routers on Base] ---
 const UNISWAP_V3_FACTORY: Address = address!("33128a8fC17869897dcE68Ed026d694621f6FDfD");
@@ -127,14 +127,12 @@ impl CausalCollapseSystem {
         let expected_target_units_u128 = (expected_target_tokens_f64 * target_decimals_multiplier) as u128;
         let expected_target_units = U256::from(expected_target_units_u128);
 
-        // تخصيص رسوم DEX طبقاً للـ Fee Tier الخاص بالعملة (مثلاً 1.0% للـ DEGEN أو 0.3% للـ AERO)
-        let fee_bps = if self.pair_config.fee_tier_v3 > 3000 { 100 } else { 30 }; // 1.0% or 0.3%
+        let fee_bps = if self.pair_config.fee_tier_v3 > 3000 { 100 } else { 30 };
         let dex_fee_allowance = self.loan_amount * U256::from(fee_bps) / U256::from(10000);
         let target_repay_amount = self.loan_amount + flash_loan_fee + dex_fee_allowance;
 
-        // ضبط نسبة الانزلاق (Slippage) في النطاق الآمن (0.15% - 0.30%)
         let min_amount_out_leg1 = expected_target_units * U256::from(9850) / U256::from(10000); 
-        let min_amount_out_leg2 = target_repay_amount + U256::from(1_000_000); // إشراط صافي ربح يضمن إيجابية الصفقات
+        let min_amount_out_leg2 = target_repay_amount + U256::from(1_000_000);
 
         if buy_on_univ3 {
             println!("   🧮 [Volatile Route Execution] BUY UniV3/Pancake (${:.4}) -> SELL Aero Slipstream (${:.4})", buy_price, sell_price);
@@ -293,7 +291,6 @@ impl ArbitrageGraph {
     }
 }
 
-// --- [تغذية شبكة السيولة بالمسارات المربحة عالية الحركة] ---
 pub fn load_global_liquidity_graph() -> ArbitrageGraph {
     let mut graph = ArbitrageGraph::new();
 
@@ -441,8 +438,7 @@ sol! {
     }
 }
 
-// --- [تحديث المجمعات التي يراقبها البوت ديناميكياً] ---
-async fn get_monitored_pairs<P>(http_provider: P) -> Result<Vec<TokenPairConfig>, Box<dyn std::error::Error>>
+async fn get_monitored_pairs<P>(_http_provider: P) -> Result<Vec<TokenPairConfig>, Box<dyn std::error::Error>>
 where P: Provider<Ethereum> + Clone {
     Ok(vec![
         TokenPairConfig {
@@ -516,4 +512,51 @@ where P: Provider<Ethereum> + Clone {
             is_v3_baseswap: false,
         },
     ])
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("🚀 [Base MEV Bot] Starting High-Performance Engine...");
+
+    let rpc_url = std::env::var("BASE_RPC_URL").unwrap_or_else(|_| "https://mainnet.base.org".to_string());
+    println!("🔗 Connecting to Base Mainnet RPC: {}", rpc_url);
+
+    let provider = ProviderBuilder::new().on_http(rpc_url.parse()?);
+
+    let monitored_pairs = get_monitored_pairs(provider.clone()).await?;
+    println!("✅ Indexing {} Volatile Token Pairs.", monitored_pairs.len());
+
+    let graph = load_global_liquidity_graph();
+    println!("🌐 Global Liquidity Graph loaded with {} nodes.", graph.adjacency_list.len());
+
+    let contract_address = address!("457820b3D7d2d607AEEF8248B46Ffa6ccD60121A");
+    println!("📝 Target Contract Address: {:?}", contract_address);
+
+    let loan_amount = U256::from(1000000000000000000u64); // 1 WETH
+
+    println!("⚡ [Monitoring Mode Active] Scanning block state shifts for high-volatility spreads (> $8.0 or > 1%)...");
+
+    let mut interval = tokio::time::interval(Duration::from_millis(1000));
+    loop {
+        interval.tick().await;
+
+        for pair in &monitored_pairs {
+            let collapse_system = CausalCollapseSystem::new(
+                vec![],
+                vec![],
+                contract_address,
+                loan_amount,
+                WETH_BASE,
+                pair.clone(),
+                1.02, 
+                1.00,
+                2500.0,
+            );
+
+            let (targets, payloads) = collapse_system.execute_collapse();
+            if !targets.is_empty() {
+                println!("🎯 [Spread Detected] Dispatched Payload for {}. Payload Count: {}", pair.symbol, payloads.len());
+            }
+        }
+    }
 }

@@ -94,6 +94,16 @@ impl CausalCollapseSystem {
         }
     }
 
+    /// دالة حساب رسوم L1 Data Fee التقريبية بناءً على حجم الـ Payload (Calldata)
+    pub fn estimate_l1_data_fee(payload_len: usize) -> u256 {
+        // حساب تقريبي لرسوم نشر البيانات على L1 لشبكة Base بناءً على متوسط أسعار الكاز الحالي
+        let base_gas_per_byte = 16; 
+        let estimated_l1_gas = (payload_len as u64) * base_gas_per_byte;
+        // افتراض سعر غاز L1 مقارب لـ 15 Gwei
+        let l1_gas_price = 15_000_000_000u64;
+        U256::from(estimated_l1_gas) * U256::from(l1_gas_price) / U256::from(10_18_000_000_000u64) // تحويل تقريبي لـ USDC equivalents
+    }
+
     pub fn execute_collapse(&self) -> (Vec<Address>, Vec<Vec<u8>>) {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
@@ -103,12 +113,9 @@ impl CausalCollapseSystem {
         }
 
         let flash_loan_fee = self.loan_amount / U256::from(10000); // 0.01%
-        let target_repay_amount = self.loan_amount + flash_loan_fee;
         
         let loan_usdc_f64 = self.loan_amount.to_string().parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
 
-        // --- 💡 التوجيه الديناميكي المزدوج (Dynamic Routing) ---
-        // تحديد من الأرخص للشراء ومن الأغلى للبيع لحظياً
         let buy_on_univ3 = self.price_v3 < self.price_aero;
         let buy_price = if buy_on_univ3 { self.price_v3 } else { self.price_aero };
         let sell_price = if buy_on_univ3 { self.price_aero } else { self.price_v3 };
@@ -118,17 +125,21 @@ impl CausalCollapseSystem {
         let expected_target_units_u128 = (expected_target_tokens_f64 * target_decimals_multiplier) as u128;
         let expected_target_units = U256::from(expected_target_units_u128);
 
-        let min_amount_out_leg1 = expected_target_units * U256::from(9900) / U256::from(10000); 
-        let min_amount_out_leg2 = target_repay_amount + U256::from(150_000); // هامش أمان وربح
+        // حساب دقيق يضم رسوم الـ DEX الديناميكية (0.3% كحد أقصى لمجمعات Slipstream) + رسوم القرض الفلاشي
+        let dex_fee_allowance = self.loan_amount * U256::from(30) / U256::from(10000); // 0.3%
+        let target_repay_amount = self.loan_amount + flash_loan_fee + dex_fee_allowance;
+        
+        // إضافة هامش أمان صارم يشمل رسوم الـ L1 Data Fee والربح الصافي المستهدف
+        let min_amount_out_leg1 = expected_target_units * U256::from(9880) / U256::from(10000); 
+        let min_amount_out_leg2 = target_repay_amount + U256::from(500_000); // هامش أمان صافي يضمن عدم حدوث ArbitrageUnprofitable
 
         if buy_on_univ3 {
-            println!("   🧮 [Dynamic Route] BUY UniV3 (${:.2}) -> SELL Aero (${:.2})", buy_price, sell_price);
+            println!("   🧮 [Dynamic Route + L1 Fee Filter] BUY UniV3 (${:.2}) -> SELL Aero (${:.2})", buy_price, sell_price);
         } else {
-            println!("   🧮 [Dynamic Route] BUY Aero (${:.2}) -> SELL UniV3 (${:.2})", buy_price, sell_price);
+            println!("   🧮 [Dynamic Route + L1 Fee Filter] BUY Aero (${:.2}) -> SELL UniV3 (${:.2})", buy_price, sell_price);
         }
 
         if buy_on_univ3 {
-            // --- الاتجاه الأول: الشراء من UniV3 والبيع في Aero ---
             addresses.push(UNISWAP_V3_ROUTER);
             let mut path_bytes = Vec::new();
             path_bytes.extend_from_slice(self.borrowed_token.as_slice());
@@ -161,7 +172,6 @@ impl CausalCollapseSystem {
             }.abi_encode());
 
         } else {
-            // --- الاتجاه المعاكس: الشراء من Aero والبيع في UniV3 ---
             addresses.push(AERODROME_ROUTER);
             let aero_route = IAerodromeRouter::Route {
                 from: self.borrowed_token,
@@ -198,7 +208,6 @@ impl CausalCollapseSystem {
     }
 }
 
-// --- هياكل المراجحة المثلثية ---
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DexType {
     UniswapV3,
@@ -316,7 +325,7 @@ impl TriangularPayloadEncoder {
                 DexType::UniswapV3 | DexType::PancakeSwapV3 => UNISWAP_V3_ROUTER,
                 DexType::Aerodrome | DexType::BaseSwap => AERODROME_ROUTER,
             });
-            let min_out = current_amount * U256::from(9950) / U256::from(10000);
+            let min_out = current_amount * U256::from(9930) / U256::from(10000);
             match edge.pool.dex_type {
                 DexType::UniswapV3 | DexType::PancakeSwapV3 => {
                     let sub_path = Self::encode_v3_path(&[edge.clone()]);
@@ -579,11 +588,12 @@ where P: Provider<Ethereum> + Clone {
 
 async fn trigger_cross_dex_arbitrage<P, PP>(http_provider: P, private_provider: PP, contract_address: Address, signer_address: Address, spread_gap: f64, pair_cfg: &TokenPairConfig, price_aero: f64, price_v3: f64, target_price_usd: f64) -> Result<(), Box<dyn std::error::Error>>
 where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
-    if spread_gap < 3.5 { return Ok(()); }
+    // رفع عتبة التفعيل إلى $8 لضمان تغطية رسوم Aerodrome الديناميكية (0.3%) ورسوم L1 Data Fee
+    if spread_gap < 8.0 { return Ok(()); }
     
-    let base_multiplier = if spread_gap > 5.0 { 400.0 } else { 250.0 };
+    let base_multiplier = if spread_gap > 12.0 { 400.0 } else { 250.0 };
     let raw_loan = (spread_gap * base_multiplier) as u128 * 1_000_000;
-    let dynamic_loan = raw_loan.clamp(2_000_000_000, 5_000_000_000); // بين 2,000 و 5,000 USDC
+    let dynamic_loan = raw_loan.clamp(2_000_000_000, 5_000_000_000); 
     let loan_amount = U256::from(dynamic_loan);
 
     println!("🎯 [Cross-DEX {}] Gap: ${:.2} | Dynamic Loan: {} USDC... Simulating with EVM Trace...", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
@@ -619,11 +629,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
         }
         Err(contract_error) => {
             eprintln!("❌ [SIMULATION FAILED for {}]", pair_cfg.symbol);
-            eprintln!("   📦 Full Payload Hex: 0x{}", alloy::hex::encode(&swap_path_data));
-            
             if let Some(revert_bytes) = contract_error.as_revert_data() {
-                eprintln!("   🛑 Revert Data Bytes: 0x{}", alloy::hex::encode(&revert_bytes));
-                
                 if let Ok(err_decoded) = BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(revert_bytes.as_ref()) {
                     match err_decoded {
                         BaseAtomicArbitrage::BaseAtomicArbitrageErrors::ArbitrageUnprofitable(err_data) => {
@@ -634,7 +640,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
                         }
                     }
                 } else {
-                    eprintln!("   ⚠️ [Revert Reason]: Standard EVM revert or router rejection (Slippage/Pool check failed).");
+                    eprintln!("   ⚠️ [Revert Reason]: Standard EVM revert or router rejection.");
                 }
             } else {
                 eprintln!("   ⚠️ Contract Error (Transport/RPC): {:?}", contract_error);
@@ -675,12 +681,12 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Dual-Engine Bot with Dynamic Smart Routing & Diagnostics...");
+    println!("🤖 Initializing Dual-Engine Bot with Updated L1/DEX Fee Logic & Address...");
 
-    let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x66F860c8469e56b8Bb5aCab6baF9090e03b96F95".to_string());
+    let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
 
-    let primary_http_url = std::env::var("ALCHEMY_HTTP_URL").unwrap_or_else(|_| "https://mainnet.base.org".to_string());
+    let primary_http_url = std::env::var("ALCHEMY_HTTP_URL").unwrap_or_else(|_| "https://base-mainnet.g.alchemy.com/v2/alch_c3Z7QmOs3ZZFLUr0zngV6".to_string());
     let private_http_url = std::env::var("PRIVATE_RPC_URL").unwrap_or_else(|_| primary_http_url.clone());
     let alchemy_wss_url = std::env::var("ALCHEMY_WSS_URL").unwrap_or_else(|_| "ws://127.0.0.1:8545".to_string());
     let private_key_str = std::env::var("PRIVATE_KEY").unwrap_or_else(|_| "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string());
@@ -708,7 +714,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning with Dynamic Routing...", block_num, block_counter);
+        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning with L1/DEX Safeguards...", block_num, block_counter);
 
         let mut current_weth_price = 2425.0;
         if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {
@@ -725,7 +731,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pair.symbol, p_aero, p_v3, p_baseswap, p_pancake, spread_gap
                 );
 
-                if spread_gap >= 3.5 {
+                if spread_gap >= 8.0 {
                     let target_price = if p_v3 > 0.0 { p_v3 } else { current_weth_price };
                     let _ = trigger_cross_dex_arbitrage(
                         http_provider.clone(),

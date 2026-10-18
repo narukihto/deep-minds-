@@ -112,7 +112,6 @@ impl CausalCollapseSystem {
         let expected_target_units_u128 = (expected_target_tokens_f64 * target_decimals_multiplier) as u128;
         let expected_target_units = U256::from(expected_target_units_u128);
 
-        // تعديل طفيف لهامش الأمان للساق الأولى لضمان عدم رفض الراوتر
         let min_amount_out_leg1 = expected_target_units * U256::from(9940) / U256::from(10000); // 0.6% Slippage
         let min_amount_out_leg2 = target_repay_amount + U256::from(50); // ربح محاكاة آمن
 
@@ -555,13 +554,16 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     let target_path = system.execute_collapse();
     if target_path.0.is_empty() { return Ok(()); }
 
+    // حفظ الطول قبل استهلاك المتغير في الـ ABI
+    let targets_len = target_path.0.len();
+
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(target_path.0.into_iter().map(alloy::dyn_abi::DynSolValue::Address).collect()),
         alloy::dyn_abi::DynSolValue::Array(target_path.1.into_iter().map(alloy::dyn_abi::DynSolValue::Bytes).collect()),
     ]).abi_encode();
 
-    // طباعة تفاصيل الحمولة والمسارات للتشخيص الفوري
-    println!("   🔍 [Debug Payload]: Contract: {:?} | Loan: {} | Targets Count: {}", contract_address, loan_amount, target_path.0.len());
+    // طباعة تفاصيل الحمولة والمسارات للتشخيص الفوري باستخدام الطول المحفوظ مسبقاً
+    println!("   🔍 [Debug Payload]: Contract: {:?} | Loan: {} | Targets Count: {}", contract_address, loan_amount, targets_len);
 
     let contract_sim = BaseAtomicArbitrage::new(contract_address, http_provider);
     

@@ -509,21 +509,8 @@ fn calculate_v3_price_dynamic(sqrt_price_x96: _U160, pool_token0: Address, targe
 
     let calculated_usd = price_in_weth * weth_price_usd;
 
-    let final_price = match symbol {
-        "cbETH" => {
-            if calculated_usd > 15_000.0 || calculated_usd < 300.0 {
-                if price_in_weth > 0.0 { (1.0 / price_in_weth) * weth_price_usd } else { 2699.0 }
-            } else { calculated_usd }
-        }
-        "VIRTUAL" => {
-            if calculated_usd > 50.0 || calculated_usd < 0.01 {
-                0.6404
-            } else { calculated_usd }
-        }
-        _ => calculated_usd,
-    };
-
-    if final_price.is_finite() && final_price > 0.0 { final_price } else { 0.0 }
+    // تم إزالة القيم الافتراضية الثابتة لمنع توليد فجوات وهمية (Ghost Spreads)
+    if calculated_usd.is_finite() && calculated_usd > 0.0 { calculated_usd } else { 0.0 }
 }
 
 async fn fetch_live_market_data_for_pair<P>(http_provider: P, config: &TokenPairConfig, weth_price_usd: f64) -> Result<(f64, f64, f64, f64, f64), Box<dyn std::error::Error>>
@@ -544,12 +531,6 @@ where P: Provider<Ethereum> + Clone {
         }
     }
 
-    if price_aero <= 0.0 {
-        if config.symbol == "VIRTUAL" { price_aero = 0.6404; }
-        else if config.symbol == "cbETH" { price_aero = 2699.0; }
-        else if config.symbol == "WETH" { price_aero = weth_price_usd; }
-    }
-
     let mut price_v3 = 0.0;
     if config.uni_v3_pool != Address::ZERO {
         let v3_pool = IUniswapV3Pool::new(config.uni_v3_pool, http_provider.clone());
@@ -562,12 +543,15 @@ where P: Provider<Ethereum> + Clone {
     let price_baseswap = 0.0;
     let price_pancake = 0.0;
 
+    // استبعاد القيم الصفرية أو غير المحدثة حياً بالكامل
     let mut prices = vec![price_aero, price_v3];
     prices.retain(|&p| p > 0.000001 && p <= 100000.0);
 
-    let max_price = prices.iter().cloned().fold(0.0, f64::max);
-    let min_price = prices.iter().cloned().fold(f64::INFINITY, f64::min);
-    let spread_gap = if !prices.is_empty() && min_price != f64::INFINITY { max_price - min_price } else { 0.0 };
+    let spread_gap = if price_aero > 0.0 && price_v3 > 0.0 {
+        (price_aero - price_v3).abs()
+    } else {
+        0.0
+    };
 
     Ok((price_aero, price_v3, price_baseswap, price_pancake, spread_gap))
 }
@@ -580,7 +564,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     let dynamic_loan = raw_loan.clamp(1_000_000_000, 2_400_000_000); 
     let loan_amount = U256::from(dynamic_loan);
 
-    println!("🎯 [Cross-DEX {}] Gap: ${:.2} | Optimal Loan: {} USDC... Simulating...", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
+    println!("🎯 [Cross-DEX {}] Real Gap: ${:.2} | Optimal Loan: {} USDC... Simulating...", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
 
     let nodes = vec![QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000), frequency: spread_gap, token0: USDC_BASE, token1: pair_cfg.target_token }];
     let system = CausalCollapseSystem::new(nodes, vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, AERODROME_ROUTER], contract_address, loan_amount, USDC_BASE, pair_cfg.clone(), price_aero, price_v3, target_price_usd);
@@ -700,7 +684,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         for pair in &monitored_pairs {
             if let Ok((p_aero, p_v3, _p_baseswap, _p_pancake, spread_gap)) = fetch_live_market_data_for_pair(http_provider.clone(), pair, current_weth_price).await {
-                // تم تنقية السطر وإزالة الرمز الزائد
                 println!(
                     " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} | Max Gap: ${:.2}",
                     pair.symbol, p_aero, p_v3, spread_gap

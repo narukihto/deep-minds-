@@ -22,10 +22,12 @@ pub const CBETH_BASE: Address = address!("2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc
 pub const VIRTUAL_BASE: Address = address!("0b3e328455c4059EEb9e3f84b5543F74E24e7E1b");
 
 const UNISWAP_V3_FACTORY: Address = address!("33128a8fC17869897dcE68Ed026d694621f6FDfD");
-const UNISWAP_V3_ROUTER: Address = address!("2626664c2603336E57B271c5C0b26F421741e481");
-const AERODROME_ROUTER: Address = address!("cF77a3Ba9Aab7D3E44917635033322DF3f564171");
+
+// العناوين المطابقة 100% للعقد المنشور
+const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
+const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
 const AERODROME_V2_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFECe40Da");
-const PANCAKESWAP_V3_ROUTER: Address = address!("1b81D678ffb9C0263b24A97847620C99d213eB14"); 
+const PANCAKESWAP_V3_ROUTER: Address = address!("0x1b81D678ffb9C0263b24A97847620C99d213eB14"); 
 
 #[derive(Debug, Clone)]
 pub struct TokenPairConfig {
@@ -423,7 +425,7 @@ where P: Provider<Ethereum> + Clone {
         TokenPairConfig {
             symbol: "WETH",
             target_token: WETH_BASE,
-            aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"), // مجمع V2 المباشر لـ WETH/USDC
+            aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"),
             uni_v3_pool: fetch_v3_pool(&uni_factory, WETH_BASE, USDC_BASE, fee_tier_500).await,
             baseswap_pool: Address::ZERO,
             pancakeswap_pool: Address::ZERO,
@@ -431,7 +433,7 @@ where P: Provider<Ethereum> + Clone {
             fee_tier_v3: 500,
             token0: WETH_BASE,
             token1: USDC_BASE,
-            is_v3_aero: false, // V2 متوافق مع getReserves
+            is_v3_aero: false,
             is_v3_baseswap: false,
         },
         TokenPairConfig {
@@ -445,7 +447,7 @@ where P: Provider<Ethereum> + Clone {
             fee_tier_v3: 10000,
             token0: VIRTUAL_BASE,
             token1: WETH_BASE,
-            is_v3_aero: true, // V3 / Slipstream
+            is_v3_aero: true,
             is_v3_baseswap: false,
         },
         TokenPairConfig {
@@ -459,7 +461,7 @@ where P: Provider<Ethereum> + Clone {
             fee_tier_v3: 500,
             token0: CBETH_BASE,
             token1: WETH_BASE,
-            is_v3_aero: true, // V3 / Slipstream
+            is_v3_aero: true,
             is_v3_baseswap: false,
         },
     ])
@@ -487,7 +489,7 @@ fn calculate_v2_price(reserve0: u128, reserve1: u128, token0: Address, token1: A
 fn calculate_v3_price_dynamic(sqrt_price_x96: _U160, pool_token0: Address, target_token: Address, weth_price_usd: f64, symbol: &str) -> f64 {
     let sqrt_f64 = sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0);
     if sqrt_f64 <= 0.0 { return 0.0; }
-    
+
     let ratio = sqrt_f64 / 2.0f64.powi(96);
     let price_raw = ratio * ratio;
     if price_raw <= 0.0 { return 0.0; }
@@ -542,7 +544,6 @@ where P: Provider<Ethereum> + Clone {
         }
     }
 
-    // Fallbacks آمنة تضمن عدم بقاء السعر صفرًا نهائياً
     if price_aero <= 0.0 {
         if config.symbol == "VIRTUAL" { price_aero = 0.6404; }
         else if config.symbol == "cbETH" { price_aero = 2699.0; }

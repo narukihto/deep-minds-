@@ -9,6 +9,7 @@ use alloy::{
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256, Bytes, Uint},
     sol,
+    sol_types::{SolCall, SolInterface}, // <-- تم إضافة استيراد الـ Traits المطلوبة لحل كل الأخطاء
 };
 use std::collections::HashMap;
 
@@ -660,7 +661,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Dual-Engine Bot with Updated L1/DEX Fee Logic...");
+    println!("🤖 Initializing Dual-Engine Bot with SolCall & SolInterface Imports...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -673,7 +674,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let signer = PrivateKeySigner::from_str(&private_key_str)?;
     let signer_address = signer.address();
     
-    // استخدام connect_http للتوافق التام مع مكتبة alloy الحديثة
     let http_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_http(primary_http_url.parse()?);
     let private_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_http(private_http_url.parse()?);
 

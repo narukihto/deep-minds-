@@ -109,7 +109,7 @@ impl CausalCollapseSystem {
         let loan_usdc_f64 = self.loan_amount.to_string().parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
         let buy_on_univ3 = self.price_v3 < self.price_aero;
         let buy_price = if buy_on_univ3 { self.price_v3 } else { self.price_aero };
-        let sell_price = if buy_on_univ3 { self.price_aero } else { self.price_v3 };
+        let _sell_price = if buy_on_univ3 { self.price_aero } else { self.price_v3 };
 
         let expected_target_tokens_f64 = loan_usdc_f64 / buy_price;
         let target_decimals_multiplier = 10f64.powi(self.pair_config.decimals as i32);
@@ -412,7 +412,8 @@ where P: Provider<Ethereum> + Clone {
     let fee_tier_10000 = _U24::from(10000);
     let fee_tier_500 = _U24::from(500);
 
-    let get_v3_pool = |token_a, token_b, fee| async {
+    // تمت إضافة `move` هنا لحل مشكلة Borrow Checker بشكل نهائي
+    let get_v3_pool = move |token_a, token_b, fee| async move {
         match uni_factory.getPool(token_a, token_b, fee).call().await {
             Ok(res) => { let addr: Address = res.0.into(); addr },
             Err(_) => Address::ZERO,
@@ -573,8 +574,8 @@ where P: Provider<Ethereum> + Clone {
         }
     }
 
-    let mut price_baseswap = 0.0;
-    let mut price_pancake = 0.0;
+    let price_baseswap = 0.0;
+    let price_pancake = 0.0;
 
     let mut prices = vec![price_aero, price_v3];
     prices.retain(|&p| p > 0.0000001 && p <= 100000.0);
@@ -714,9 +715,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         for pair in &monitored_pairs {
-            if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(http_provider.clone(), pair, current_weth_price).await {
+            if let Ok((p_aero, p_v3, _p_baseswap, _p_pancake, spread_gap)) = fetch_live_market_data_for_pair(http_provider.clone(), pair, current_weth_price).await {
                 println!(
-                    " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} | Max Gap: ${:.2}",
+                    " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} \vert{} Max Gap:${:.2}",
                     pair.symbol, p_aero, p_v3, spread_gap
                 );
 

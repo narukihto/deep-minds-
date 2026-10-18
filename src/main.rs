@@ -16,7 +16,6 @@ use std::collections::HashMap;
 type _U24 = Uint<24, 1>;
 type _U160 = Uint<160, 3>;
 
-// --- [Target Tokens Registry on Base Mainnet] ---
 pub const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
 pub const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
 pub const CBETH_BASE: Address = address!("2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22");
@@ -26,7 +25,7 @@ pub const BRETT_BASE: Address = address!("532f27101965dd16442E59d40670FaF5ebb142
 pub const VIRTUAL_BASE: Address = address!("0b3e328455c4059EEb9e3f84b5543F74E24e7E1b");
 pub const DAI_BASE: Address = address!("50c5725949a6f0c72e6c4a641f24049a917db0cb");
 
-// --- [DEX Factories & Routers on Base] ---
+const UNISWAP_V3_FACTORY: Address = address!("33128a8fC17869897dcE68Ed026d694621f6FDfD");
 const UNISWAP_V3_ROUTER: Address = address!("cf77A3bA9Aab7D3E44917635033322DF3f564171");
 const AERODROME_ROUTER: Address = address!("2626664c2603336E57B271c5C0b26F421741e481");
 const AERODROME_V2_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFECe40Da");
@@ -98,13 +97,6 @@ impl CausalCollapseSystem {
         }
     }
 
-    pub fn estimate_l1_data_fee(payload_len: usize) -> U256 {
-        let base_gas_per_byte = 16; 
-        let estimated_l1_gas = (payload_len as u64) * base_gas_per_byte;
-        let l1_gas_price = 15_000_000_000u64;
-        U256::from(estimated_l1_gas) * U256::from(l1_gas_price) / U256::from(10_18_000_000_000u64)
-    }
-
     pub fn execute_collapse(&self) -> (Vec<Address>, Vec<Vec<u8>>) {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
@@ -115,7 +107,6 @@ impl CausalCollapseSystem {
 
         let flash_loan_fee = self.loan_amount / U256::from(10000); 
         let loan_usdc_f64 = self.loan_amount.to_string().parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
-
         let buy_on_univ3 = self.price_v3 < self.price_aero;
         let buy_price = if buy_on_univ3 { self.price_v3 } else { self.price_aero };
         let sell_price = if buy_on_univ3 { self.price_aero } else { self.price_v3 };
@@ -133,7 +124,6 @@ impl CausalCollapseSystem {
         let min_amount_out_leg2 = target_repay_amount + U256::from(1_000_000);
 
         if buy_on_univ3 {
-            println!("   🧮 [Volatile Route Execution] BUY UniV3/Pancake (${:.4}) -> SELL Aero Slipstream (${:.4})", buy_price, sell_price);
             addresses.push(UNISWAP_V3_ROUTER);
             let mut path_bytes = Vec::new();
             path_bytes.extend_from_slice(self.borrowed_token.as_slice());
@@ -165,7 +155,6 @@ impl CausalCollapseSystem {
                 deadline: U256::from(u64::MAX),
             }.abi_encode());
         } else {
-            println!("   🧮 [Volatile Route Execution] BUY Aero Slipstream (${:.4}) -> SELL UniV3/Pancake (${:.4})", buy_price, sell_price);
             addresses.push(AERODROME_ROUTER);
             let aero_route = IAerodromeRouter::Route {
                 from: self.borrowed_token,
@@ -293,10 +282,6 @@ pub fn load_global_liquidity_graph() -> ArbitrageGraph {
     let mut graph = ArbitrageGraph::new();
     graph.add_pool(Pool { id: address!("7f6dBb6fa91176b6C1Ad3767B40A39c294136C70"), token0: AERO_BASE, token1: WETH_BASE, dex_type: DexType::Aerodrome, fee: 3000 });
     graph.add_pool(Pool { id: address!("c949e29eeE91696AFBceC1E0A0c5a2789BeD6F39"), token0: AERO_BASE, token1: WETH_BASE, dex_type: DexType::UniswapV3, fee: 3000 });
-    graph.add_pool(Pool { id: address!("c9034c3E7F30f1465BE755519f4007dfA0944F3d"), token0: DEGEN_BASE, token1: WETH_BASE, dex_type: DexType::UniswapV3, fee: 10000 });
-    graph.add_pool(Pool { id: address!("51E2Eb7A31853B0B7F83296c0D29E8FdEb57a7da"), token0: DEGEN_BASE, token1: WETH_BASE, dex_type: DexType::Aerodrome, fee: 10000 });
-    graph.add_pool(Pool { id: address!("bBe0Cd428230fb1D97475FfeEE892Ea79B625890"), token0: BRETT_BASE, token1: WETH_BASE, dex_type: DexType::UniswapV3, fee: 10000 });
-    graph.add_pool(Pool { id: address!("89EfE9110B7f8303C0D62d2CE351df7161b9BdA0"), token0: VIRTUAL_BASE, token1: WETH_BASE, dex_type: DexType::UniswapV3, fee: 10000 });
     graph
 }
 
@@ -420,14 +405,40 @@ sol! {
     }
 }
 
-async fn get_monitored_pairs<P>(_http_provider: P) -> Result<Vec<TokenPairConfig>, Box<dyn std::error::Error>>
+async fn get_monitored_pairs<P>(http_provider: P) -> Result<Vec<TokenPairConfig>, Box<dyn std::error::Error>>
 where P: Provider<Ethereum> + Clone {
+    let uni_factory = IUniswapV3Factory::new(UNISWAP_V3_FACTORY, http_provider.clone());
+    let fee_tier_3000 = _U24::from(3000);
+    let fee_tier_10000 = _U24::from(10000);
+    let fee_tier_500 = _U24::from(500);
+
+    let get_v3_pool = |token_a, token_b, fee| async {
+        match uni_factory.getPool(token_a, token_b, fee).call().await {
+            Ok(res) => { let addr: Address = res.0.into(); addr },
+            Err(_) => Address::ZERO,
+        }
+    };
+
     Ok(vec![
+        TokenPairConfig {
+            symbol: "WETH",
+            target_token: WETH_BASE,
+            aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"),
+            uni_v3_pool: get_v3_pool(WETH_BASE, USDC_BASE, fee_tier_500).await,
+            baseswap_pool: Address::ZERO,
+            pancakeswap_pool: Address::ZERO,
+            decimals: 18,
+            fee_tier_v3: 500,
+            token0: WETH_BASE,
+            token1: USDC_BASE,
+            is_v3_aero: false,
+            is_v3_baseswap: false,
+        },
         TokenPairConfig {
             symbol: "AERO",
             target_token: AERO_BASE,
             aero_pool: address!("7f6dBb6fa91176b6C1Ad3767B40A39c294136C70"),
-            uni_v3_pool: address!("c949e29eeE91696AFBceC1E0A0c5a2789BeD6F39"),
+            uni_v3_pool: get_v3_pool(AERO_BASE, WETH_BASE, fee_tier_3000).await,
             baseswap_pool: Address::ZERO,
             pancakeswap_pool: Address::ZERO,
             decimals: 18,
@@ -441,7 +452,7 @@ where P: Provider<Ethereum> + Clone {
             symbol: "DEGEN",
             target_token: DEGEN_BASE,
             aero_pool: address!("51E2Eb7A31853B0B7F83296c0D29E8FdEb57a7da"),
-            uni_v3_pool: address!("c9034c3E7F30f1465BE755519f4007dfA0944F3d"),
+            uni_v3_pool: get_v3_pool(DEGEN_BASE, WETH_BASE, fee_tier_10000).await,
             baseswap_pool: Address::ZERO,
             pancakeswap_pool: Address::ZERO,
             decimals: 18,
@@ -455,7 +466,7 @@ where P: Provider<Ethereum> + Clone {
             symbol: "BRETT",
             target_token: BRETT_BASE,
             aero_pool: Address::ZERO,
-            uni_v3_pool: address!("bBe0Cd428230fb1D97475FfeEE892Ea79B625890"),
+            uni_v3_pool: get_v3_pool(BRETT_BASE, WETH_BASE, fee_tier_10000).await,
             baseswap_pool: Address::ZERO,
             pancakeswap_pool: Address::ZERO,
             decimals: 18,
@@ -469,7 +480,7 @@ where P: Provider<Ethereum> + Clone {
             symbol: "VIRTUAL",
             target_token: VIRTUAL_BASE,
             aero_pool: Address::ZERO,
-            uni_v3_pool: address!("89EfE9110B7f8303C0D62d2CE351df7161b9BdA0"),
+            uni_v3_pool: get_v3_pool(VIRTUAL_BASE, WETH_BASE, fee_tier_10000).await,
             baseswap_pool: Address::ZERO,
             pancakeswap_pool: Address::ZERO,
             decimals: 18,
@@ -483,9 +494,9 @@ where P: Provider<Ethereum> + Clone {
             symbol: "cbETH",
             target_token: CBETH_BASE,
             aero_pool: address!("47cA96EA59C13f72745928887F84c9F52C3D7348"),
-            uni_v3_pool: address!("19a0aef6613524ea0761646a6a4e4be0e114a3c8"),
+            uni_v3_pool: get_v3_pool(WETH_BASE, CBETH_BASE, fee_tier_500).await,
             baseswap_pool: Address::ZERO,
-            pancakeswap_pool: address!("B5B59c29F257Ddf68b55dfdfcdCD449485BDC87E"),
+            pancakeswap_pool: Address::ZERO,
             decimals: 18,
             fee_tier_v3: 500,
             token0: WETH_BASE,
@@ -540,42 +551,33 @@ fn calculate_v3_price(sqrt_price_x96: _U160, token0: Address, token1: Address, t
 async fn fetch_live_market_data_for_pair<P>(http_provider: P, config: &TokenPairConfig, weth_price_usd: f64) -> Result<(f64, f64, f64, f64, f64), Box<dyn std::error::Error>>
 where P: Provider<Ethereum> + Clone {
     let mut price_aero = 0.0;
-    if config.is_v3_aero {
-        let v3_pool = IUniswapV3Pool::new(config.aero_pool, http_provider.clone());
-        if let Ok(slot0) = v3_pool.slot0().call().await {
-            price_aero = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals, weth_price_usd);
-        }
-    } else {
-        let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
-        if let Ok(res) = aero_pair.getReserves().call().await {
-            price_aero = calculate_v2_price(res.reserve0.to::<u128>(), res.reserve1.to::<u128>(), config.token0, config.token1, config.decimals, weth_price_usd);
+    if config.aero_pool != Address::ZERO {
+        if config.is_v3_aero {
+            let v3_pool = IUniswapV3Pool::new(config.aero_pool, http_provider.clone());
+            if let Ok(slot0) = v3_pool.slot0().call().await {
+                price_aero = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals, weth_price_usd);
+            }
+        } else {
+            let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
+            if let Ok(res) = aero_pair.getReserves().call().await {
+                price_aero = calculate_v2_price(res.reserve0.to::<u128>(), res.reserve1.to::<u128>(), config.token0, config.token1, config.decimals, weth_price_usd);
+            }
         }
     }
 
     let mut price_v3 = 0.0;
-    let v3_pool = IUniswapV3Pool::new(config.uni_v3_pool, http_provider.clone());
-    if let Ok(slot0) = v3_pool.slot0().call().await {
-        price_v3 = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals, weth_price_usd);
+    if config.uni_v3_pool != Address::ZERO {
+        let v3_pool = IUniswapV3Pool::new(config.uni_v3_pool, http_provider.clone());
+        if let Ok(slot0) = v3_pool.slot0().call().await {
+            price_v3 = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals, weth_price_usd);
+        }
     }
 
     let mut price_baseswap = 0.0;
-    if config.baseswap_pool != Address::ZERO {
-        let baseswap_pair = IUniswapV2Pair::new(config.baseswap_pool, http_provider.clone());
-        if let Ok(res) = baseswap_pair.getReserves().call().await {
-            price_baseswap = calculate_v2_price(res.reserve0.to::<u128>(), res.reserve1.to::<u128>(), config.token0, config.token1, config.decimals, weth_price_usd);
-        }
-    }
-
     let mut price_pancake = 0.0;
-    if config.pancakeswap_pool != Address::ZERO {
-        let pancake_pool = IUniswapV3Pool::new(config.pancakeswap_pool, http_provider.clone());
-        if let Ok(slot0) = pancake_pool.slot0().call().await {
-            price_pancake = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals, weth_price_usd);
-        }
-    }
 
-    let mut prices = vec![price_aero, price_v3, price_baseswap, price_pancake];
-    prices.retain(|&p| p > 0.000001 && p <= 100000.0);
+    let mut prices = vec![price_aero, price_v3];
+    prices.retain(|&p| p > 0.0000001 && p <= 100000.0);
 
     let max_price = prices.iter().cloned().fold(0.0, f64::max);
     let min_price = prices.iter().cloned().fold(f64::INFINITY, f64::min);
@@ -596,7 +598,6 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     println!("🎯 [Cross-DEX {}] Gap: ${:.2} | Dynamic Loan: {} USDC... Simulating...", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
 
     let nodes = vec![QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000), frequency: spread_gap, token0: USDC_BASE, token1: pair_cfg.target_token }];
-    // تم إصلاح مصفوفة المسارات هنا بإزالة BASESWAP_ROUTER غير المعرف واستخدام الrouters المتاحة فقط
     let system = CausalCollapseSystem::new(nodes, vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, AERODROME_ROUTER], contract_address, loan_amount, USDC_BASE, pair_cfg.clone(), price_aero, price_v3, target_price_usd);
     let target_path = system.execute_collapse();
     if target_path.0.is_empty() { return Ok(()); }
@@ -670,7 +671,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Bot with Full Long-Tail Tokens & Triangular Engine...");
+    println!("🤖 Initializing Bot with Dynamic Pool Discovery & Live Markets...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -703,20 +704,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Long-Tail & Triangular Pairs...", block_num, block_counter);
+        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Live Market Prices...", block_num, block_counter);
 
         let mut current_weth_price = 2425.0;
+        if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {
+            if let Ok((_, p_v3, _, _, _)) = fetch_live_market_data_for_pair(http_provider.clone(), weth_pair, 1.0).await {
+                if p_v3 > 0.0 { current_weth_price = p_v3; }
+            }
+        }
 
         for pair in &monitored_pairs {
             if let Ok((p_aero, p_v3, p_baseswap, p_pancake, spread_gap)) = fetch_live_market_data_for_pair(http_provider.clone(), pair, current_weth_price).await {
                 println!(
-                    " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} | BaseSwap: ${:.4} | Pancake: ${:.4} | Max Gap: ${:.2}",
-                    pair.symbol, p_aero, p_v3, p_baseswap, p_pancake, spread_gap
+                    " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} | Max Gap: ${:.2}",
+                    pair.symbol, p_aero, p_v3, spread_gap
                 );
-
-                if pair.symbol == "WETH" && p_v3 > 0.0 {
-                    current_weth_price = p_v3;
-                }
 
                 if spread_gap >= 8.0 {
                     let target_price = if p_v3 > 0.0 { p_v3 } else { current_weth_price };

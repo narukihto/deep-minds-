@@ -8,14 +8,14 @@ use alloy::{
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256, Bytes, Uint},
-    sol, sol_types::{SolCall, SolInterface},
+    sol,
 };
 use std::collections::HashMap;
 
 type _U24 = Uint<24, 1>;
 type _U160 = Uint<160, 3>;
 
-const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
+const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
 const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
 const CBETH_BASE: Address = address!("2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22"); 
 const DAI_BASE: Address = address!("50c5725949a6f0c72e6c4a641f24049a917db0cb");
@@ -94,14 +94,11 @@ impl CausalCollapseSystem {
         }
     }
 
-    /// دالة حساب رسوم L1 Data Fee التقريبية بناءً على حجم الـ Payload (Calldata)
     pub fn estimate_l1_data_fee(payload_len: usize) -> U256 {
-        // حساب تقريبي لرسوم نشر البيانات على L1 لشبكة Base بناءً على متوسط أسعار الكاز الحالي
         let base_gas_per_byte = 16; 
         let estimated_l1_gas = (payload_len as u64) * base_gas_per_byte;
-        // افتراض سعر غاز L1 مقارب لـ 15 Gwei
         let l1_gas_price = 15_000_000_000u64;
-        U256::from(estimated_l1_gas) * U256::from(l1_gas_price) / U256::from(10_18_000_000_000u64) // تحويل تقريبي لـ USDC equivalents
+        U256::from(estimated_l1_gas) * U256::from(l1_gas_price) / U256::from(10_18_000_000_000u64)
     }
 
     pub fn execute_collapse(&self) -> (Vec<Address>, Vec<Vec<u8>>) {
@@ -113,7 +110,6 @@ impl CausalCollapseSystem {
         }
 
         let flash_loan_fee = self.loan_amount / U256::from(10000); // 0.01%
-
         let loan_usdc_f64 = self.loan_amount.to_string().parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
 
         let buy_on_univ3 = self.price_v3 < self.price_aero;
@@ -125,21 +121,14 @@ impl CausalCollapseSystem {
         let expected_target_units_u128 = (expected_target_tokens_f64 * target_decimals_multiplier) as u128;
         let expected_target_units = U256::from(expected_target_units_u128);
 
-        // حساب دقيق يضم رسوم الـ DEX الديناميكية (0.3% كحد أقصى لمجمعات Slipstream) + رسوم القرض الفلاشي
         let dex_fee_allowance = self.loan_amount * U256::from(30) / U256::from(10000); // 0.3%
         let target_repay_amount = self.loan_amount + flash_loan_fee + dex_fee_allowance;
 
-        // إضافة هامش أمان صارم يشمل رسوم الـ L1 Data Fee والربح الصافي المستهدف
         let min_amount_out_leg1 = expected_target_units * U256::from(9880) / U256::from(10000); 
-        let min_amount_out_leg2 = target_repay_amount + U256::from(500_000); // هامش أمان صافي يضمن عدم حدوث ArbitrageUnprofitable
+        let min_amount_out_leg2 = target_repay_amount + U256::from(500_000);
 
         if buy_on_univ3 {
             println!("   🧮 [Dynamic Route + L1 Fee Filter] BUY UniV3 (${:.2}) -> SELL Aero (${:.2})", buy_price, sell_price);
-        } else {
-            println!("   🧮 [Dynamic Route + L1 Fee Filter] BUY Aero (${:.2}) -> SELL UniV3 (${:.2})", buy_price, sell_price);
-        }
-
-        if buy_on_univ3 {
             addresses.push(UNISWAP_V3_ROUTER);
             let mut path_bytes = Vec::new();
             path_bytes.extend_from_slice(self.borrowed_token.as_slice());
@@ -170,8 +159,8 @@ impl CausalCollapseSystem {
                 to: self.contract_address,
                 deadline: U256::from(u64::MAX),
             }.abi_encode());
-
         } else {
+            println!("   🧮 [Dynamic Route + L1 Fee Filter] BUY Aero (${:.2}) -> SELL UniV3 (${:.2})", buy_price, sell_price);
             addresses.push(AERODROME_ROUTER);
             let aero_route = IAerodromeRouter::Route {
                 from: self.borrowed_token,
@@ -595,24 +584,19 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     let dynamic_loan = raw_loan.clamp(2_000_000_000, 5_000_000_000); 
     let loan_amount = U256::from(dynamic_loan);
 
-    println!("🎯 [Cross-DEX {}] Gap: ${:.2} | Dynamic Loan: {} USDC... Simulating with EVM Trace...", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
+    println!("🎯 [Cross-DEX {}] Gap: ${:.2} | Dynamic Loan: {} USDC... Simulating...", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
 
     let nodes = vec![QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000), frequency: spread_gap, token0: USDC_BASE, token1: pair_cfg.target_token }];
     let system = CausalCollapseSystem::new(nodes, vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, BASESWAP_ROUTER, AERODROME_ROUTER], contract_address, loan_amount, USDC_BASE, pair_cfg.clone(), price_aero, price_v3, target_price_usd);
     let target_path = system.execute_collapse();
     if target_path.0.is_empty() { return Ok(()); }
 
-    let targets_len = target_path.0.len();
-
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
         alloy::dyn_abi::DynSolValue::Array(target_path.0.into_iter().map(alloy::dyn_abi::DynSolValue::Address).collect()),
         alloy::dyn_abi::DynSolValue::Array(target_path.1.into_iter().map(alloy::dyn_abi::DynSolValue::Bytes).collect()),
     ]).abi_encode();
 
-    println!("   🔍 [Debug Payload]: Contract: {:?} | Loan: {} | Targets Count: {}", contract_address, loan_amount, targets_len);
-
     let contract_sim = BaseAtomicArbitrage::new(contract_address, http_provider);
-
     let simulation_call = contract_sim
         .triggerBalancerArbitrage(USDC_BASE, loan_amount, swap_path_data.clone().into())
         .from(signer_address)
@@ -620,7 +604,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
     match simulation_call.call().await {
         Ok(_) => {
-            println!("🎉 [Cross-DEX SIMULATION PASSED!] Dispatching via Private RPC...");
+            println!("🎉 [SIMULATION PASSED!] Dispatching via Private RPC...");
             let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider);
             if let Ok(tx) = contract_private.triggerBalancerArbitrage(USDC_BASE, loan_amount, swap_path_data.into()).from(signer_address).gas(1_500_000).send().await {
                 println!("🚀 [Dispatched] Hash: {:?}", tx.tx_hash());
@@ -632,17 +616,13 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
                 if let Ok(err_decoded) = BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(revert_bytes.as_ref()) {
                     match err_decoded {
                         BaseAtomicArbitrage::BaseAtomicArbitrageErrors::ArbitrageUnprofitable(err_data) => {
-                            eprintln!("   💰 [Revert Reason]: ArbitrageUnprofitable! Required: {}, Actual: {}", err_data.required, err_data.actual);
+                            eprintln!("   💰 [Revert]: ArbitrageUnprofitable! Required: {}, Actual: {}", err_data.required, err_data.actual);
                         }
                         BaseAtomicArbitrage::BaseAtomicArbitrageErrors::InsufficientLiquidity(_) => {
-                            eprintln!("   💧 [Revert Reason]: InsufficientLiquidity!");
+                            eprintln!("   💧 [Revert]: InsufficientLiquidity!");
                         }
                     }
-                } else {
-                    eprintln!("   ⚠️ [Revert Reason]: Standard EVM revert or router rejection.");
                 }
-            } else {
-                eprintln!("   ⚠️ Contract Error (Transport/RPC): {:?}", contract_error);
             }
         }
     }
@@ -680,7 +660,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Dual-Engine Bot with Updated L1/DEX Fee Logic & Address...");
+    println!("🤖 Initializing Dual-Engine Bot with Updated L1/DEX Fee Logic...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -692,6 +672,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let signer = PrivateKeySigner::from_str(&private_key_str)?;
     let signer_address = signer.address();
+    
+    // تم تصحيح دالة الاتصال هنا لتتوافق مع أحدث إصدارات alloy
     let http_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_http(primary_http_url.parse()?);
     let private_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_http(private_http_url.parse()?);
 
@@ -713,7 +695,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning with L1/DEX Safeguards...", block_num, block_counter);
+        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning...", block_num, block_counter);
 
         let mut current_weth_price = 2425.0;
         if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {

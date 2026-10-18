@@ -16,18 +16,20 @@ use std::collections::HashMap;
 type _U24 = Uint<24, 1>;
 type _U160 = Uint<160, 3>;
 
+// --- [Target Tokens Registry on Base Mainnet - Verified] ---
 pub const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
 pub const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
 pub const CBETH_BASE: Address = address!("2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22");
-pub const AERO_BASE: Address = address!("94017f86360288571845a7443274e0d49a79e2c1");
+pub const AERO_BASE: Address = address!("940181a94A35A4569E4529A3CDfB74e38FD98631"); // <-- تم التصحيح بدقة
 pub const DEGEN_BASE: Address = address!("4ed4E862860beD51a9570b96d89aF5E1B0Efefed");
 pub const BRETT_BASE: Address = address!("532f27101965dd16442E59d40670FaF5ebb142E4");
 pub const VIRTUAL_BASE: Address = address!("0b3e328455c4059EEb9e3f84b5543F74E24e7E1b");
 pub const DAI_BASE: Address = address!("50c5725949a6f0c72e6c4a641f24049a917db0cb");
 
+// --- [DEX Factories & Routers on Base - Verified & Corrected] ---
 const UNISWAP_V3_FACTORY: Address = address!("33128a8fC17869897dcE68Ed026d694621f6FDfD");
-const UNISWAP_V3_ROUTER: Address = address!("cf77A3bA9Aab7D3E44917635033322DF3f564171");
-const AERODROME_ROUTER: Address = address!("2626664c2603336E57B271c5C0b26F421741e481");
+const UNISWAP_V3_ROUTER: Address = address!("2626664c2603336E57B271c5C0b26F421741e481"); // <-- تم التصحيح
+const AERODROME_ROUTER: Address = address!("cF77a3Ba9Aab7D3E44917635033322DF3f564171"); // <-- تم التصحيح
 const AERODROME_V2_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFECe40Da");
 const PANCAKESWAP_V3_ROUTER: Address = address!("1b81D678ffb9C0263b24A97847620C99d213eB14"); 
 
@@ -412,7 +414,6 @@ where P: Provider<Ethereum> + Clone {
     let fee_tier_10000 = _U24::from(10000);
     let fee_tier_500 = _U24::from(500);
 
-    // تمت إضافة `move` هنا لحل مشكلة Borrow Checker بشكل نهائي
     let get_v3_pool = move |token_a, token_b, fee| async move {
         match uni_factory.getPool(token_a, token_b, fee).call().await {
             Ok(res) => { let addr: Address = res.0.into(); addr },
@@ -672,7 +673,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Bot with Dynamic Pool Discovery & Live Markets...");
+    println!("🤖 Initializing Bot with Verified Base Addresses & Live Markets...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -705,7 +706,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Live Market Prices...", block_num, block_counter);
+        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Verified Live Market Prices...", block_num, block_counter);
 
         let mut current_weth_price = 2425.0;
         if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {
@@ -717,7 +718,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for pair in &monitored_pairs {
             if let Ok((p_aero, p_v3, _p_baseswap, _p_pancake, spread_gap)) = fetch_live_market_data_for_pair(http_provider.clone(), pair, current_weth_price).await {
                 println!(
-                    " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} \vert{} Max Gap:${:.2}",
+                    " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} | Max Gap: ${:.2}",
                     pair.symbol, p_aero, p_v3, spread_gap
                 );
 

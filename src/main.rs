@@ -106,59 +106,63 @@ impl CausalCollapseSystem {
         let target_repay_amount = self.loan_amount + flash_loan_fee;
         
         let loan_usdc_f64 = self.loan_amount.to_string().parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
-        let expected_target_tokens_f64 = loan_usdc_f64 / self.current_target_price_usd;
+        
+        // حساب المتوقع بناءً على سعر الشراء المنخفض من Uniswap V3
+        let buy_price = if self.price_v3 > 0.0 { self.price_v3 } else { self.current_target_price_usd };
+        let expected_target_tokens_f64 = loan_usdc_f64 / buy_price;
         
         let target_decimals_multiplier = 10f64.powi(self.pair_config.decimals as i32);
         let expected_target_units_u128 = (expected_target_tokens_f64 * target_decimals_multiplier) as u128;
         let expected_target_units = U256::from(expected_target_units_u128);
 
-        // 🛠️ تعديل الانزلاق للساق الأولى في Aerodrome إلى 97.5% لامتصاص أي تذبذب لحظي في مجمع السحب
-        let min_amount_out_leg1 = expected_target_units * U256::from(9750) / U256::from(10000); 
+        // الحد الأدنى المستهدف للشراء من Uniswap V3 (مع نسبة انزلاق 1.0%)
+        let min_amount_out_leg1 = expected_target_units * U256::from(9900) / U256::from(10000); 
         
-        // 🛠️ هامش ربح إلزامي فوق قيمة السداد لتجاوز شرط ArbitrageUnprofitable في العقد الذكي
-        let min_amount_out_leg2 = target_repay_amount + U256::from(500_000); 
+        // الحد الأدنى لاستلام USDC من Aerodrome بعد السداد وتحقيق أرباح
+        let min_amount_out_leg2 = target_repay_amount + U256::from(100_000); // هامش أمان $0.10 فوق السداد
 
-        println!("   🧮 [Calc Debug] Loan Repay Needed: {} | Leg1 MinOut WETH (97.5%): {} | Leg2 MinOut USDC (With Profit): {}", 
+        println!("   🧮 [Direction Fix] Buying on UniV3 (${:.2}) -> Selling on Aero (${:.2})", buy_price, self.price_aero);
+        println!("   🧮 [Calc Debug] Loan Repay Needed: {} | Leg1 MinOut WETH: {} | Leg2 MinOut USDC: {}", 
             target_repay_amount, min_amount_out_leg1, min_amount_out_leg2
         );
 
-        // --- الساق الأولى: Aerodrome (USDC -> Target) ---
-        addresses.push(AERODROME_ROUTER);
-        let aero_route = IAerodromeRouter::Route {
-            from: self.borrowed_token,
-            to: self.pair_config.target_token,
-            stable: false,
-            factory: AERODROME_V2_FACTORY,
-        };
-
-        let payload_leg1 = IAerodromeRouter::swapExactTokensForTokensCall {
-            amountIn: self.loan_amount,
-            amountOutMin: min_amount_out_leg1,
-            routes: vec![aero_route],
-            to: self.contract_address,
-            deadline: U256::from(u64::MAX),
-        }
-        .abi_encode();
-        payloads.push(payload_leg1);
-
-        // --- الساق الثانية: Uniswap V3 (Target -> USDC) ---
+        // --- الساق الأولى: الشراء من Uniswap V3 (السعر الأرخص: USDC -> Target) ---
         addresses.push(UNISWAP_V3_ROUTER);
         let mut path_bytes = Vec::new();
-        path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
+        path_bytes.extend_from_slice(self.borrowed_token.as_slice());
         let fee_bytes = self.pair_config.fee_tier_v3.to_be_bytes();
         path_bytes.extend_from_slice(&fee_bytes[1..4]);
-        path_bytes.extend_from_slice(self.borrowed_token.as_slice());
+        path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
 
         let exact_input_params = IUniswapV3Router::ExactInputParams {
             path: Bytes::from(path_bytes),
             recipient: self.contract_address,
             deadline: U256::from(u64::MAX),
-            amountIn: min_amount_out_leg1,
-            amountOutMinimum: min_amount_out_leg2,
+            amountIn: self.loan_amount,
+            amountOutMinimum: min_amount_out_leg1,
         };
 
-        let payload_leg2 = IUniswapV3Router::exactInputCall {
+        let payload_leg1 = IUniswapV3Router::exactInputCall {
             params: exact_input_params,
+        }
+        .abi_encode();
+        payloads.push(payload_leg1);
+
+        // --- الساق الثانية: البيع في Aerodrome (السعر الأعلى: Target -> USDC) ---
+        addresses.push(AERODROME_ROUTER);
+        let aero_route = IAerodromeRouter::Route {
+            from: self.pair_config.target_token,
+            to: self.borrowed_token,
+            stable: false,
+            factory: AERODROME_V2_FACTORY,
+        };
+
+        let payload_leg2 = IAerodromeRouter::swapExactTokensForTokensCall {
+            amountIn: min_amount_out_leg1,
+            amountOutMin: min_amount_out_leg2,
+            routes: vec![aero_route],
+            to: self.contract_address,
+            deadline: U256::from(u64::MAX),
         }
         .abi_encode();
         payloads.push(payload_leg2);
@@ -681,8 +685,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut current_weth_price = 2425.0;
         if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {
             if let Ok((p_aero, p_v3, _, _, _)) = fetch_live_market_data_for_pair(http_provider.clone(), weth_pair, 1.0).await {
-                if p_aero > 0.0 { current_weth_price = p_aero; }
-                else if p_v3 > 0.0 { current_weth_price = p_v3; }
+                if p_v3 > 0.0 { current_weth_price = p_v3; }
+                else if p_aero > 0.0 { current_weth_price = p_aero; }
             }
         }
 

@@ -112,13 +112,13 @@ impl CausalCollapseSystem {
         let expected_target_units_u128 = (expected_target_tokens_f64 * target_decimals_multiplier) as u128;
         let expected_target_units = U256::from(expected_target_units_u128);
 
-        // 🛠️ تعديل الانزلاق للساق الأولى في Aerodrome ليقبل حتى 1.0% تفاوت لضمان نجاح المعاملة
-        let min_amount_out_leg1 = expected_target_units * U256::from(9900) / U256::from(10000); 
+        // 🛠️ تعديل الانزلاق للساق الأولى في Aerodrome إلى 97.5% لامتصاص أي تذبذب لحظي في مجمع السحب
+        let min_amount_out_leg1 = expected_target_units * U256::from(9750) / U256::from(10000); 
         
         // 🛠️ هامش ربح إلزامي فوق قيمة السداد لتجاوز شرط ArbitrageUnprofitable في العقد الذكي
         let min_amount_out_leg2 = target_repay_amount + U256::from(500_000); 
 
-        println!("   🧮 [Calc Debug] Loan Repay Needed: {} | Leg1 MinOut WETH: {} | Leg2 MinOut USDC (With Profit): {}", 
+        println!("   🧮 [Calc Debug] Loan Repay Needed: {} | Leg1 MinOut WETH (97.5%): {} | Leg2 MinOut USDC (With Profit): {}", 
             target_repay_amount, min_amount_out_leg1, min_amount_out_leg2
         );
 
@@ -645,7 +645,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🤖 Initializing Dual-Engine Bot with EVM Diagnostics & Trace...");
 
-    let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x94409D722D4b21A496A3C073477F06Ca388B9C3B".to_string());
+    let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x66F860c8469e56b8Bb5aCab6baF9090e03b96F95".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
 
     let primary_http_url = std::env::var("ALCHEMY_HTTP_URL").unwrap_or_else(|_| "https://mainnet.base.org".to_string());

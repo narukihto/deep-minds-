@@ -107,7 +107,6 @@ impl CausalCollapseSystem {
         
         let loan_usdc_f64 = self.loan_amount.to_string().parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
         
-        // حساب المتوقع بناءً على سعر الشراء المنخفض من Uniswap V3
         let buy_price = if self.price_v3 > 0.0 { self.price_v3 } else { self.current_target_price_usd };
         let expected_target_tokens_f64 = loan_usdc_f64 / buy_price;
         
@@ -115,18 +114,15 @@ impl CausalCollapseSystem {
         let expected_target_units_u128 = (expected_target_tokens_f64 * target_decimals_multiplier) as u128;
         let expected_target_units = U256::from(expected_target_units_u128);
 
-        // الحد الأدنى المستهدف للشراء من Uniswap V3 (مع نسبة انزلاق 1.0%)
         let min_amount_out_leg1 = expected_target_units * U256::from(9900) / U256::from(10000); 
-        
-        // الحد الأدنى لاستلام USDC من Aerodrome بعد السداد وتحقيق أرباح
-        let min_amount_out_leg2 = target_repay_amount + U256::from(100_000); // هامش أمان $0.10 فوق السداد
+        let min_amount_out_leg2 = target_repay_amount + U256::from(150_000); // هامش ربح واقعي وآمن لتغطية الرسوم
 
         println!("   🧮 [Direction Fix] Buying on UniV3 (${:.2}) -> Selling on Aero (${:.2})", buy_price, self.price_aero);
         println!("   🧮 [Calc Debug] Loan Repay Needed: {} | Leg1 MinOut WETH: {} | Leg2 MinOut USDC: {}", 
             target_repay_amount, min_amount_out_leg1, min_amount_out_leg2
         );
 
-        // --- الساق الأولى: الشراء من Uniswap V3 (السعر الأرخص: USDC -> Target) ---
+        // --- الساق الأولى: الشراء من Uniswap V3 ---
         addresses.push(UNISWAP_V3_ROUTER);
         let mut path_bytes = Vec::new();
         path_bytes.extend_from_slice(self.borrowed_token.as_slice());
@@ -142,13 +138,9 @@ impl CausalCollapseSystem {
             amountOutMinimum: min_amount_out_leg1,
         };
 
-        let payload_leg1 = IUniswapV3Router::exactInputCall {
-            params: exact_input_params,
-        }
-        .abi_encode();
-        payloads.push(payload_leg1);
+        payloads.push(IUniswapV3Router::exactInputCall { params: exact_input_params }.abi_encode());
 
-        // --- الساق الثانية: البيع في Aerodrome (السعر الأعلى: Target -> USDC) ---
+        // --- الساق الثانية: البيع في Aerodrome ---
         addresses.push(AERODROME_ROUTER);
         let aero_route = IAerodromeRouter::Route {
             from: self.pair_config.target_token,
@@ -157,15 +149,13 @@ impl CausalCollapseSystem {
             factory: AERODROME_V2_FACTORY,
         };
 
-        let payload_leg2 = IAerodromeRouter::swapExactTokensForTokensCall {
+        payloads.push(IAerodromeRouter::swapExactTokensForTokensCall {
             amountIn: min_amount_out_leg1,
             amountOutMin: min_amount_out_leg2,
             routes: vec![aero_route],
             to: self.contract_address,
             deadline: U256::from(u64::MAX),
-        }
-        .abi_encode();
-        payloads.push(payload_leg2);
+        }.abi_encode());
 
         (addresses, payloads)
     }
@@ -552,13 +542,16 @@ where P: Provider<Ethereum> + Clone {
 
 async fn trigger_cross_dex_arbitrage<P, PP>(http_provider: P, private_provider: PP, contract_address: Address, signer_address: Address, spread_gap: f64, pair_cfg: &TokenPairConfig, price_aero: f64, price_v3: f64, target_price_usd: f64) -> Result<(), Box<dyn std::error::Error>>
 where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
-    if spread_gap < 1.5 { return Ok(()); }
+    // رفع العتبة إلى 3.5 لضمان تغطية رسوم DEXs وترك ربح حقيقي
+    if spread_gap < 3.5 { return Ok(()); }
     
-    let raw_loan = (spread_gap * 150.0) as u128 * 1_000_000;
-    let dynamic_loan = raw_loan.max(1_000_000_000); // 1,000 USDC
+    // --- 💡 Dynamic Loan based on Depth & Gap (منع الـ Price Impact وترك ربح مجزٍ) ---
+    let base_multiplier = if spread_gap > 5.0 { 400.0 } else { 250.0 };
+    let raw_loan = (spread_gap * base_multiplier) as u128 * 1_000_000;
+    let dynamic_loan = raw_loan.clamp(2_000_000_000, 5_000_000_000); // بين 2,000 و 5,000 USDC كحد أقصى لمنع الـ Price Impact
     let loan_amount = U256::from(dynamic_loan);
 
-    println!("🎯 [Cross-DEX {}] Gap: ${:.2} | Loan: {} USDC... Simulating with EVM Trace...", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
+    println!("🎯 [Cross-DEX {}] Gap: ${:.2} | Dynamic Loan: {} USDC... Simulating with EVM Trace...", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
 
     let nodes = vec![QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000), frequency: spread_gap, token0: USDC_BASE, token1: pair_cfg.target_token }];
     let system = CausalCollapseSystem::new(nodes, vec![UNISWAP_V3_ROUTER, PANCAKESWAP_V3_ROUTER, BASESWAP_ROUTER, AERODROME_ROUTER], contract_address, loan_amount, USDC_BASE, pair_cfg.clone(), price_aero, price_v3, target_price_usd);
@@ -697,7 +690,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pair.symbol, p_aero, p_v3, p_baseswap, p_pancake, spread_gap
                 );
 
-                if spread_gap >= 1.5 {
+                if spread_gap >= 3.5 {
                     let target_price = if p_v3 > 0.0 { p_v3 } else { current_weth_price };
                     let _ = trigger_cross_dex_arbitrage(
                         http_provider.clone(),

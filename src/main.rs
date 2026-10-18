@@ -112,11 +112,12 @@ impl CausalCollapseSystem {
         let expected_target_units_u128 = (expected_target_tokens_f64 * target_decimals_multiplier) as u128;
         let expected_target_units = U256::from(expected_target_units_u128);
 
-        // تعديل الهامش ليكون أكثر مرونة لضمان قبول العقد للصفقة
         let min_amount_out_leg1 = expected_target_units * U256::from(9920) / U256::from(10000); // 0.8% Slippage للساق الأولى
-        let min_amount_out_leg2 = target_repay_amount; // إزالة ربح الـ 50 الوهمي مؤقتاً لنرى هل العقد يقبل السداد الصافي أم لا!
+        
+        // 🛠️ التعديل الحاسم: إضافة هامش ربح إلزامي فوق قيمة السداد لضمان تجاوز شرط العقد ArbitrageUnprofitable
+        let min_amount_out_leg2 = target_repay_amount + U256::from(500_000); 
 
-        println!("   🧮 [Calc Debug] Loan Repay Needed: {} | Leg1 MinOut WETH: {} | Leg2 MinOut USDC: {}", 
+        println!("   🧮 [Calc Debug] Loan Repay Needed: {} | Leg1 MinOut WETH: {} | Leg2 MinOut USDC (With Profit): {}", 
             target_repay_amount, min_amount_out_leg1, min_amount_out_leg2
         );
 

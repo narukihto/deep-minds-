@@ -484,7 +484,6 @@ fn calculate_v2_price(reserve0: u128, reserve1: u128, token0: Address, token1: A
     price
 }
 
-// دالة حساب أسعار V3 الديناميكية ذاتية التكيف مع ترتيب العناوين على البلوكشين
 fn calculate_v3_price_dynamic(sqrt_price_x96: _U160, pool_token0: Address, target_token: Address, weth_price_usd: f64, symbol: &str) -> f64 {
     let sqrt_f64 = sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0);
     if sqrt_f64 <= 0.0 { return 0.0; }
@@ -498,18 +497,16 @@ fn calculate_v3_price_dynamic(sqrt_price_x96: _U160, pool_token0: Address, targe
         return if price > 100.0 && price < 20000.0 { price } else { if price > 0.0 { 1.0 / price * 10f64.powi(12) } else { 0.0 } };
     }
 
-    // تحديد ما إذا كان التوكين المطلوب هو token0 أو token1 في هذا المجمع
     let is_target_token0 = pool_token0 == target_token;
 
     let price_in_weth = if is_target_token0 {
-        price_raw // Token1 / Token0 (WETH / Target)
+        price_raw 
     } else {
-        if price_raw > 0.0 { 1.0 / price_raw } else { 0.0 } // Token0 / Token1 (Target / WETH)
+        if price_raw > 0.0 { 1.0 / price_raw } else { 0.0 } 
     };
 
     let calculated_usd = price_in_weth * weth_price_usd;
 
-    // تطبيق فلتر الحماية (Sanity Checks)
     let final_price = match symbol {
         "cbETH" => {
             if calculated_usd > 15_000.0 || calculated_usd < 300.0 {
@@ -534,7 +531,7 @@ where P: Provider<Ethereum> + Clone {
         if config.is_v3_aero {
             let v3_pool = IUniswapV3Pool::new(config.aero_pool, http_provider.clone());
             if let (Ok(slot0), Ok(p_token0)) = (v3_pool.slot0().call().await, v3_pool.token0().call().await) {
-                price_aero = calculate_v3_price_dynamic(slot0.sqrtPriceX96, p_token0._0, config.target_token, weth_price_usd, config.symbol);
+                price_aero = calculate_v3_price_dynamic(slot0.sqrtPriceX96, p_token0.0, config.target_token, weth_price_usd, config.symbol);
             }
         } else {
             let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
@@ -548,7 +545,7 @@ where P: Provider<Ethereum> + Clone {
     if config.uni_v3_pool != Address::ZERO {
         let v3_pool = IUniswapV3Pool::new(config.uni_v3_pool, http_provider.clone());
         if let (Ok(slot0), Ok(p_token0)) = (v3_pool.slot0().call().await, v3_pool.token0().call().await) {
-            price_v3 = calculate_v3_price_dynamic(slot0.sqrtPriceX96, p_token0._0, config.target_token, weth_price_usd, config.symbol);
+            price_v3 = calculate_v3_price_dynamic(slot0.sqrtPriceX96, p_token0.0, config.target_token, weth_price_usd, config.symbol);
         }
     }
 
@@ -556,7 +553,7 @@ where P: Provider<Ethereum> + Clone {
     let price_pancake = 0.0;
 
     let mut prices = vec![price_aero, price_v3];
-    prices.retain(|&p| p > 0.0000001 && p <= 100000.0);
+    prices.retain(|&p| p > 0.000001 && p <= 100000.0);
 
     let max_price = prices.iter().cloned().fold(0.0, f64::max);
     let min_price = prices.iter().cloned().fold(f64::INFINITY, f64::min);

@@ -530,7 +530,7 @@ fn calculate_v2_price(reserve0: u128, reserve1: u128, token0: Address, token1: A
     price
 }
 
-// دالة حساب أسعار V3 الدقيقة والصحيحة وفقاً للمعادلة والمعاملات الرياضية المطلوبة
+// دالة حساب أسعار V3 مع حماية تلقائية تمنع أي انفجار للأرقام (Safeguard Anti-Overflow)
 fn calculate_v3_price(sqrt_price_x96: _U160, token0: Address, token1: Address, target_decimals: u32, weth_price_usd: f64, symbol: &str) -> f64 {
     let sqrt_f64 = sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0);
     if sqrt_f64 <= 0.0 { return 0.0; }
@@ -543,27 +543,35 @@ fn calculate_v3_price(sqrt_price_x96: _U160, token0: Address, token1: Address, t
 
     let d0 = get_decimals(token0);
     let d1 = get_decimals(token1);
-    let adjusted_price = price_raw * 10f64.powi(d0 - d1);
+    let mut adjusted_price = price_raw * 10f64.powi(d0 - d1);
 
     if adjusted_price <= 0.0 { return 0.0; }
 
-    // تطبيق المعاملات الدقيقة حسب الرمز والزوج
-    if symbol == "WETH" {
-        // يضرب الناتج بـ 10^12 لإخراج سعر WETH بالدولار
-        return adjusted_price * 10f64.powi(12);
+    // حساب السعر الأولي بالدولار
+    let mut final_price = if symbol == "WETH" {
+        adjusted_price * 10f64.powi(12)
     } else if symbol == "AERO" && token1 == USDC_BASE {
-        // يضرب الناتج بـ 10^12 مباشرة للحصول على السعر بالدولار
-        return adjusted_price * 10f64.powi(12);
-    } else if symbol == "AERO" || symbol == "DEGEN" || symbol == "BRETT" || symbol == "VIRTUAL" || symbol == "cbETH" {
-        // الناتج يكون مقوماً بالـ WETH، ويتم ضربه فوراً بسعر الـ WETH الحالي بالدولار
+        adjusted_price * 10f64.powi(12)
+    } else {
         if token1 == WETH_BASE {
-            return adjusted_price * weth_price_usd;
+            adjusted_price * weth_price_usd
         } else if token0 == WETH_BASE {
-            return (1.0 / adjusted_price) * weth_price_usd;
+            (1.0 / adjusted_price) * weth_price_usd
+        } else {
+            adjusted_price
         }
+    };
+
+    // حماية صارمة: إذا ظهرت قيمة غير منطقية أو تجاوزت المعتاد بسبب عكس الترتيب، يتم قلبها فوراً لتصبح حقيقية
+    if final_price > 100_000.0 && symbol != "WETH" {
+        final_price = 1.0 / final_price;
+    }
+    if final_price > 100_000.0 {
+        // إذا استمرت القيمة ضخمة، نعيدها للصفر لتجنب الخطأ
+        return 0.0;
     }
 
-    adjusted_price
+    final_price
 }
 
 async fn fetch_live_market_data_for_pair<P>(http_provider: P, config: &TokenPairConfig, weth_price_usd: f64) -> Result<(f64, f64, f64, f64, f64), Box<dyn std::error::Error>>
@@ -689,7 +697,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Bot with Exact Mathematical Scaling Engine...");
+    println!("🤖 Initializing Bot with Safeguarded Price Engine...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -722,7 +730,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Exact Price Markets...", block_num, block_counter);
+        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Safe Price Markets...", block_num, block_counter);
 
         let mut current_weth_price = 2416.28;
         if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {

@@ -112,8 +112,13 @@ impl CausalCollapseSystem {
         let expected_target_units_u128 = (expected_target_tokens_f64 * target_decimals_multiplier) as u128;
         let expected_target_units = U256::from(expected_target_units_u128);
 
-        let min_amount_out_leg1 = expected_target_units * U256::from(9940) / U256::from(10000); // 0.6% Slippage
-        let min_amount_out_leg2 = target_repay_amount + U256::from(50); // ربح محاكاة آمن
+        // تعديل الهامش ليكون أكثر مرونة لضمان قبول العقد للصفقة
+        let min_amount_out_leg1 = expected_target_units * U256::from(9920) / U256::from(10000); // 0.8% Slippage للساق الأولى
+        let min_amount_out_leg2 = target_repay_amount; // إزالة ربح الـ 50 الوهمي مؤقتاً لنرى هل العقد يقبل السداد الصافي أم لا!
+
+        println!("   🧮 [Calc Debug] Loan Repay Needed: {} | Leg1 MinOut WETH: {} | Leg2 MinOut USDC: {}", 
+            target_repay_amount, min_amount_out_leg1, min_amount_out_leg2
+        );
 
         // --- الساق الأولى: Aerodrome (USDC -> Target) ---
         addresses.push(AERODROME_ROUTER);
@@ -554,7 +559,6 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     let target_path = system.execute_collapse();
     if target_path.0.is_empty() { return Ok(()); }
 
-    // حفظ الطول قبل استهلاك المتغير في الـ ABI
     let targets_len = target_path.0.len();
 
     let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
@@ -562,7 +566,6 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
         alloy::dyn_abi::DynSolValue::Array(target_path.1.into_iter().map(alloy::dyn_abi::DynSolValue::Bytes).collect()),
     ]).abi_encode();
 
-    // طباعة تفاصيل الحمولة والمسارات للتشخيص الفوري باستخدام الطول المحفوظ مسبقاً
     println!("   🔍 [Debug Payload]: Contract: {:?} | Loan: {} | Targets Count: {}", contract_address, loan_amount, targets_len);
 
     let contract_sim = BaseAtomicArbitrage::new(contract_address, http_provider);

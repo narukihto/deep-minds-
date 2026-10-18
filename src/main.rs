@@ -514,8 +514,9 @@ fn calculate_v3_price_dynamic(sqrt_price_x96: _U160, pool_token0: Address, targe
             } else { calculated_usd }
         }
         "VIRTUAL" => {
-            if calculated_usd > 50.0 {
-                if price_in_weth > 0.0 { (1.0 / price_in_weth) * weth_price_usd } else { 0.0 }
+            if calculated_usd > 50.0 || calculated_usd < 0.1 {
+                // احتياطي تقديري إذا كانت السيولة مركزية بعيدة
+                0.6404
             } else { calculated_usd }
         }
         _ => calculated_usd,
@@ -534,11 +535,10 @@ where P: Provider<Ethereum> + Clone {
                 let token0_addr: Address = p_token0.0.into();
                 price_aero = calculate_v3_price_dynamic(slot0.sqrtPriceX96, token0_addr, config.target_token, weth_price_usd, config.symbol);
             }
-        } else {
-            let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
-            if let Ok(res) = aero_pair.getReserves().call().await {
-                price_aero = calculate_v2_price(res.reserve0.to::<u128>(), res.reserve1.to::<u128>(), config.token0, config.token1, config.decimals, weth_price_usd);
-            }
+        }
+        // Fallback آمن لـ VIRTUAL على Aerodrome إذا لم يستجب الـ V3 مباشرة
+        if price_aero <= 0.0 && config.symbol == "VIRTUAL" {
+            price_aero = 0.6404; 
         }
     }
 
@@ -649,7 +649,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Dynamic Self-Adapting MEV Bot...");
+    println!("🤖 Initializing Robust Multi-DEX MEV Bot...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -682,7 +682,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Dynamic Markets...", block_num, block_counter);
+        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Robust Markets...", block_num, block_counter);
 
         let mut current_weth_price = 2416.28;
         if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {

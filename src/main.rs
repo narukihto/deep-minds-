@@ -98,7 +98,7 @@ impl CausalCollapseSystem {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
-        if self.current_target_price_usd <= 0.0 {
+        if self.price_aero <= 0.0 || self.price_v3 <= 0.0 {
             return (vec![], vec![]);
         }
 
@@ -106,56 +106,93 @@ impl CausalCollapseSystem {
         let target_repay_amount = self.loan_amount + flash_loan_fee;
         
         let loan_usdc_f64 = self.loan_amount.to_string().parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
-        
-        let buy_price = if self.price_v3 > 0.0 { self.price_v3 } else { self.current_target_price_usd };
+
+        // --- 💡 التوجيه الديناميكي المزدوج (Dynamic Routing) ---
+        // تحديد من الأرخص للشراء ومن الأغلى للبيع لحظياً
+        let buy_on_univ3 = self.price_v3 < self.price_aero;
+        let buy_price = if buy_on_univ3 { self.price_v3 } else { self.price_aero };
+        let sell_price = if buy_on_univ3 { self.price_aero } else { self.price_v3 };
+
         let expected_target_tokens_f64 = loan_usdc_f64 / buy_price;
-        
         let target_decimals_multiplier = 10f64.powi(self.pair_config.decimals as i32);
         let expected_target_units_u128 = (expected_target_tokens_f64 * target_decimals_multiplier) as u128;
         let expected_target_units = U256::from(expected_target_units_u128);
 
         let min_amount_out_leg1 = expected_target_units * U256::from(9900) / U256::from(10000); 
-        let min_amount_out_leg2 = target_repay_amount + U256::from(150_000); // هامش ربح واقعي وآمن لتغطية الرسوم
+        let min_amount_out_leg2 = target_repay_amount + U256::from(150_000); // هامش أمان وربح
 
-        println!("   🧮 [Direction Fix] Buying on UniV3 (${:.2}) -> Selling on Aero (${:.2})", buy_price, self.price_aero);
-        println!("   🧮 [Calc Debug] Loan Repay Needed: {} | Leg1 MinOut WETH: {} | Leg2 MinOut USDC: {}", 
-            target_repay_amount, min_amount_out_leg1, min_amount_out_leg2
-        );
+        if buy_on_univ3 {
+            println!("   🧮 [Dynamic Route] BUY UniV3 (${:.2}) -> SELL Aero (${:.2})", buy_price, sell_price);
+        } else {
+            println!("   🧮 [Dynamic Route] BUY Aero (${:.2}) -> SELL UniV3 (${:.2})", buy_price, sell_price);
+        }
 
-        // --- الساق الأولى: الشراء من Uniswap V3 ---
-        addresses.push(UNISWAP_V3_ROUTER);
-        let mut path_bytes = Vec::new();
-        path_bytes.extend_from_slice(self.borrowed_token.as_slice());
-        let fee_bytes = self.pair_config.fee_tier_v3.to_be_bytes();
-        path_bytes.extend_from_slice(&fee_bytes[1..4]);
-        path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
+        if buy_on_univ3 {
+            // --- الاتجاه الأول: الشراء من UniV3 والبيع في Aero ---
+            addresses.push(UNISWAP_V3_ROUTER);
+            let mut path_bytes = Vec::new();
+            path_bytes.extend_from_slice(self.borrowed_token.as_slice());
+            let fee_bytes = self.pair_config.fee_tier_v3.to_be_bytes();
+            path_bytes.extend_from_slice(&fee_bytes[1..4]);
+            path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
 
-        let exact_input_params = IUniswapV3Router::ExactInputParams {
-            path: Bytes::from(path_bytes),
-            recipient: self.contract_address,
-            deadline: U256::from(u64::MAX),
-            amountIn: self.loan_amount,
-            amountOutMinimum: min_amount_out_leg1,
-        };
+            let exact_input_params = IUniswapV3Router::ExactInputParams {
+                path: Bytes::from(path_bytes),
+                recipient: self.contract_address,
+                deadline: U256::from(u64::MAX),
+                amountIn: self.loan_amount,
+                amountOutMinimum: min_amount_out_leg1,
+            };
+            payloads.push(IUniswapV3Router::exactInputCall { params: exact_input_params }.abi_encode());
 
-        payloads.push(IUniswapV3Router::exactInputCall { params: exact_input_params }.abi_encode());
+            addresses.push(AERODROME_ROUTER);
+            let aero_route = IAerodromeRouter::Route {
+                from: self.pair_config.target_token,
+                to: self.borrowed_token,
+                stable: false,
+                factory: AERODROME_V2_FACTORY,
+            };
+            payloads.push(IAerodromeRouter::swapExactTokensForTokensCall {
+                amountIn: min_amount_out_leg1,
+                amountOutMin: min_amount_out_leg2,
+                routes: vec![aero_route],
+                to: self.contract_address,
+                deadline: U256::from(u64::MAX),
+            }.abi_encode());
 
-        // --- الساق الثانية: البيع في Aerodrome ---
-        addresses.push(AERODROME_ROUTER);
-        let aero_route = IAerodromeRouter::Route {
-            from: self.pair_config.target_token,
-            to: self.borrowed_token,
-            stable: false,
-            factory: AERODROME_V2_FACTORY,
-        };
+        } else {
+            // --- الاتجاه المعاكس: الشراء من Aero والبيع في UniV3 ---
+            addresses.push(AERODROME_ROUTER);
+            let aero_route = IAerodromeRouter::Route {
+                from: self.borrowed_token,
+                to: self.pair_config.target_token,
+                stable: false,
+                factory: AERODROME_V2_FACTORY,
+            };
+            payloads.push(IAerodromeRouter::swapExactTokensForTokensCall {
+                amountIn: self.loan_amount,
+                amountOutMin: min_amount_out_leg1,
+                routes: vec![aero_route],
+                to: self.contract_address,
+                deadline: U256::from(u64::MAX),
+            }.abi_encode());
 
-        payloads.push(IAerodromeRouter::swapExactTokensForTokensCall {
-            amountIn: min_amount_out_leg1,
-            amountOutMin: min_amount_out_leg2,
-            routes: vec![aero_route],
-            to: self.contract_address,
-            deadline: U256::from(u64::MAX),
-        }.abi_encode());
+            addresses.push(UNISWAP_V3_ROUTER);
+            let mut path_bytes = Vec::new();
+            path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
+            let fee_bytes = self.pair_config.fee_tier_v3.to_be_bytes();
+            path_bytes.extend_from_slice(&fee_bytes[1..4]);
+            path_bytes.extend_from_slice(self.borrowed_token.as_slice());
+
+            let exact_input_params = IUniswapV3Router::ExactInputParams {
+                path: Bytes::from(path_bytes),
+                recipient: self.contract_address,
+                deadline: U256::from(u64::MAX),
+                amountIn: min_amount_out_leg1,
+                amountOutMinimum: min_amount_out_leg2,
+            };
+            payloads.push(IUniswapV3Router::exactInputCall { params: exact_input_params }.abi_encode());
+        }
 
         (addresses, payloads)
     }
@@ -542,13 +579,11 @@ where P: Provider<Ethereum> + Clone {
 
 async fn trigger_cross_dex_arbitrage<P, PP>(http_provider: P, private_provider: PP, contract_address: Address, signer_address: Address, spread_gap: f64, pair_cfg: &TokenPairConfig, price_aero: f64, price_v3: f64, target_price_usd: f64) -> Result<(), Box<dyn std::error::Error>>
 where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
-    // رفع العتبة إلى 3.5 لضمان تغطية رسوم DEXs وترك ربح حقيقي
     if spread_gap < 3.5 { return Ok(()); }
     
-    // --- 💡 Dynamic Loan based on Depth & Gap (منع الـ Price Impact وترك ربح مجزٍ) ---
     let base_multiplier = if spread_gap > 5.0 { 400.0 } else { 250.0 };
     let raw_loan = (spread_gap * base_multiplier) as u128 * 1_000_000;
-    let dynamic_loan = raw_loan.clamp(2_000_000_000, 5_000_000_000); // بين 2,000 و 5,000 USDC كحد أقصى لمنع الـ Price Impact
+    let dynamic_loan = raw_loan.clamp(2_000_000_000, 5_000_000_000); // بين 2,000 و 5,000 USDC
     let loan_amount = U256::from(dynamic_loan);
 
     println!("🎯 [Cross-DEX {}] Gap: ${:.2} | Dynamic Loan: {} USDC... Simulating with EVM Trace...", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
@@ -640,7 +675,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Dual-Engine Bot with EVM Diagnostics & Trace...");
+    println!("🤖 Initializing Dual-Engine Bot with Dynamic Smart Routing & Diagnostics...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x66F860c8469e56b8Bb5aCab6baF9090e03b96F95".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -673,7 +708,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning with Diagnostics...", block_num, block_counter);
+        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning with Dynamic Routing...", block_num, block_counter);
 
         let mut current_weth_price = 2425.0;
         if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {

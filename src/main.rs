@@ -1,4 +1,3 @@
-
 use num_bigint::BigUint;
 use num_traits::One;
 use futures_util::StreamExt;
@@ -27,7 +26,7 @@ const UNISWAP_V3_FACTORY: Address = address!("33128a8fC17869897dcE68Ed026d694621
 // العناوين المطابقة 100% للعقد المنشور
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
 const AERODROME_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
-const AERODROME_V2_FACTORY: Address = address!("420DD381b31aEf6683db6B902084cB0FFECe40Da");
+const AERODROME_V2_FACTORY: Address = address!("0x420DD381b31aEf6683db6B902084cB0FFECe40Da");
 const PANCAKESWAP_V3_ROUTER: Address = address!("0x1b81D678ffb9C0263b24A97847620C99d213eB14"); 
 
 #[derive(Debug, Clone)]
@@ -577,7 +576,6 @@ async fn trigger_cross_dex_arbitrage<P, PP>(http_provider: P, private_provider: 
 where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     if spread_gap < 8.0 { return Ok(()); }
 
-    // تعديل القرض الديناميكي ليكون بحد أقصى آمن $2,400 USDC (Optimal Loan Amount) لعدم تجاوز عمق Ticks السيولة
     let raw_loan = (spread_gap * 150.0) as u128 * 1_000_000;
     let dynamic_loan = raw_loan.clamp(1_000_000_000, 2_400_000_000); 
     let loan_amount = U256::from(dynamic_loan);
@@ -634,7 +632,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     if cycles.is_empty() { return Ok(()); }
 
     for (i, target_cycle) in cycles.iter().enumerate() {
-        let loan_amount = U256::from(1_500_000_000u64); // تخفيض القرض لتناسب عمق السيولة المثلثية
+        let loan_amount = U256::from(1_500_000_000u64);
         let (targets, data) = TriangularPayloadEncoder::build_execution_payload(target_cycle, contract_address, loan_amount);
         if targets.is_empty() || data.is_empty() { continue; }
 
@@ -694,7 +692,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Ultimate Markets...", block_num, block_counter);
 
         let mut current_weth_price = 2416.28;
-        if let Some(weth_pair) > monitored_pairs.iter().find(|p| p.symbol == "WETH") {
+        // تم تصحيح علامة الخطأ هنا من `>` إلى `=`
+        if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {
             if let Ok((_, p_v3, _, _, _)) = fetch_live_market_data_for_pair(http_provider.clone(), weth_pair, 1.0).await {
                 if p_v3 > 0.0 { current_weth_price = p_v3; }
             }
@@ -703,7 +702,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for pair in &monitored_pairs {
             if let Ok((p_aero, p_v3, _p_baseswap, _p_pancake, spread_gap)) = fetch_live_market_data_for_pair(http_provider.clone(), pair, current_weth_price).await {
                 println!(
-                    " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} | Max Gap: ${:.2}",
+                    " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} \vert{} Max Gap:${:.2}",
                     pair.symbol, p_aero, p_v3, spread_gap
                 );
 

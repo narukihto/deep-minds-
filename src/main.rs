@@ -109,7 +109,6 @@ impl CausalCollapseSystem {
         let loan_usdc_f64 = self.loan_amount.to_string().parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
         let buy_on_univ3 = self.price_v3 < self.price_aero;
         let buy_price = if buy_on_univ3 { self.price_v3 } else { self.price_aero };
-        let _sell_price = if buy_on_univ3 { self.price_aero } else { self.price_v3 };
 
         let expected_target_tokens_f64 = loan_usdc_f64 / buy_price;
         let target_decimals_multiplier = 10f64.powi(self.pair_config.decimals as i32);
@@ -462,8 +461,8 @@ where P: Provider<Ethereum> + Clone {
             pancakeswap_pool: Address::ZERO,
             decimals: 18,
             fee_tier_v3: 10000,
-            token0: WETH_BASE,
-            token1: DEGEN_BASE,
+            token0: DEGEN_BASE,
+            token1: WETH_BASE,
             is_v3_aero: true,
             is_v3_baseswap: false,
         },
@@ -476,8 +475,8 @@ where P: Provider<Ethereum> + Clone {
             pancakeswap_pool: Address::ZERO,
             decimals: 18,
             fee_tier_v3: 10000,
-            token0: WETH_BASE,
-            token1: BRETT_BASE,
+            token0: BRETT_BASE,
+            token1: WETH_BASE,
             is_v3_aero: false,
             is_v3_baseswap: false,
         },
@@ -490,8 +489,8 @@ where P: Provider<Ethereum> + Clone {
             pancakeswap_pool: Address::ZERO,
             decimals: 18,
             fee_tier_v3: 10000,
-            token0: WETH_BASE,
-            token1: VIRTUAL_BASE,
+            token0: VIRTUAL_BASE,
+            token1: WETH_BASE,
             is_v3_aero: false,
             is_v3_baseswap: false,
         },
@@ -531,7 +530,8 @@ fn calculate_v2_price(reserve0: u128, reserve1: u128, token0: Address, token1: A
     price
 }
 
-fn calculate_v3_price(sqrt_price_x96: _U160, token0: Address, token1: Address, target_decimals: u32, weth_price_usd: f64) -> f64 {
+// دالة حساب أسعار V3 الدقيقة والصحيحة وفقاً للمعادلة والمعاملات الرياضية المطلوبة
+fn calculate_v3_price(sqrt_price_x96: _U160, token0: Address, token1: Address, target_decimals: u32, weth_price_usd: f64, symbol: &str) -> f64 {
     let sqrt_f64 = sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0);
     if sqrt_f64 <= 0.0 { return 0.0; }
     let ratio = sqrt_f64 / 2.0f64.powi(96);
@@ -547,14 +547,20 @@ fn calculate_v3_price(sqrt_price_x96: _U160, token0: Address, token1: Address, t
 
     if adjusted_price <= 0.0 { return 0.0; }
 
-    if token0 == USDC_BASE {
-        return 1.0 / adjusted_price;
-    } else if token1 == USDC_BASE {
-        return adjusted_price;
-    } else if token0 == WETH_BASE {
-        return (1.0 / adjusted_price) * weth_price_usd;
-    } else if token1 == WETH_BASE {
-        return adjusted_price * weth_price_usd;
+    // تطبيق المعاملات الدقيقة حسب الرمز والزوج
+    if symbol == "WETH" {
+        // يضرب الناتج بـ 10^12 لإخراج سعر WETH بالدولار
+        return adjusted_price * 10f64.powi(12);
+    } else if symbol == "AERO" && token1 == USDC_BASE {
+        // يضرب الناتج بـ 10^12 مباشرة للحصول على السعر بالدولار
+        return adjusted_price * 10f64.powi(12);
+    } else if symbol == "AERO" || symbol == "DEGEN" || symbol == "BRETT" || symbol == "VIRTUAL" || symbol == "cbETH" {
+        // الناتج يكون مقوماً بالـ WETH، ويتم ضربه فوراً بسعر الـ WETH الحالي بالدولار
+        if token1 == WETH_BASE {
+            return adjusted_price * weth_price_usd;
+        } else if token0 == WETH_BASE {
+            return (1.0 / adjusted_price) * weth_price_usd;
+        }
     }
 
     adjusted_price
@@ -567,7 +573,7 @@ where P: Provider<Ethereum> + Clone {
         if config.is_v3_aero {
             let v3_pool = IUniswapV3Pool::new(config.aero_pool, http_provider.clone());
             if let Ok(slot0) = v3_pool.slot0().call().await {
-                price_aero = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals, weth_price_usd);
+                price_aero = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals, weth_price_usd, config.symbol);
             }
         } else {
             let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
@@ -581,7 +587,7 @@ where P: Provider<Ethereum> + Clone {
     if config.uni_v3_pool != Address::ZERO {
         let v3_pool = IUniswapV3Pool::new(config.uni_v3_pool, http_provider.clone());
         if let Ok(slot0) = v3_pool.slot0().call().await {
-            price_v3 = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals, weth_price_usd);
+            price_v3 = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals, weth_price_usd, config.symbol);
         }
     }
 
@@ -683,7 +689,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Bot with Corrected Await Syntax...");
+    println!("🤖 Initializing Bot with Exact Mathematical Scaling Engine...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -716,9 +722,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Corrected Price Markets...", block_num, block_counter);
+        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Exact Price Markets...", block_num, block_counter);
 
-        let mut current_weth_price = 2425.0;
+        let mut current_weth_price = 2416.28;
         if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {
             if let Ok((_, p_v3, _, _, _)) = fetch_live_market_data_for_pair(http_provider.clone(), weth_pair, 1.0).await {
                 if p_v3 > 0.0 { current_weth_price = p_v3; }

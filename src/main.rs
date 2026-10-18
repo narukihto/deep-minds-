@@ -16,7 +16,6 @@ use std::collections::HashMap;
 type _U24 = Uint<24, 1>;
 type _U160 = Uint<160, 3>;
 
-// --- [Target Tokens Registry on Base Mainnet - Verified] ---
 pub const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
 pub const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
 pub const CBETH_BASE: Address = address!("2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22");
@@ -26,7 +25,6 @@ pub const BRETT_BASE: Address = address!("532f27101965dd16442E59d40670FaF5ebb142
 pub const VIRTUAL_BASE: Address = address!("0b3e328455c4059EEb9e3f84b5543F74E24e7E1b");
 pub const DAI_BASE: Address = address!("50c5725949a6f0c72e6c4a641f24049a917db0cb");
 
-// --- [DEX Factories & Routers on Base - Verified & Corrected] ---
 const UNISWAP_V3_FACTORY: Address = address!("33128a8fC17869897dcE68Ed026d694621f6FDfD");
 const UNISWAP_V3_ROUTER: Address = address!("2626664c2603336E57B271c5C0b26F421741e481");
 const AERODROME_ROUTER: Address = address!("cF77a3Ba9Aab7D3E44917635033322DF3f564171");
@@ -407,7 +405,6 @@ sol! {
     }
 }
 
-// دالة مساعدة عامة لجلب الـ Pool لتجنب مشاكل نقل الملكية (Move / E0382)
 async fn fetch_v3_pool<P: Provider<Ethereum> + Clone>(
     uni_factory: &IUniswapV3Factory::IUniswapV3FactoryInstance<P>,
     token_a: Address,
@@ -534,18 +531,23 @@ fn calculate_v2_price(reserve0: u128, reserve1: u128, token0: Address, token1: A
     price
 }
 
+// دالة محسنة ومصححة لحساب أسعار الـ V3 بناءً على الـ Decimals الحقيقية للتوكنات لتفادي القيم الفلكية
 fn calculate_v3_price(sqrt_price_x96: _U160, token0: Address, token1: Address, target_decimals: u32, weth_price_usd: f64) -> f64 {
     let sqrt_f64 = sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0);
     if sqrt_f64 <= 0.0 { return 0.0; }
     let ratio = sqrt_f64 / 2.0f64.powi(96);
     let price_raw = ratio * ratio;
 
-    let usdc_decimals = 6;
-    let d0 = if token0 == USDC_BASE { usdc_decimals } else { target_decimals };
-    let d1 = if token1 == USDC_BASE { usdc_decimals } else { target_decimals };
-    let adjusted_price = price_raw * 10f64.powi((d0 as i32) - (d1 as i32));
+    let get_decimals = |token: Address| -> i32 {
+        if token == USDC_BASE { 6 } else { target_decimals as i32 }
+    };
+
+    let d0 = get_decimals(token0);
+    let d1 = get_decimals(token1);
+    let adjusted_price = price_raw * 10f64.powi(d0 - d1);
 
     if adjusted_price <= 0.0 { return 0.0; }
+
     if token0 == USDC_BASE || token1 == USDC_BASE {
         return if token0 == USDC_BASE { 1.0 / adjusted_price } else { adjusted_price };
     }
@@ -679,7 +681,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Bot with Verified Base Addresses & Live Markets...");
+    println!("🤖 Initializing Bot with Corrected Decimals Price Scaling...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -712,7 +714,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Verified Live Market Prices...", block_num, block_counter);
+        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Corrected Price Markets...", block_num, block_counter);
 
         let mut current_weth_price = 2425.0;
         if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {

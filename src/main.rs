@@ -530,48 +530,43 @@ fn calculate_v2_price(reserve0: u128, reserve1: u128, token0: Address, token1: A
     price
 }
 
-// دالة حساب أسعار V3 مع حماية تلقائية تمنع أي انفجار للأرقام (Safeguard Anti-Overflow)
-fn calculate_v3_price(sqrt_price_x96: _U160, token0: Address, token1: Address, target_decimals: u32, weth_price_usd: f64, symbol: &str) -> f64 {
+// دالة حساب أسعار V3 المبنية بدقة مطابقة لقواعد التحليل الرياضي المعتمدة لكل زوج
+fn calculate_v3_price(sqrt_price_x96: _U160, token0: Address, _token1: Address, _target_decimals: u32, weth_price_usd: f64, symbol: &str) -> f64 {
     let sqrt_f64 = sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0);
     if sqrt_f64 <= 0.0 { return 0.0; }
-    let ratio = sqrt_f64 / 2.0f64.powi(96);
+    
+    let q96 = 2.0f64.powi(96);
+    let ratio = sqrt_f64 / q96;
     let price_raw = ratio * ratio;
 
-    let get_decimals = |token: Address| -> i32 {
-        if token == USDC_BASE { 6 } else { target_decimals as i32 }
-    };
+    // القاعدة 1: WETH / USDC (أو AERO / USDC إذا كان USDC هو Token0)
+    if symbol == "WETH" || (symbol == "AERO" && token0 == USDC_BASE) {
+        if price_raw <= 0.0 { return 0.0; }
+        let inv_price = 1.0 / price_raw;
+        return inv_price * 10f64.powi(12);
+    }
 
-    let d0 = get_decimals(token0);
-    let d1 = get_decimals(token1);
-    let mut adjusted_price = price_raw * 10f64.powi(d0 - d1);
-
-    if adjusted_price <= 0.0 { return 0.0; }
-
-    // حساب السعر الأولي بالدولار
-    let mut final_price = if symbol == "WETH" {
-        adjusted_price * 10f64.powi(12)
-    } else if symbol == "AERO" && token1 == USDC_BASE {
-        adjusted_price * 10f64.powi(12)
-    } else {
-        if token1 == WETH_BASE {
-            adjusted_price * weth_price_usd
-        } else if token0 == WETH_BASE {
-            (1.0 / adjusted_price) * weth_price_usd
+    // القاعدة 2: العملات البديلة مقومة مقابل WETH (AERO, DEGEN, BRETT, VIRTUAL)
+    if symbol == "AERO" || symbol == "DEGEN" || symbol == "BRETT" || symbol == "VIRTUAL" {
+        let price_in_weth = if token0 == WETH_BASE {
+            if price_raw > 0.0 { 1.0 / price_raw } else { 0.0 }
         } else {
-            adjusted_price
-        }
-    };
-
-    // حماية صارمة: إذا ظهرت قيمة غير منطقية أو تجاوزت المعتاد بسبب عكس الترتيب، يتم قلبها فوراً لتصبح حقيقية
-    if final_price > 100_000.0 && symbol != "WETH" {
-        final_price = 1.0 / final_price;
-    }
-    if final_price > 100_000.0 {
-        // إذا استمرت القيمة ضخمة، نعيدها للصفر لتجنب الخطأ
-        return 0.0;
+            price_raw
+        };
+        return price_in_weth * weth_price_usd;
     }
 
-    final_price
+    // القاعدة 3: cbETH / WETH
+    if symbol == "cbETH" {
+        let price_in_weth = if token0 == WETH_BASE {
+            price_raw // Token1 / Token0 (cbETH / WETH)
+        } else {
+            if price_raw > 0.0 { 1.0 / price_raw } else { 0.0 }
+        };
+        return price_in_weth * weth_price_usd;
+    }
+
+    0.0
 }
 
 async fn fetch_live_market_data_for_pair<P>(http_provider: P, config: &TokenPairConfig, weth_price_usd: f64) -> Result<(f64, f64, f64, f64, f64), Box<dyn std::error::Error>>
@@ -697,7 +692,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Bot with Safeguarded Price Engine...");
+    println!("🤖 Initializing Bot with Exact Quantitative Price Engine...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -730,7 +725,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Safe Price Markets...", block_num, block_counter);
+        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Exact Quantitative Markets...", block_num, block_counter);
 
         let mut current_weth_price = 2416.28;
         if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {

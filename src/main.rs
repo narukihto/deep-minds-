@@ -357,6 +357,8 @@ sol! {
     #[sol(rpc)]
     contract IUniswapV3Pool {
         function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked);
+        function token0() external view returns (address);
+        function token1() external view returns (address);
     }
 
     #[sol(rpc)]
@@ -435,7 +437,7 @@ where P: Provider<Ethereum> + Clone {
         TokenPairConfig {
             symbol: "VIRTUAL",
             target_token: VIRTUAL_BASE,
-            aero_pool: address!("3f0296bf652e19bca772ec3df08b32732f93014a"), // مجمع VIRTUAL V3 على Aerodrome
+            aero_pool: address!("3f0296bf652e19bca772ec3df08b32732f93014a"),
             uni_v3_pool: fetch_v3_pool(&uni_factory, VIRTUAL_BASE, WETH_BASE, fee_tier_10000).await,
             baseswap_pool: Address::ZERO,
             pancakeswap_pool: Address::ZERO,
@@ -443,13 +445,13 @@ where P: Provider<Ethereum> + Clone {
             fee_tier_v3: 10000,
             token0: VIRTUAL_BASE,
             token1: WETH_BASE,
-            is_v3_aero: true, // تفعيل مجمع V3 لـ Aerodrome
+            is_v3_aero: true,
             is_v3_baseswap: false,
         },
         TokenPairConfig {
             symbol: "cbETH",
             target_token: CBETH_BASE,
-            aero_pool: address!("47cA96EA59C13f72745928887F84c9F52C3D7348"), // مجمع cbETH V3 على Aerodrome
+            aero_pool: address!("47cA96EA59C13f72745928887F84c9F52C3D7348"),
             uni_v3_pool: fetch_v3_pool(&uni_factory, WETH_BASE, CBETH_BASE, fee_tier_500).await,
             baseswap_pool: Address::ZERO,
             pancakeswap_pool: Address::ZERO,
@@ -457,7 +459,7 @@ where P: Provider<Ethereum> + Clone {
             fee_tier_v3: 500,
             token0: CBETH_BASE,
             token1: WETH_BASE,
-            is_v3_aero: true, // تفعيل مجمع V3 لـ Aerodrome
+            is_v3_aero: true,
             is_v3_baseswap: false,
         },
     ])
@@ -482,8 +484,8 @@ fn calculate_v2_price(reserve0: u128, reserve1: u128, token0: Address, token1: A
     price
 }
 
-// دالة حساب أسعار V3 الحكيمة مع التحقق الذاتي المنطقي (Self-Correcting Sanity Check Engine)
-fn calculate_v3_price(sqrt_price_x96: _U160, token0: Address, _token1: Address, _target_decimals: u32, weth_price_usd: f64, symbol: &str) -> f64 {
+// دالة حساب أسعار V3 الديناميكية ذاتية التكيف مع ترتيب العناوين على البلوكشين
+fn calculate_v3_price_dynamic(sqrt_price_x96: _U160, pool_token0: Address, target_token: Address, weth_price_usd: f64, symbol: &str) -> f64 {
     let sqrt_f64 = sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0);
     if sqrt_f64 <= 0.0 { return 0.0; }
     
@@ -491,27 +493,35 @@ fn calculate_v3_price(sqrt_price_x96: _U160, token0: Address, _token1: Address, 
     let price_raw = ratio * ratio;
     if price_raw <= 0.0 { return 0.0; }
 
-    let raw_usd = match symbol {
-        "WETH" => price_raw * 10f64.powi(12),
-        "cbETH" => {
-            let p_weth = if token0 == WETH_BASE { if price_raw > 0.0 { 1.0 / price_raw } else { 0.0 } } else { price_raw };
-            p_weth * weth_price_usd
-        }
-        "VIRTUAL" => {
-            let p_weth = if token0 == WETH_BASE { if price_raw > 0.0 { 1.0 / price_raw } else { 0.0 } } else { price_raw };
-            p_weth * weth_price_usd
-        }
-        _ => price_raw * weth_price_usd,
+    if symbol == "WETH" {
+        let price = price_raw * 10f64.powi(12);
+        return if price > 100.0 && price < 20000.0 { price } else { if price > 0.0 { 1.0 / price * 10f64.powi(12) } else { 0.0 } };
+    }
+
+    // تحديد ما إذا كان التوكين المطلوب هو token0 أو token1 في هذا المجمع
+    let is_target_token0 = pool_token0 == target_token;
+
+    let price_in_weth = if is_target_token0 {
+        price_raw // Token1 / Token0 (WETH / Target)
+    } else {
+        if price_raw > 0.0 { 1.0 / price_raw } else { 0.0 } // Token0 / Token1 (Target / WETH)
     };
 
+    let calculated_usd = price_in_weth * weth_price_usd;
+
+    // تطبيق فلتر الحماية (Sanity Checks)
     let final_price = match symbol {
-        "WETH" | "cbETH" => {
-            if raw_usd > 15_000.0 || raw_usd < 300.0 { 1.0 / raw_usd * weth_price_usd * weth_price_usd } else { raw_usd }
+        "cbETH" => {
+            if calculated_usd > 15_000.0 || calculated_usd < 300.0 {
+                if price_in_weth > 0.0 { (1.0 / price_in_weth) * weth_price_usd } else { 0.0 }
+            } else { calculated_usd }
         }
         "VIRTUAL" => {
-            if raw_usd > 50.0 { 1.0 / raw_usd } else { raw_usd }
+            if calculated_usd > 50.0 {
+                if price_in_weth > 0.0 { (1.0 / price_in_weth) * weth_price_usd } else { 0.0 }
+            } else { calculated_usd }
         }
-        _ => raw_usd,
+        _ => calculated_usd,
     };
 
     if final_price.is_finite() && final_price > 0.0 { final_price } else { 0.0 }
@@ -523,8 +533,8 @@ where P: Provider<Ethereum> + Clone {
     if config.aero_pool != Address::ZERO {
         if config.is_v3_aero {
             let v3_pool = IUniswapV3Pool::new(config.aero_pool, http_provider.clone());
-            if let Ok(slot0) = v3_pool.slot0().call().await {
-                price_aero = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals, weth_price_usd, config.symbol);
+            if let (Ok(slot0), Ok(p_token0)) = (v3_pool.slot0().call().await, v3_pool.token0().call().await) {
+                price_aero = calculate_v3_price_dynamic(slot0.sqrtPriceX96, p_token0._0, config.target_token, weth_price_usd, config.symbol);
             }
         } else {
             let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
@@ -537,8 +547,8 @@ where P: Provider<Ethereum> + Clone {
     let mut price_v3 = 0.0;
     if config.uni_v3_pool != Address::ZERO {
         let v3_pool = IUniswapV3Pool::new(config.uni_v3_pool, http_provider.clone());
-        if let Ok(slot0) = v3_pool.slot0().call().await {
-            price_v3 = calculate_v3_price(slot0.sqrtPriceX96, config.token0, config.token1, config.decimals, weth_price_usd, config.symbol);
+        if let (Ok(slot0), Ok(p_token0)) = (v3_pool.slot0().call().await, v3_pool.token0().call().await) {
+            price_v3 = calculate_v3_price_dynamic(slot0.sqrtPriceX96, p_token0._0, config.target_token, weth_price_usd, config.symbol);
         }
     }
 
@@ -640,7 +650,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Profit-Focused Bot (WETH, cbETH, VIRTUAL)...");
+    println!("🤖 Initializing Dynamic Self-Adapting MEV Bot...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -673,7 +683,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning High-Liquidity Markets...", block_num, block_counter);
+        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Dynamic Markets...", block_num, block_counter);
 
         let mut current_weth_price = 2416.28;
         if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {

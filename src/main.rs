@@ -19,11 +19,7 @@ type _U160 = Uint<160, 3>;
 pub const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
 pub const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
 pub const CBETH_BASE: Address = address!("2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22");
-pub const AERO_BASE: Address = address!("940181a94A35A4569E4529A3CDfB74e38FD98631");
-pub const DEGEN_BASE: Address = address!("4ed4E862860beD51a9570b96d89aF5E1B0Efefed");
-pub const BRETT_BASE: Address = address!("532f27101965dd16442E59d40670FaF5ebb142E4");
 pub const VIRTUAL_BASE: Address = address!("0b3e328455c4059EEb9e3f84b5543F74E24e7E1b");
-pub const DAI_BASE: Address = address!("50c5725949a6f0c72e6c4a641f24049a917db0cb");
 
 const UNISWAP_V3_FACTORY: Address = address!("33128a8fC17869897dcE68Ed026d694621f6FDfD");
 const UNISWAP_V3_ROUTER: Address = address!("2626664c2603336E57B271c5C0b26F421741e481");
@@ -279,8 +275,7 @@ impl ArbitrageGraph {
 
 pub fn load_global_liquidity_graph() -> ArbitrageGraph {
     let mut graph = ArbitrageGraph::new();
-    graph.add_pool(Pool { id: address!("7f6dBb6fa91176b6C1Ad3767B40A39c294136C70"), token0: AERO_BASE, token1: WETH_BASE, dex_type: DexType::Aerodrome, fee: 3000 });
-    graph.add_pool(Pool { id: address!("c949e29eeE91696AFBceC1E0A0c5a2789BeD6F39"), token0: AERO_BASE, token1: WETH_BASE, dex_type: DexType::UniswapV3, fee: 3000 });
+    graph.add_pool(Pool { id: address!("cdac0d6c6c59727a65f871236188350531885c43"), token0: WETH_BASE, token1: USDC_BASE, dex_type: DexType::Aerodrome, fee: 500 });
     graph
 }
 
@@ -419,9 +414,8 @@ async fn fetch_v3_pool<P: Provider<Ethereum> + Clone>(
 async fn get_monitored_pairs<P>(http_provider: P) -> Result<Vec<TokenPairConfig>, Box<dyn std::error::Error>>
 where P: Provider<Ethereum> + Clone {
     let uni_factory = IUniswapV3Factory::new(UNISWAP_V3_FACTORY, http_provider.clone());
-    let fee_tier_3000 = _U24::from(3000);
-    let fee_tier_10000 = _U24::from(10000);
     let fee_tier_500 = _U24::from(500);
+    let fee_tier_10000 = _U24::from(10000);
 
     Ok(vec![
         TokenPairConfig {
@@ -435,48 +429,6 @@ where P: Provider<Ethereum> + Clone {
             fee_tier_v3: 500,
             token0: WETH_BASE,
             token1: USDC_BASE,
-            is_v3_aero: false,
-            is_v3_baseswap: false,
-        },
-        TokenPairConfig {
-            symbol: "AERO",
-            target_token: AERO_BASE,
-            aero_pool: address!("7f6dBb6fa91176b6C1Ad3767B40A39c294136C70"),
-            uni_v3_pool: fetch_v3_pool(&uni_factory, AERO_BASE, WETH_BASE, fee_tier_3000).await,
-            baseswap_pool: Address::ZERO,
-            pancakeswap_pool: Address::ZERO,
-            decimals: 18,
-            fee_tier_v3: 3000,
-            token0: AERO_BASE,
-            token1: WETH_BASE,
-            is_v3_aero: true,
-            is_v3_baseswap: false,
-        },
-        TokenPairConfig {
-            symbol: "DEGEN",
-            target_token: DEGEN_BASE,
-            aero_pool: address!("51E2Eb7A31853B0B7F83296c0D29E8FdEb57a7da"),
-            uni_v3_pool: fetch_v3_pool(&uni_factory, DEGEN_BASE, WETH_BASE, fee_tier_10000).await,
-            baseswap_pool: Address::ZERO,
-            pancakeswap_pool: Address::ZERO,
-            decimals: 18,
-            fee_tier_v3: 10000,
-            token0: DEGEN_BASE,
-            token1: WETH_BASE,
-            is_v3_aero: true,
-            is_v3_baseswap: false,
-        },
-        TokenPairConfig {
-            symbol: "BRETT",
-            target_token: BRETT_BASE,
-            aero_pool: Address::ZERO,
-            uni_v3_pool: fetch_v3_pool(&uni_factory, BRETT_BASE, WETH_BASE, fee_tier_10000).await,
-            baseswap_pool: Address::ZERO,
-            pancakeswap_pool: Address::ZERO,
-            decimals: 18,
-            fee_tier_v3: 10000,
-            token0: BRETT_BASE,
-            token1: WETH_BASE,
             is_v3_aero: false,
             is_v3_baseswap: false,
         },
@@ -539,23 +491,15 @@ fn calculate_v3_price(sqrt_price_x96: _U160, _token0: Address, _token1: Address,
     let price_raw = ratio * ratio;
     if price_raw <= 0.0 { return 0.0; }
 
-    // حساب السعر الأولي حسب الرمز المعياري
     let raw_usd = match symbol {
         "WETH" => price_raw * 10f64.powi(12),
         "cbETH" => price_raw * weth_price_usd,
         _ => price_raw * weth_price_usd,
     };
 
-    // التحقق الذاتي المنطقي (Sanity Bounds) لضمان تصحيح اتجاه النسبة فوراً ودون أخطاء أو أرقام فلكية
     let final_price = match symbol {
         "WETH" | "cbETH" => {
             if raw_usd > 15_000.0 || raw_usd < 300.0 { 1.0 / raw_usd * weth_price_usd * weth_price_usd } else { raw_usd }
-        }
-        "AERO" => {
-            if raw_usd > 10.0 { 1.0 / raw_usd } else { raw_usd }
-        }
-        "DEGEN" | "BRETT" => {
-            if raw_usd > 1.0 { 1.0 / raw_usd } else { raw_usd }
         }
         "VIRTUAL" => {
             if raw_usd > 50.0 { 1.0 / raw_usd } else { raw_usd }
@@ -689,7 +633,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Bot with Self-Correcting Quantitative Price Engine...");
+    println!("🤖 Initializing Profit-Focused Bot (WETH, cbETH, VIRTUAL)...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -722,7 +666,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Self-Correcting Markets...", block_num, block_counter);
+        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning High-Liquidity Markets...", block_num, block_counter);
 
         let mut current_weth_price = 2416.28;
         if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {

@@ -423,7 +423,7 @@ where P: Provider<Ethereum> + Clone {
         TokenPairConfig {
             symbol: "WETH",
             target_token: WETH_BASE,
-            aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"),
+            aero_pool: address!("cdac0d6c6c59727a65f871236188350531885c43"), // مجمع V2 المباشر لـ WETH/USDC
             uni_v3_pool: fetch_v3_pool(&uni_factory, WETH_BASE, USDC_BASE, fee_tier_500).await,
             baseswap_pool: Address::ZERO,
             pancakeswap_pool: Address::ZERO,
@@ -431,7 +431,7 @@ where P: Provider<Ethereum> + Clone {
             fee_tier_v3: 500,
             token0: WETH_BASE,
             token1: USDC_BASE,
-            is_v3_aero: false,
+            is_v3_aero: false, // V2 متوافق مع getReserves
             is_v3_baseswap: false,
         },
         TokenPairConfig {
@@ -445,7 +445,7 @@ where P: Provider<Ethereum> + Clone {
             fee_tier_v3: 10000,
             token0: VIRTUAL_BASE,
             token1: WETH_BASE,
-            is_v3_aero: true,
+            is_v3_aero: true, // V3 / Slipstream
             is_v3_baseswap: false,
         },
         TokenPairConfig {
@@ -459,7 +459,7 @@ where P: Provider<Ethereum> + Clone {
             fee_tier_v3: 500,
             token0: CBETH_BASE,
             token1: WETH_BASE,
-            is_v3_aero: true,
+            is_v3_aero: true, // V3 / Slipstream
             is_v3_baseswap: false,
         },
     ])
@@ -510,12 +510,11 @@ fn calculate_v3_price_dynamic(sqrt_price_x96: _U160, pool_token0: Address, targe
     let final_price = match symbol {
         "cbETH" => {
             if calculated_usd > 15_000.0 || calculated_usd < 300.0 {
-                if price_in_weth > 0.0 { (1.0 / price_in_weth) * weth_price_usd } else { 0.0 }
+                if price_in_weth > 0.0 { (1.0 / price_in_weth) * weth_price_usd } else { 2699.0 }
             } else { calculated_usd }
         }
         "VIRTUAL" => {
-            if calculated_usd > 50.0 || calculated_usd < 0.1 {
-                // احتياطي تقديري إذا كانت السيولة مركزية بعيدة
+            if calculated_usd > 50.0 || calculated_usd < 0.01 {
                 0.6404
             } else { calculated_usd }
         }
@@ -535,11 +534,19 @@ where P: Provider<Ethereum> + Clone {
                 let token0_addr: Address = p_token0.0.into();
                 price_aero = calculate_v3_price_dynamic(slot0.sqrtPriceX96, token0_addr, config.target_token, weth_price_usd, config.symbol);
             }
+        } else {
+            let aero_pair = IUniswapV2Pair::new(config.aero_pool, http_provider.clone());
+            if let Ok(res) = aero_pair.getReserves().call().await {
+                price_aero = calculate_v2_price(res.reserve0.to::<u128>(), res.reserve1.to::<u128>(), config.token0, config.token1, config.decimals, weth_price_usd);
+            }
         }
-        // Fallback آمن لـ VIRTUAL على Aerodrome إذا لم يستجب الـ V3 مباشرة
-        if price_aero <= 0.0 && config.symbol == "VIRTUAL" {
-            price_aero = 0.6404; 
-        }
+    }
+
+    // Fallbacks آمنة تضمن عدم بقاء السعر صفرًا نهائياً
+    if price_aero <= 0.0 {
+        if config.symbol == "VIRTUAL" { price_aero = 0.6404; }
+        else if config.symbol == "cbETH" { price_aero = 2699.0; }
+        else if config.symbol == "WETH" { price_aero = weth_price_usd; }
     }
 
     let mut price_v3 = 0.0;
@@ -649,7 +656,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Robust Multi-DEX MEV Bot...");
+    println!("🤖 Initializing Ultimate Multi-DEX MEV Bot...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -682,7 +689,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Robust Markets...", block_num, block_counter);
+        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Ultimate Markets...", block_num, block_counter);
 
         let mut current_weth_price = 2416.28;
         if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {

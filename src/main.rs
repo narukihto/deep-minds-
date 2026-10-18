@@ -462,7 +462,7 @@ where P: Provider<Ethereum> + Clone {
             pancakeswap_pool: Address::ZERO,
             decimals: 18,
             fee_tier_v3: 10000,
-            token0: WETH_BASE, // تصحيح الترتيب ليتطابق مع الـ Factory
+            token0: WETH_BASE,
             token1: DEGEN_BASE,
             is_v3_aero: true,
             is_v3_baseswap: false,
@@ -476,7 +476,7 @@ where P: Provider<Ethereum> + Clone {
             pancakeswap_pool: Address::ZERO,
             decimals: 18,
             fee_tier_v3: 10000,
-            token0: WETH_BASE, // تصحيح الترتيب
+            token0: WETH_BASE,
             token1: BRETT_BASE,
             is_v3_aero: false,
             is_v3_baseswap: false,
@@ -490,7 +490,7 @@ where P: Provider<Ethereum> + Clone {
             pancakeswap_pool: Address::ZERO,
             decimals: 18,
             fee_tier_v3: 10000,
-            token0: WETH_BASE, // تصحيح الترتيب
+            token0: WETH_BASE,
             token1: VIRTUAL_BASE,
             is_v3_aero: false,
             is_v3_baseswap: false,
@@ -531,7 +531,6 @@ fn calculate_v2_price(reserve0: u128, reserve1: u128, token0: Address, token1: A
     price
 }
 
-// دالة حساب أسعار V3 دقيقة للغاية ومصححة ضد أي عكس في اتجاه الـ Tokens
 fn calculate_v3_price(sqrt_price_x96: _U160, token0: Address, token1: Address, target_decimals: u32, weth_price_usd: f64) -> f64 {
     let sqrt_f64 = sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0);
     if sqrt_f64 <= 0.0 { return 0.0; }
@@ -548,17 +547,13 @@ fn calculate_v3_price(sqrt_price_x96: _U160, token0: Address, token1: Address, t
 
     if adjusted_price <= 0.0 { return 0.0; }
 
-    // تحديد السعر الفعلي بالدولار الأمريكي مباشرة
     if token0 == USDC_BASE {
         return 1.0 / adjusted_price;
     } else if token1 == USDC_BASE {
         return adjusted_price;
     } else if token0 == WETH_BASE {
-        // إذا كان token0 هو WETH و token1 هو التوكن المستهدف (مثل DEGEN)
-        // adjusted_price تمثل (Token1 / WETH)، إذن سعر الضلع الواحد بالدولار = (1 / adjusted_price) * weth_price_usd
         return (1.0 / adjusted_price) * weth_price_usd;
     } else if token1 == WETH_BASE {
-        // إذا كان token1 هو WETH
         return adjusted_price * weth_price_usd;
     }
 
@@ -688,7 +683,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Bot with Perfected Token Order Scaling...");
+    println!("🤖 Initializing Bot with Corrected Await Syntax...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -731,7 +726,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         for pair in &monitored_pairs {
-            if let Ok((p_aero, p_v3, _p_baseswap, _p_pancake, spread_gap)) = fetch_live_market_data_for_pair(http_provider.clone(), pair, current_weth_price).alt {
+            if let Ok((p_aero, p_v3, _p_baseswap, _p_pancake, spread_gap)) = fetch_live_market_data_for_pair(http_provider.clone(), pair, current_weth_price).await {
                 println!(
                     " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} | Max Gap: ${:.2}",
                     pair.symbol, p_aero, p_v3, spread_gap

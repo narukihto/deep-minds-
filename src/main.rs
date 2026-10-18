@@ -692,7 +692,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Ultimate Markets...", block_num, block_counter);
 
         let mut current_weth_price = 2416.28;
-        // تم تصحيح علامة الخطأ هنا من `>` إلى `=`
         if let Some(weth_pair) = monitored_pairs.iter().find(|p| p.symbol == "WETH") {
             if let Ok((_, p_v3, _, _, _)) = fetch_live_market_data_for_pair(http_provider.clone(), weth_pair, 1.0).await {
                 if p_v3 > 0.0 { current_weth_price = p_v3; }
@@ -701,8 +700,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         for pair in &monitored_pairs {
             if let Ok((p_aero, p_v3, _p_baseswap, _p_pancake, spread_gap)) = fetch_live_market_data_for_pair(http_provider.clone(), pair, current_weth_price).await {
+                // تم تنقية السطر وإزالة الرمز الزائد
                 println!(
-                    " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} \vert{} Max Gap:${:.2}",
+                    " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} | Max Gap: ${:.2}",
                     pair.symbol, p_aero, p_v3, spread_gap
                 );
 

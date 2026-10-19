@@ -396,7 +396,7 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
     BigUint::parse_bytes(num_str.as_bytes(), 10).unwrap_or_else(BigUint::one)
 }
 
-/// 🔥 المحاكاة المحلية المجانية عبر eth_call لكشف سبب الفشل بدقة
+/// 🔥 طباعة الخطأ الخام مباشرة عند فشل المحاكاة لمعرفة السبب بالحرف
 async fn simulate_and_diagnose_arbitrage<P: Provider<Ethereum> + Clone + 'static>(
     provider: P,
     contract_address: Address,
@@ -410,45 +410,14 @@ async fn simulate_and_diagnose_arbitrage<P: Provider<Ethereum> + Clone + 'static
 
     match call_builder.call().await {
         Ok(_) => {
-            println!("✅ [Local Simulation] Arbitrage simulation PASSED successfully!");
+            println!("✅ [Local Simulation] PASSED successfully!");
             Ok(true)
         }
         Err(e) => {
-            let err_str = format!("{:?}", e);
-            if let Some(start_idx) = err_str.find("0x") {
-                let hex_data = &err_str[start_idx..];
-                let clean_hex: String = hex_data.chars().take_while(|c| c.is_ascii_hexdigit() || *c == 'x').collect();
-                if let Ok(bytes) = hex::decode(clean_hex.trim_start_matches("0x")) {
-                    if let Ok(decoded) = BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(&bytes) {
-                        match decoded {
-                            BaseAtomicArbitrage::BaseAtomicArbitrageErrors::ArbitrageUnprofitable(err) => {
-                                print_financial_report(err.required, err.actual);
-                                return Ok(false);
-                            }
-                            _ => {
-                                println!("⚠️ Simulation reverted with another custom error.");
-                            }
-                        }
-                    }
-                }
-            }
-            println!("⚠️ Simulation reverted with execution error.");
+            println!("❌ [Simulation Raw Error Details]: {:?}", e);
             Ok(false)
         }
     }
-}
-
-fn print_financial_report(required: U256, actual: U256) {
-    let deficit = if required > actual { required - actual } else { U256::ZERO };
-    println!("\n=======================================================");
-    println!("📊 LOCAL SIMULATION ANALYSIS REPORT (eth_call)");
-    println!("=======================================================");
-    println!("🔴 Status : Simulation Reverted (Unprofitable)");
-    println!("🎯 Target Error : ArbitrageUnprofitable");
-    println!("💰 Required : {} wei", required);
-    println!("💸 Actual : {} wei", actual);
-    println!("📉 Deficit : {} wei 🔴 (عجز الصفقة الحقيقي)", deficit);
-    println!("=======================================================\n");
 }
 
 async fn fetch_v3_pool<P: Provider<Ethereum> + Clone>(

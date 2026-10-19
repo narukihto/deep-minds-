@@ -23,7 +23,6 @@ pub const VIRTUAL_BASE: Address = address!("0b3e328455c4059EEb9e3f84b5543F74E24e
 
 const UNISWAP_V3_FACTORY: Address = address!("33128a8fC17869897dcE68Ed026d694621f6FDfD");
 
-// العناوين المطابقة 100% للعقد المنشور ومعايير Aerodrome الجديدة
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
 const AERODROME_V2_ROUTER: Address = address!("0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43");
 const AERODROME_V2_FACTORY: Address = address!("0x420DD381b31aEf6683db6B902084cB0FFECe40Da");
@@ -498,7 +497,6 @@ async fn fetch_live_market_data_for_pair<P>(http_provider: P, config: &TokenPair
 where P: Provider<Ethereum> + Clone {
     let mut price_aero = 0.0;
 
-    // استخدام Router لعقود V2 في Aerodrome لجلب السعر الصحيح بدون أصفار
     let aero_router = IAerodromeRouter::new(AERODROME_V2_ROUTER, http_provider.clone());
     let sample_amount = U256::from(10_u128.pow(config.decimals));
     let route = IAerodromeRouter::Route {
@@ -508,9 +506,11 @@ where P: Provider<Ethereum> + Clone {
         factory: AERODROME_V2_FACTORY,
     };
 
+    // التصحيح هنا: استخراج المخرجات عبر `._0` أو المخرجات المباشرة لمكتبة Alloy
     if let Ok(amounts_out) = aero_router.getAmountsOut(sample_amount, vec![route]).call().await {
-        if !amounts_out.amounts.is_empty() {
-            let weth_out = amounts_out.amounts.last().unwrap().to_string().parse::<f64>().unwrap_or(0.0) / 1e18;
+        let amounts_vec = amounts_out._0;
+        if !amounts_vec.is_empty() {
+            let weth_out = amounts_vec.last().unwrap().to_string().parse::<f64>().unwrap_or(0.0) / 1e18;
             price_aero = weth_out * weth_price_usd;
         }
     }
@@ -662,7 +662,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for pair in &monitored_pairs {
             if let Ok((p_aero, p_v3, _p_baseswap, _p_pancake, spread_gap)) = fetch_live_market_data_for_pair(http_provider.clone(), pair, current_weth_price).await {
                 println!(
-                    " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} | Max Gap: ${:.2}",
+                    " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} \vert{} Max Gap:${:.2}",
                     pair.symbol, p_aero, p_v3, spread_gap
                 );
 

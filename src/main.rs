@@ -397,7 +397,7 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
     BigUint::parse_bytes(num_str.as_bytes(), 10).unwrap_or_else(BigUint::one)
 }
 
-/// 🔥 أداة التحليل العميق المتطورة المتوافقة تماماً مع توجيه الكومبايلر وإصدار Alloy 2.5
+/// 🔥 دالة التحليل العميق المصلحة تماماً والمتوافقة مع الحقول الحقيقية في Alloy 2.5
 async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone + 'static>(
     provider: P,
     tx_hash: alloy::primitives::TxHash,
@@ -408,17 +408,48 @@ async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone + 'static>
     let tx_trace = provider.debug_trace_transaction(tx_hash, trace_options).await?;
 
     if let GethTrace::Default(root_frame) = tx_trace {
-        if let Some(ref output) = root_frame.output {
-            if !output.is_empty() {
-                if let Ok(decoded) = BaseAtomicArbitrage::ArbitrageUnprofitable::abi_decode(output) {
-                    print_financial_report(decoded.required, decoded.actual);
-                    return Ok(());
-                }
+        // فحص الـ data/output المتاحة في الـ DefaultFrame الحقيقي
+        if let Some(revert_bytes) = extract_revert_from_default_frame(&root_frame) {
+            if let Ok(decoded) = BaseAtomicArbitrage::ArbitrageUnprofitable::abi_decode(&revert_bytes) {
+                print_financial_report(decoded.required, decoded.actual);
+                return Ok(());
             }
         }
     }
     println!("⚠️ Transaction didn't fail with ArbitrageUnprofitable inside the trace for Tx: {:?}", tx_hash);
     Ok(())
+}
+
+fn extract_revert_from_default_frame(frame: &alloy::rpc::types::trace::geth::GethDefaultTracerFrame) -> Option<Bytes> {
+    if frame.failed {
+        if let Some(ref output) = frame.output {
+            if !output.is_empty() {
+                return Some(output.clone());
+            }
+        }
+    }
+    for sub in &frame.calls {
+        if let Some(res) = extract_revert_from_sub_call(sub) {
+            return Some(res);
+        }
+    }
+    None
+}
+
+fn extract_revert_from_sub_call(call: &alloy::rpc::types::trace::geth::CallFrame) -> Option<Bytes> {
+    if call.error.is_some() {
+        if let Some(ref output) = call.output {
+            if !output.is_empty() {
+                return Some(output.clone());
+            }
+        }
+    }
+    for sub in &call.calls {
+        if let Some(res) = extract_revert_from_sub_call(sub) {
+            return Some(res);
+        }
+    }
+    None
 }
 
 fn print_financial_report(required: U256, actual: U256) {
@@ -562,7 +593,7 @@ where P: Provider<Ethereum> + Clone {
 
 async fn trigger_cross_dex_arbitrage<PP>(private_provider: PP, contract_address: Address, signer_address: Address, spread_gap: f64, pair_cfg: &TokenPairConfig, price_aero: f64, price_v3: f64, target_price_usd: f64) -> Result<(), Box<dyn std::error::Error>>
 where PP: Provider<Ethereum> + Clone + 'static {
-    if spread_gap < 5.0 { return Ok(()); }
+    if spread_gap < 12.0 { return Ok(()); }
 
     let raw_loan = (spread_gap * 40.0) as u128 * 1_000_000;
     let dynamic_loan = raw_loan.clamp(500_000_000, 1_200_000_000); 
@@ -679,7 +710,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pair.symbol, p_aero, p_v3, spread_gap
                 );
 
-                if spread_gap >= 5.0 {
+                if spread_gap >= 12.0 {
                     let target_price = if p_v3 > 0.0 { p_v3 } else { current_weth_price };
                     let _ = trigger_cross_dex_arbitrage(
                         private_provider.clone(),

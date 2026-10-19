@@ -4,7 +4,7 @@ use alloy::{
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256, Bytes, Uint},
     sol,
-    sol_types::{SolCall, SolValue, SolError, SolInterface},
+    sol_types::{SolCall, SolValue, SolInterface},
     rpc::types::trace::geth::{
         CallFrame, GethDebugBuiltInTracerType, GethDebugTracerType,
         GethDebugTracingOptions, GethTrace,
@@ -400,7 +400,7 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
     BigUint::parse_bytes(num_str.as_bytes(), 10).unwrap_or_else(BigUint::one)
 }
 
-/// 🔥 أداة التحليل العميق المتوافقة 100% مع معيار Alloy v2.5 الموثق
+/// 🔥 أداة التحليل العميق المتوافقة 100% مع معيار Alloy v2.5
 async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone + 'static>(
     provider: P,
     tx_hash: alloy::primitives::TxHash,
@@ -416,7 +416,7 @@ async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone + 'static>
 
     if let GethTrace::CallTracer(root_frame) = trace {
         if let Some(revert_bytes) = find_revert_output(&root_frame) {
-            if let Ok(decoded) = BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(&revert_bytes, false) {
+            if let Ok(decoded) = BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(&revert_bytes) {
                 match decoded {
                     BaseAtomicArbitrage::BaseAtomicArbitrageErrors::ArbitrageUnprofitable(err) => {
                         print_financial_report(err.required, err.actual);
@@ -434,18 +434,16 @@ async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone + 'static>
 }
 
 fn find_revert_output(frame: &CallFrame) -> Option<Bytes> {
-    if frame.revert.unwrap_or(false) {
+    if frame.error.is_some() {
         if let Some(ref output) = frame.output {
             if !output.is_empty() {
                 return Some(output.clone());
             }
         }
     }
-    if let Some(ref children) = frame.calls {
-        for child_frame in children {
-            if let Some(output) = find_revert_output(child_frame) {
-                return Some(output);
-            }
+    for child_frame in &frame.calls {
+        if let Some(output) = find_revert_output(child_frame) {
+            return Some(output);
         }
     }
     None

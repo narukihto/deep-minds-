@@ -558,6 +558,8 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
         }
         Err(contract_error) => {
             eprintln!("❌ [SIMULATION FAILED for {}]", pair_cfg.symbol);
+            
+            // فحص محاولة فك التشفير كخطأ مخصص معروف (مثل ArbitrageUnprofitable)
             if let Some(revert_bytes) = contract_error.as_revert_data() {
                 match BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(revert_bytes.as_ref()) {
                     Ok(err_decoded) => {
@@ -569,19 +571,25 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
                                 eprintln!("   💰 [Revert Detail]: ArbitrageUnprofitable!");
                                 eprintln!("      🔹 Required Return: ${:.4} USDC", required_f64);
                                 eprintln!("      🔸 Actual Return:   ${:.4} USDC", actual_f64);
-                                eprintln!("      ⚠️ Deficit (Shortfall): ${:.4} USDC (العجز عن تحقيق الربح)", deficit_f64);
+                                eprintln!("      ⚠️ Deficit (Shortfall): ${:.4} USDC", deficit_f64);
                             }
                             BaseAtomicArbitrage::BaseAtomicArbitrageErrors::InsufficientLiquidity(_) => {
-                                eprintln!("   💧 [Revert Detail]: InsufficientLiquidity! السيولة في المجمع لا تكفي لهذا الحجم.");
+                                eprintln!("   💧 [Revert Detail]: InsufficientLiquidity! السيولة في المجمع لا تكفي.");
                             }
                         }
                     }
                     Err(_) => {
-                        eprintln!("   🔍 [Raw Revert Data]: 0x{}", alloy::hex::encode(revert_bytes.as_ref()));
+                        // طباعة بايتات الخطأ الخام الكاملة في حال فشل فك التشفير القياسي
+                        eprintln!("   🔍 [Raw Revert Data Bytes]: 0x{}", alloy::hex::encode(revert_bytes.as_ref()));
+                        if revert_bytes.len() >= 4 {
+                            eprintln!("   🔑 [Error Selector]: 0x{}", alloy::hex::encode(&revert_bytes[..4]));
+                        }
                     }
                 }
             } else {
-                eprintln!("   🛑 [Error]: Failed without explicit revert data: {:?}", contract_error);
+                // التقاط الخطأ الخام الكامل من الاستجابة حتى لو عادت بـ data: None
+                let error_string = format!("{:?}", contract_error);
+                eprintln!("   🛑 [Full Raw Error/Transport Response]: {}", error_string);
             }
         }
     }

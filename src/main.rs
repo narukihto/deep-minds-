@@ -590,7 +590,7 @@ where P: Provider<Ethereum> + Clone {
 
 async fn trigger_cross_dex_arbitrage<PP>(private_provider: PP, contract_address: Address, signer_address: Address, spread_gap: f64, pair_cfg: &TokenPairConfig, price_aero: f64, price_v3: f64, target_price_usd: f64) -> Result<(), Box<dyn std::error::Error>>
 where PP: Provider<Ethereum> + Clone + 'static {
-    if spread_gap < 12.0 { return Ok(()); }
+    if spread_gap < 7.0 { return Ok(()); } // تم خفض عتبة التنفيذ إلى 7.0 دولار
 
     let raw_loan = (spread_gap * 40.0) as u128 * 1_000_000;
     let dynamic_loan = raw_loan.clamp(500_000_000, 1_200_000_000); 
@@ -651,7 +651,7 @@ where PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Ultimate Multi-DEX MEV Bot (Production Alloy v2.5 Tracing Enabled)...");
+    println!("🤖 Initializing Ultimate Multi-DEX MEV Bot (Threshold Reduced to $7.0)...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -707,7 +707,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pair.symbol, p_aero, p_v3, spread_gap
                 );
 
-                if spread_gap >= 12.0 {
+                if spread_gap >= 7.0 { // تفعيل الإرسال عند تجاوز الـ 7 دولارات
                     let target_price = if p_v3 > 0.0 { p_v3 } else { current_weth_price };
                     let _ = trigger_cross_dex_arbitrage(
                         private_provider.clone(),

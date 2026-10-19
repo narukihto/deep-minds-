@@ -2,7 +2,7 @@ use alloy::{
     providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
-    primitives::{address, Address, U256, Bytes, Uint},
+    primitives::{address, Address, U256, Bytes, Uint, hex},
     sol,
     sol_types::{SolCall, SolValue, SolInterface},
 };
@@ -396,7 +396,7 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
     BigUint::parse_bytes(num_str.as_bytes(), 10).unwrap_or_else(BigUint::one)
 }
 
-/// 🔥 المحاكاة المحلية المجانية عبر eth_call لكشف سبب الفشل (Required vs Actual) فوراً وبدقة
+/// 🔥 المحاكاة المحلية المجانية عبر eth_call لكشف سبب الفشل بدقة
 async fn simulate_and_diagnose_arbitrage<P: Provider<Ethereum> + Clone + 'static>(
     provider: P,
     contract_address: Address,
@@ -426,13 +426,13 @@ async fn simulate_and_diagnose_arbitrage<P: Provider<Ethereum> + Clone + 'static
                                 return Ok(false);
                             }
                             _ => {
-                                println!("⚠️ Simulation reverted with another custom error: {:?}", decoded);
+                                println!("⚠️ Simulation reverted with another custom error.");
                             }
                         }
                     }
                 }
             }
-            println!("⚠️ Simulation reverted with raw error: {}", err_str);
+            println!("⚠️ Simulation reverted with execution error.");
             Ok(false)
         }
     }
@@ -594,7 +594,6 @@ where PP: Provider<Ethereum> + Clone + 'static {
 
     let swap_path_data = Bytes::from((target_path.0, target_path.1).abi_encode());
 
-    // المحاكاة المحلية المجانية أولاً لمعرفة سبب الفشل بدقة دون حرق غاز
     let is_profitable = simulate_and_diagnose_arbitrage(
         private_provider.clone(),
         contract_address,

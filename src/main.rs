@@ -1,10 +1,10 @@
 use alloy::{
-    providers::{Provider, ProviderBuilder},
+    providers::{Provider, ProviderBuilder, ext::DebugApi},
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256, Bytes, Uint},
     sol,
-    sol_types::{SolCall, SolInterface, SolValue},
+    sol_types::{SolCall, SolInterface, SolValue, SolError},
     rpc::types::eth::trace::geth::{GethDebugTracingOptions, GethTrace, GethDefaultTracerFrame},
 };
 use num_bigint::BigUint;
@@ -397,8 +397,8 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
     BigUint::parse_bytes(num_str.as_bytes(), 10).unwrap_or_else(BigUint::one)
 }
 
-/// 🔥 أداة التحليل العميق المتطورة (Alloy 2026 Engine) لجلب سبب الفشل الفعلي عبر الـ callTracer[span_2](start_span)[span_2](end_span)
-async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone>(
+/// 🔥 أداة التحليل العميق المتطورة لجلب سبب الفشل الفعلي عبر الـ callTracer[span_0](start_span)[span_0](end_span)
+async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone + 'static>(
     provider: P,
     tx_hash: alloy::primitives::TxHash,
 ) -> eyre::Result<()> {
@@ -575,7 +575,7 @@ where P: Provider<Ethereum> + Clone {
 }
 
 async fn trigger_cross_dex_arbitrage<PP>(private_provider: PP, contract_address: Address, signer_address: Address, spread_gap: f64, pair_cfg: &TokenPairConfig, price_aero: f64, price_v3: f64, target_price_usd: f64) -> Result<(), Box<dyn std::error::Error>>
-where PP: Provider<Ethereum> + Clone {
+where PP: Provider<Ethereum> + Clone + 'static {
     if spread_gap < 5.0 { return Ok(()); }
 
     let raw_loan = (spread_gap * 40.0) as u128 * 1_000_000;
@@ -597,7 +597,6 @@ where PP: Provider<Ethereum> + Clone {
             let tx_hash = *tx.tx_hash();
             println!("🚀 [Dispatched Successfully] Hash: {:?}", tx_hash);
 
-            // تتبع وتحليل الخطأ فوراً بعد الإرسال والمحاولة في حال حدوث Revert
             let provider_clone = private_provider.clone();
             tokio::spawn(async move {
                 sleep(Duration::from_secs(3)).await;

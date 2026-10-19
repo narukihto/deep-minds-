@@ -1,8 +1,3 @@
-use num_bigint::BigUint;
-use num_traits::One;
-use futures_util::StreamExt;
-use tokio::time::{sleep, Duration};
-use std::str::FromStr;
 use alloy::{
     providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
@@ -10,7 +5,13 @@ use alloy::{
     primitives::{address, Address, U256, Bytes, Uint},
     sol,
     sol_types::{SolCall, SolInterface, SolValue},
+    rpc::types::eth::trace::geth::{GethDebugTracingOptions, GethTrace, GethDefaultTracerFrame},
 };
+use num_bigint::BigUint;
+use num_traits::One;
+use futures_util::StreamExt;
+use tokio::time::{sleep, Duration};
+use std::str::FromStr;
 use std::collections::HashMap;
 
 type _U24 = Uint<24, 1>;
@@ -27,6 +28,66 @@ const UNISWAP_V3_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421
 const AERODROME_OFFICIAL_ROUTER: Address = address!("0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43");
 const AERODROME_EXEC_ROUTER: Address = address!("0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5");
 const AERODROME_V2_FACTORY: Address = address!("0x420DD381b31aEf6683db6B902084cB0FFECe40Da");
+
+sol! {
+    #[sol(rpc)]
+    contract BaseAtomicArbitrage {
+        function triggerBalancerArbitrage(address tokenToBorrow, uint256 loanAmount, bytes calldata swapPathData) external;
+        function triggerBalancerArbitrageMulti(address tokenToBorrow, uint256 loanAmount, address[] calldata targets, bytes[] calldata data) external;
+        function setTargetWhitelist(address target, bool status) external;
+
+        error ArbitrageUnprofitable(uint256 required, uint256 actual);
+        error InsufficientLiquidity();
+    }
+
+    #[sol(rpc)]
+    contract IUniswapV3Factory {
+        function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool);
+    }
+
+    #[sol(rpc)]
+    contract IUniswapV3Pool {
+        function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked);
+        function token0() external view returns (address);
+        function token1() external view returns (address);
+        function liquidity() external view returns (uint128);
+    }
+
+    #[sol(rpc)]
+    contract IUniswapV3Router {
+        struct ExactInputParams {
+            bytes path;
+            address recipient;
+            uint256 deadline;
+            uint256 amountIn;
+            uint256 amountOutMinimum;
+        }
+        function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
+    }
+
+    #[sol(rpc)]
+    contract IAerodromeSlipstreamRouter {
+        struct ExactInputParams {
+            bytes path;
+            address recipient;
+            uint256 deadline;
+            uint256 amountIn;
+            uint256 amountOutMinimum;
+        }
+        function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
+    }
+
+    #[sol(rpc)]
+    contract IAerodromeRouter {
+        struct Route {
+            address from;
+            address to;
+            bool stable;
+            address factory;
+        }
+        function getAmountsOut(uint256 amountIn, Route[] calldata routes) external view returns (uint256[] memory amounts);
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct TokenPairConfig {
@@ -336,64 +397,55 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
     BigUint::parse_bytes(num_str.as_bytes(), 10).unwrap_or_else(BigUint::one)
 }
 
-sol! {
-    #[sol(rpc)]
-    contract IUniswapV3Factory {
-        function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool);
-    }
+/// 🔥 أداة التحليل العميق المتطورة (Alloy 2026 Engine) لجلب سبب الفشل الفعلي عبر الـ callTracer[span_2](start_span)[span_2](end_span)
+async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone>(
+    provider: P,
+    tx_hash: alloy::primitives::TxHash,
+) -> eyre::Result<()> {
+    let mut trace_options = GethDebugTracingOptions::default();
+    trace_options.tracer = Some("callTracer".to_string());
 
-    #[sol(rpc)]
-    contract IUniswapV3Pool {
-        function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked);
-        function token0() external view returns (address);
-        function token1() external view returns (address);
-        function liquidity() external view returns (uint128);
-    }
+    let tx_trace = provider.debug_trace_transaction(tx_hash, trace_options).await?;
 
-    #[sol(rpc)]
-    contract IUniswapV3Router {
-        struct ExactInputParams {
-            bytes path;
-            address recipient;
-            uint256 deadline;
-            uint256 amountIn;
-            uint256 amountOutMinimum;
+    if let GethTrace::Default(root_frame) = tx_trace {
+        if let Some(revert_data_bytes) = find_revert_in_frames(&root_frame) {
+            if let Ok(decoded) = BaseAtomicArbitrage::ArbitrageUnprofitable::abi_decode(&revert_data_bytes, true) {
+                print_financial_report(decoded.required, decoded.actual);
+                return Ok(());
+            }
         }
-        function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
     }
+    println!("⚠️ Transaction didn't fail with ArbitrageUnprofitable inside the trace trees for Tx: {:?}", tx_hash);
+    Ok(())
+}
 
-    #[sol(rpc)]
-    contract IAerodromeSlipstreamRouter {
-        struct ExactInputParams {
-            bytes path;
-            address recipient;
-            uint256 deadline;
-            uint256 amountIn;
-            uint256 amountOutMinimum;
+fn find_revert_in_frames(frame: &GethDefaultTracerFrame) -> Option<Bytes> {
+    if frame.revert_reason.is_some() {
+        if let Some(ref output) = frame.output {
+            return Some(output.clone());
         }
-        function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
     }
-
-    #[sol(rpc)]
-    contract IAerodromeRouter {
-        struct Route {
-            address from;
-            address to;
-            bool stable;
-            address factory;
+    if let Some(ref calls) = frame.calls {
+        for sub_frame in calls {
+            if let Some(data) = find_revert_in_frames(sub_frame) {
+                return Some(data);
+            }
         }
-        function getAmountsOut(uint256 amountIn, Route[] calldata routes) external view returns (uint256[] memory amounts);
     }
+    None
+}
 
-    #[sol(rpc)]
-    contract BaseAtomicArbitrage {
-        function triggerBalancerArbitrage(address tokenToBorrow, uint256 loanAmount, bytes calldata swapPathData) external;
-        function triggerBalancerArbitrageMulti(address tokenToBorrow, uint256 loanAmount, address[] calldata targets, bytes[] calldata data) external;
-        function setTargetWhitelist(address target, bool status) external;
-
-        error ArbitrageUnprofitable(uint256 required, uint256 actual);
-        error InsufficientLiquidity();
-    }
+fn print_financial_report(required: U256, actual: U256) {
+    let deficit = if required > actual { required - actual } else { U256::ZERO };
+    println!("\n=======================================================");
+    println!("📊 MEV ULTRA ANALYSIS REPORT (Alloy Engine)");
+    println!("=======================================================");
+    println!("🔴 Status : Execution Reverted");
+    println!("🎯 Target Error : ArbitrageUnprofitable");
+    println!("💰 Required : {} wei", required);
+    println!("💸 Actual : {} wei", actual);
+    println!("📉 Deficit : {} wei 🔴 (عجز الصفقة الحقيقي)", deficit);
+    println!("=======================================================\n");
 }
 
 async fn fetch_v3_pool<P: Provider<Ethereum> + Clone>(
@@ -539,11 +591,20 @@ where PP: Provider<Ethereum> + Clone {
 
     let swap_path_data = (target_path.0, target_path.1).abi_encode();
 
-    // إلغاء خطوة المحاكاة بالكامل والإرسال المباشر للشبكة
-    let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider);
+    let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider.clone());
     match contract_private.triggerBalancerArbitrage(USDC_BASE, loan_amount, swap_path_data.into()).from(signer_address).gas(3_500_000).send().await {
         Ok(tx) => {
-            println!("🚀 [Dispatched Successfully] Hash: {:?}", tx.tx_hash());
+            let tx_hash = *tx.tx_hash();
+            println!("🚀 [Dispatched Successfully] Hash: {:?}", tx_hash);
+
+            // تتبع وتحليل الخطأ فوراً بعد الإرسال والمحاولة في حال حدوث Revert
+            let provider_clone = private_provider.clone();
+            tokio::spawn(async move {
+                sleep(Duration::from_secs(3)).await;
+                if let Err(err) = analyze_failed_mev_transaction(provider_clone, tx_hash).await {
+                    eprintln!("⚠️ Error tracing tx: {:?}", err);
+                }
+            });
         }
         Err(e) => {
             eprintln!("❌ [Dispatch Failed for {}]: {:?}", pair_cfg.symbol, e);
@@ -577,7 +638,7 @@ where PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Ultimate Multi-DEX MEV Bot (Production Slipstream Updated)...");
+    println!("🤖 Initializing Ultimate Multi-DEX MEV Bot (Production Slipstream Updated with Deep Tracing)...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;

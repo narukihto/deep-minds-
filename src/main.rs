@@ -9,7 +9,7 @@ use alloy::{
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256, Bytes, Uint},
     sol,
-    sol_types::{SolCall, SolInterface},
+    sol_types::{SolCall, SolInterface, SolValue},
 };
 use std::collections::HashMap;
 
@@ -94,7 +94,7 @@ impl CausalCollapseSystem {
         }
     }
 
-    pub fn execute_collapse(&self) -> (Vec<Address>, Vec<Vec<u8>>) {
+    pub fn execute_collapse(&self) -> (Vec<Address>, Vec<Bytes>) {
         let mut addresses = Vec::new();
         let mut payloads = Vec::new();
 
@@ -134,7 +134,7 @@ impl CausalCollapseSystem {
                 amountIn: self.loan_amount,
                 amountOutMinimum: min_amount_out_leg1,
             };
-            payloads.push(IUniswapV3Router::exactInputCall { params: exact_input_params }.abi_encode());
+            payloads.push(Bytes::from(IUniswapV3Router::exactInputCall { params: exact_input_params }.abi_encode()));
 
             addresses.push(AERODROME_EXEC_ROUTER);
             let aero_params = IAerodromeSlipstreamRouter::ExactInputParams {
@@ -144,7 +144,7 @@ impl CausalCollapseSystem {
                 amountIn: min_amount_out_leg1,
                 amountOutMinimum: min_amount_out_leg2,
             };
-            payloads.push(IAerodromeSlipstreamRouter::exactInputCall { params: aero_params }.abi_encode());
+            payloads.push(Bytes::from(IAerodromeSlipstreamRouter::exactInputCall { params: aero_params }.abi_encode()));
         } else {
             addresses.push(AERODROME_EXEC_ROUTER);
             let aero_params = IAerodromeSlipstreamRouter::ExactInputParams {
@@ -154,7 +154,7 @@ impl CausalCollapseSystem {
                 amountIn: self.loan_amount,
                 amountOutMinimum: min_amount_out_leg1,
             };
-            payloads.push(IAerodromeSlipstreamRouter::exactInputCall { params: aero_params }.abi_encode());
+            payloads.push(Bytes::from(IAerodromeSlipstreamRouter::exactInputCall { params: aero_params }.abi_encode()));
 
             addresses.push(UNISWAP_V3_ROUTER);
             let mut path_bytes = Vec::new();
@@ -170,7 +170,7 @@ impl CausalCollapseSystem {
                 amountIn: min_amount_out_leg1,
                 amountOutMinimum: min_amount_out_leg2,
             };
-            payloads.push(IUniswapV3Router::exactInputCall { params: exact_input_params }.abi_encode());
+            payloads.push(Bytes::from(IUniswapV3Router::exactInputCall { params: exact_input_params }.abi_encode()));
         }
 
         (addresses, payloads)
@@ -537,10 +537,8 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     let target_path = system.execute_collapse();
     if target_path.0.is_empty() { return Ok(()); }
 
-    let swap_path_data = alloy::dyn_abi::DynSolValue::Tuple(vec![
-        alloy::dyn_abi::DynSolValue::Array(target_path.0.into_iter().map(alloy::dyn_abi::DynSolValue::Address).collect()),
-        alloy::dyn_abi::DynSolValue::Array(target_path.1.into_iter().map(alloy::dyn_abi::DynSolValue::Bytes).collect()),
-    ]).abi_encode();
+    // التعديل الجذري هنا لترميز البيانات بالشكل المباشر والسليم الذي يتوقعه عقد السوليدتي
+    let swap_path_data = (target_path.0, target_path.1).abi_encode();
 
     let contract_sim = BaseAtomicArbitrage::new(contract_address, http_provider);
     let simulation_call = contract_sim
@@ -558,8 +556,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
         }
         Err(contract_error) => {
             eprintln!("❌ [SIMULATION FAILED for {}]", pair_cfg.symbol);
-            
-            // فحص محاولة فك التشفير كخطأ مخصص معروف (مثل ArbitrageUnprofitable)
+
             if let Some(revert_bytes) = contract_error.as_revert_data() {
                 match BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(revert_bytes.as_ref()) {
                     Ok(err_decoded) => {
@@ -579,7 +576,6 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
                         }
                     }
                     Err(_) => {
-                        // طباعة بايتات الخطأ الخام الكاملة في حال فشل فك التشفير القياسي
                         eprintln!("   🔍 [Raw Revert Data Bytes]: 0x{}", alloy::hex::encode(revert_bytes.as_ref()));
                         if revert_bytes.len() >= 4 {
                             eprintln!("   🔑 [Error Selector]: 0x{}", alloy::hex::encode(&revert_bytes[..4]));
@@ -587,7 +583,6 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
                     }
                 }
             } else {
-                // التقاط الخطأ الخام الكامل من الاستجابة حتى لو عادت بـ data: None
                 let error_string = format!("{:?}", contract_error);
                 eprintln!("   🛑 [Full Raw Error/Transport Response]: {}", error_string);
             }

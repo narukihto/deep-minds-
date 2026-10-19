@@ -24,10 +24,10 @@ pub const VIRTUAL_BASE: Address = address!("0b3e328455c4059EEb9e3f84b5543F74E24e
 const UNISWAP_V3_FACTORY: Address = address!("33128a8fC17869897dcE68Ed026d694621f6FDfD");
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
 
-// 1. راوتر الاستعلام الرسمي لقراءة الأسعار بدون أصفار
+// راوتر الاستعلام الرسمي لقراءة الأسعار بدون أصفار
 const AERODROME_OFFICIAL_ROUTER: Address = address!("0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43");
 
-// 2. عنوان الراوتر المسموح به في عقدك المنشور لاستخدامه في التنفيذ
+// عنوان الراوتر المسموح به في عقدك المنشور لاستخدامه في التنفيذ
 const AERODROME_EXEC_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
 
 const AERODROME_V2_FACTORY: Address = address!("0x420DD381b31aEf6683db6B902084cB0FFECe40Da");
@@ -491,7 +491,6 @@ async fn fetch_live_market_data_for_pair<P>(http_provider: P, config: &TokenPair
 where P: Provider<Ethereum> + Clone {
     let mut price_aero = 0.0;
 
-    // القراءة الحية المباشرة من الراوتر الرسمي لـ Aerodrome V2
     let aero_router = IAerodromeRouter::new(AERODROME_OFFICIAL_ROUTER, http_provider.clone());
     let sample_amount = U256::from(10_u128.pow(config.decimals));
     let route = IAerodromeRouter::Route {
@@ -614,7 +613,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Ultimate Multi-DEX MEV Bot...");
+    println!("🤖 Initializing Ultimate Multi-DEX MEV Bot (Auto-Whitelister Active)...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -626,17 +625,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let signer = PrivateKeySigner::from_str(&private_key_str)?;
     let signer_address = signer.address();
-    
+
     let http_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_http(primary_http_url.parse()?);
     let private_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_http(private_http_url.parse()?);
 
     let monitored_pairs = get_monitored_pairs(http_provider.clone()).await?;
     let liquidity_graph = load_global_liquidity_graph();
 
+    // أتمتة تفعيل الراوترات والأصول في العقد أوتوماتيكياً عند الإقلاع دون تدخل يدوي
+    println!("🔧 [Auto-Whitelist] Registering execution routers & target tokens on smart contract...");
+    let contract_instance = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
+
+    // تفعيل راوتر التنفيذ الخاص بـ Aerodrome وتفعيل راوتر Uniswap V3
+    let _ = contract_instance.clone().setTargetWhitelist(AERODROME_EXEC_ROUTER, true).from(signer_address).send().await;
+    let _ = contract_instance.clone().setTargetWhitelist(UNISWAP_V3_ROUTER, true).from(signer_address).send().await;
+
     for pair in &monitored_pairs {
-        let _ = BaseAtomicArbitrage::new(contract_address, http_provider.clone()).setTargetWhitelist(pair.target_token, true).from(signer_address).send().await;
+        let _ = contract_instance.clone().setTargetWhitelist(pair.target_token, true).from(signer_address).send().await;
     }
-    let _ = BaseAtomicArbitrage::new(contract_address, http_provider.clone()).setTargetWhitelist(CBETH_BASE, true).from(signer_address).send().await;
+    let _ = contract_instance.clone().setTargetWhitelist(CBETH_BASE, true).from(signer_address).send().await;
+    println!("✅ [Auto-Whitelist] Completed successfully. All targets authorized.");
 
     let ws = alloy::providers::WsConnect::new(alchemy_wss_url);
     let ws_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_ws(ws).await?;

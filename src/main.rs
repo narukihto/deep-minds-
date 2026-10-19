@@ -5,7 +5,7 @@ use alloy::{
     primitives::{address, Address, U256, Bytes, Uint},
     sol,
     sol_types::{SolCall, SolValue, SolError},
-    rpc::types::trace::geth::{GethDebugTracingOptions, GethTrace, GethDebugTracerType},
+    rpc::types::trace::geth::{GethDebugTracingOptions, GethTrace, GethDebugTracerType, CallFrame},
 };
 use num_bigint::BigUint;
 use num_traits::One;
@@ -397,7 +397,7 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
     BigUint::parse_bytes(num_str.as_bytes(), 10).unwrap_or_else(BigUint::one)
 }
 
-/// 🔥 دالة التحليل العميق المصلحة تماماً والمتوافقة مع الحقول الحقيقية في Alloy 2.5
+/// 🔥 أداة التحليل العميق المصلحة بدقة تامة باستخدام CallFrame مباشرة
 async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone + 'static>(
     provider: P,
     tx_hash: alloy::primitives::TxHash,
@@ -407,9 +407,8 @@ async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone + 'static>
 
     let tx_trace = provider.debug_trace_transaction(tx_hash, trace_options).await?;
 
-    if let GethTrace::Default(root_frame) = tx_trace {
-        // فحص الـ data/output المتاحة في الـ DefaultFrame الحقيقي
-        if let Some(revert_bytes) = extract_revert_from_default_frame(&root_frame) {
+    if let GethTrace::Call(root_frame) = tx_trace {
+        if let Some(revert_bytes) = extract_revert_from_call_frame(&root_frame) {
             if let Ok(decoded) = BaseAtomicArbitrage::ArbitrageUnprofitable::abi_decode(&revert_bytes) {
                 print_financial_report(decoded.required, decoded.actual);
                 return Ok(());
@@ -420,8 +419,8 @@ async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone + 'static>
     Ok(())
 }
 
-fn extract_revert_from_default_frame(frame: &alloy::rpc::types::trace::geth::GethDefaultTracerFrame) -> Option<Bytes> {
-    if frame.failed {
+fn extract_revert_from_call_frame(frame: &CallFrame) -> Option<Bytes> {
+    if frame.error.is_some() {
         if let Some(ref output) = frame.output {
             if !output.is_empty() {
                 return Some(output.clone());
@@ -429,23 +428,7 @@ fn extract_revert_from_default_frame(frame: &alloy::rpc::types::trace::geth::Get
         }
     }
     for sub in &frame.calls {
-        if let Some(res) = extract_revert_from_sub_call(sub) {
-            return Some(res);
-        }
-    }
-    None
-}
-
-fn extract_revert_from_sub_call(call: &alloy::rpc::types::trace::geth::CallFrame) -> Option<Bytes> {
-    if call.error.is_some() {
-        if let Some(ref output) = call.output {
-            if !output.is_empty() {
-                return Some(output.clone());
-            }
-        }
-    }
-    for sub in &call.calls {
-        if let Some(res) = extract_revert_from_sub_call(sub) {
+        if let Some(res) = extract_revert_from_call_frame(sub) {
             return Some(res);
         }
     }

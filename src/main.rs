@@ -4,8 +4,8 @@ use alloy::{
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256, Bytes, Uint},
     sol,
-    sol_types::{SolCall, SolInterface, SolValue, SolError},
-    rpc::types::eth::trace::geth::{GethDebugTracingOptions, GethTrace, GethDefaultTracerFrame},
+    sol_types::{SolCall, SolValue, SolError},
+    rpc::types::trace::geth::{GethDebugTracingOptions, GethTrace, GethDefaultTracerFrame},
 };
 use num_bigint::BigUint;
 use num_traits::One;
@@ -397,7 +397,7 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
     BigUint::parse_bytes(num_str.as_bytes(), 10).unwrap_or_else(BigUint::one)
 }
 
-/// 🔥 أداة التحليل العميق المتطورة لجلب سبب الفشل الفعلي عبر الـ callTracer[span_0](start_span)[span_0](end_span)
+/// 🔥 أداة التحليل العميق المتطورة لجلب سبب الفشل الفعلي عبر الـ callTracer
 async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone + 'static>(
     provider: P,
     tx_hash: alloy::primitives::TxHash,
@@ -409,7 +409,8 @@ async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone + 'static>
 
     if let GethTrace::Default(root_frame) = tx_trace {
         if let Some(revert_data_bytes) = find_revert_in_frames(&root_frame) {
-            if let Ok(decoded) = BaseAtomicArbitrage::ArbitrageUnprofitable::abi_decode(&revert_data_bytes, true) {
+            // تصحيح استدعاء abi_decode بمدخل واحد فقط
+            if let Ok(decoded) = BaseAtomicArbitrage::ArbitrageUnprofitable::abi_decode(&revert_data_bytes) {
                 print_financial_report(decoded.required, decoded.actual);
                 return Ok(());
             }

@@ -1,14 +1,10 @@
 use alloy::{
-    providers::{Provider, ProviderBuilder, ext::DebugApi},
+    providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256, Bytes, Uint},
     sol,
     sol_types::{SolCall, SolValue, SolInterface},
-    rpc::types::trace::geth::{
-        CallFrame, GethDebugBuiltInTracerType, GethDebugTracerType,
-        GethDebugTracingOptions, GethTrace,
-    },
 };
 use num_bigint::BigUint;
 use num_traits::One;
@@ -400,61 +396,54 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
     BigUint::parse_bytes(num_str.as_bytes(), 10).unwrap_or_else(BigUint::one)
 }
 
-/// 🔥 أداة التحليل العميق المتوافقة 100% مع معيار Alloy v2.5
-async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone + 'static>(
+/// 🔥 المحاكاة المحلية المجانية عبر eth_call لكشف سبب الفشل (Required vs Actual) فوراً وبدقة
+async fn simulate_and_diagnose_arbitrage<P: Provider<Ethereum> + Clone + 'static>(
     provider: P,
-    tx_hash: alloy::primitives::TxHash,
-) -> eyre::Result<()> {
-    let trace_options = GethDebugTracingOptions {
-        tracer: Some(GethDebugTracerType::BuiltInTracer(
-            GethDebugBuiltInTracerType::CallTracer,
-        )),
-        ..Default::default()
-    };
+    contract_address: Address,
+    signer_address: Address,
+    token_to_borrow: Address,
+    loan_amount: U256,
+    swap_path_data: Bytes,
+) -> eyre::Result<bool> {
+    let contract_instance = BaseAtomicArbitrage::new(contract_address, provider);
+    let call_builder = contract_instance.triggerBalancerArbitrage(token_to_borrow, loan_amount, swap_path_data).from(signer_address);
 
-    let trace: GethTrace = provider.debug_trace_transaction(tx_hash, trace_options).await?;
-
-    if let GethTrace::CallTracer(root_frame) = trace {
-        if let Some(revert_bytes) = find_revert_output(&root_frame) {
-            if let Ok(decoded) = BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(&revert_bytes) {
-                match decoded {
-                    BaseAtomicArbitrage::BaseAtomicArbitrageErrors::ArbitrageUnprofitable(err) => {
-                        print_financial_report(err.required, err.actual);
-                    }
-                    _ => {
-                        println!("⚠️ Reverted with another custom error.");
+    match call_builder.call().await {
+        Ok(_) => {
+            println!("✅ [Local Simulation] Arbitrage simulation PASSED successfully!");
+            Ok(true)
+        }
+        Err(e) => {
+            let err_str = format!("{:?}", e);
+            if let Some(start_idx) = err_str.find("0x") {
+                let hex_data = &err_str[start_idx..];
+                let clean_hex: String = hex_data.chars().take_while(|c| c.is_ascii_hexdigit() || *c == 'x').collect();
+                if let Ok(bytes) = hex::decode(clean_hex.trim_start_matches("0x")) {
+                    if let Ok(decoded) = BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(&bytes) {
+                        match decoded {
+                            BaseAtomicArbitrage::BaseAtomicArbitrageErrors::ArbitrageUnprofitable(err) => {
+                                print_financial_report(err.required, err.actual);
+                                return Ok(false);
+                            }
+                            _ => {
+                                println!("⚠️ Simulation reverted with another custom error: {:?}", decoded);
+                            }
+                        }
                     }
                 }
-                return Ok(());
             }
+            println!("⚠️ Simulation reverted with raw error: {}", err_str);
+            Ok(false)
         }
     }
-    println!("⚠️ Transaction trace didn't yield ArbitrageUnprofitable for Tx: {:?}", tx_hash);
-    Ok(())
-}
-
-fn find_revert_output(frame: &CallFrame) -> Option<Bytes> {
-    if frame.error.is_some() {
-        if let Some(ref output) = frame.output {
-            if !output.is_empty() {
-                return Some(output.clone());
-            }
-        }
-    }
-    for child_frame in &frame.calls {
-        if let Some(output) = find_revert_output(child_frame) {
-            return Some(output);
-        }
-    }
-    None
 }
 
 fn print_financial_report(required: U256, actual: U256) {
     let deficit = if required > actual { required - actual } else { U256::ZERO };
     println!("\n=======================================================");
-    println!("📊 MEV ULTRA ANALYSIS REPORT (Alloy v2.5 Engine)");
+    println!("📊 LOCAL SIMULATION ANALYSIS REPORT (eth_call)");
     println!("=======================================================");
-    println!("🔴 Status : Execution Reverted");
+    println!("🔴 Status : Simulation Reverted (Unprofitable)");
     println!("🎯 Target Error : ArbitrageUnprofitable");
     println!("💰 Required : {} wei", required);
     println!("💸 Actual : {} wei", actual);
@@ -590,34 +579,40 @@ where P: Provider<Ethereum> + Clone {
 
 async fn trigger_cross_dex_arbitrage<PP>(private_provider: PP, contract_address: Address, signer_address: Address, spread_gap: f64, pair_cfg: &TokenPairConfig, price_aero: f64, price_v3: f64, target_price_usd: f64) -> Result<(), Box<dyn std::error::Error>>
 where PP: Provider<Ethereum> + Clone + 'static {
-    if spread_gap < 7.0 { return Ok(()); } // تم خفض عتبة التنفيذ إلى 7.0 دولار
+    if spread_gap < 7.0 { return Ok(()); }
 
     let raw_loan = (spread_gap * 40.0) as u128 * 1_000_000;
     let dynamic_loan = raw_loan.clamp(500_000_000, 1_200_000_000); 
     let loan_amount = U256::from(dynamic_loan);
 
-    println!("🎯 [Cross-DEX {}] Real Gap: ${:.2} | Optimized Loan: {} USDC... Dispatching directly via Private RPC!", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
+    println!("🎯 [Cross-DEX {}] Real Gap: ${:.2} | Optimized Loan: {} USDC... Building Payload...", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
 
     let nodes = vec![QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000), frequency: spread_gap, token0: USDC_BASE, token1: pair_cfg.target_token }];
     let system = CausalCollapseSystem::new(nodes, vec![UNISWAP_V3_ROUTER, AERODROME_EXEC_ROUTER], contract_address, loan_amount, USDC_BASE, pair_cfg.clone(), price_aero, price_v3, target_price_usd);
     let target_path = system.execute_collapse();
     if target_path.0.is_empty() { return Ok(()); }
 
-    let swap_path_data = (target_path.0, target_path.1).abi_encode();
+    let swap_path_data = Bytes::from((target_path.0, target_path.1).abi_encode());
+
+    // المحاكاة المحلية المجانية أولاً لمعرفة سبب الفشل بدقة دون حرق غاز
+    let is_profitable = simulate_and_diagnose_arbitrage(
+        private_provider.clone(),
+        contract_address,
+        signer_address,
+        USDC_BASE,
+        loan_amount,
+        swap_path_data.clone(),
+    ).await.unwrap_or(false);
+
+    if !is_profitable {
+        println!("🛑 [Skipped] Arbitrage simulation failed; skipping broadcast to save gas.");
+        return Ok(());
+    }
 
     let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider.clone());
-    match contract_private.triggerBalancerArbitrage(USDC_BASE, loan_amount, swap_path_data.into()).from(signer_address).gas(3_500_000).send().await {
+    match contract_private.triggerBalancerArbitrage(USDC_BASE, loan_amount, swap_path_data).from(signer_address).gas(3_500_000).send().await {
         Ok(tx) => {
-            let tx_hash = *tx.tx_hash();
-            println!("🚀 [Dispatched Successfully] Hash: {:?}", tx_hash);
-
-            let provider_clone = private_provider.clone();
-            tokio::spawn(async move {
-                sleep(Duration::from_secs(3)).await;
-                if let Err(err) = analyze_failed_mev_transaction(provider_clone, tx_hash).await {
-                    eprintln!("⚠️ Error tracing tx: {:?}", err);
-                }
-            });
+            println!("🚀 [Dispatched Successfully] Hash: {:?}", tx.tx_hash());
         }
         Err(e) => {
             eprintln!("❌ [Dispatch Failed for {}]: {:?}", pair_cfg.symbol, e);
@@ -651,7 +646,7 @@ where PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Ultimate Multi-DEX MEV Bot (Threshold Reduced to $7.0)...");
+    println!("🤖 Initializing Ultimate Multi-DEX MEV Bot (Local Simulation Diagnostics Enabled)...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;
@@ -707,7 +702,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pair.symbol, p_aero, p_v3, spread_gap
                 );
 
-                if spread_gap >= 7.0 { // تفعيل الإرسال عند تجاوز الـ 7 دولارات
+                if spread_gap >= 7.0 {
                     let target_price = if p_v3 > 0.0 { p_v3 } else { current_weth_price };
                     let _ = trigger_cross_dex_arbitrage(
                         private_provider.clone(),

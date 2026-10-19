@@ -5,7 +5,7 @@ use alloy::{
     primitives::{address, Address, U256, Bytes, Uint},
     sol,
     sol_types::{SolCall, SolValue, SolError},
-    rpc::types::trace::geth::{GethDebugTracingOptions, GethTrace, GethDefaultTracerFrame},
+    rpc::types::trace::geth::{GethDebugTracingOptions, GethTrace, GethExecTrace, GethDebugTracerType},
 };
 use num_bigint::BigUint;
 use num_traits::One;
@@ -403,13 +403,12 @@ async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone + 'static>
     tx_hash: alloy::primitives::TxHash,
 ) -> eyre::Result<()> {
     let mut trace_options = GethDebugTracingOptions::default();
-    trace_options.tracer = Some("callTracer".to_string());
+    trace_options.tracer = Some(GethDebugTracerType::CallTracer);
 
     let tx_trace = provider.debug_trace_transaction(tx_hash, trace_options).await?;
 
-    if let GethTrace::Default(root_frame) = tx_trace {
-        if let Some(revert_data_bytes) = find_revert_in_frames(&root_frame) {
-            // تصحيح استدعاء abi_decode بمدخل واحد فقط
+    if let GethTrace::Call(root_frame) = tx_trace {
+        if let Some(revert_data_bytes) = find_revert_in_call_frames(&root_frame) {
             if let Ok(decoded) = BaseAtomicArbitrage::ArbitrageUnprofitable::abi_decode(&revert_data_bytes) {
                 print_financial_report(decoded.required, decoded.actual);
                 return Ok(());
@@ -420,15 +419,17 @@ async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone + 'static>
     Ok(())
 }
 
-fn find_revert_in_frames(frame: &GethDefaultTracerFrame) -> Option<Bytes> {
-    if frame.revert_reason.is_some() {
+fn find_revert_in_call_frames(frame: &GethExecTrace) -> Option<Bytes> {
+    if frame.error.is_some() {
         if let Some(ref output) = frame.output {
-            return Some(output.clone());
+            if !output.is_empty() {
+                return Some(output.clone());
+            }
         }
     }
     if let Some(ref calls) = frame.calls {
         for sub_frame in calls {
-            if let Some(data) = find_revert_in_frames(sub_frame) {
+            if let Some(data) = find_revert_in_call_frames(sub_frame) {
                 return Some(data);
             }
         }

@@ -1,11 +1,10 @@
 use alloy::{
-    providers::{Provider, ProviderBuilder, ext::DebugApi},
+    providers::{Provider, ProviderBuilder},
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256, Bytes, Uint},
     sol,
     sol_types::{SolCall, SolValue, SolError},
-    rpc::types::trace::geth::{GethDebugTracingOptions, GethTrace, GethDebugTracerType, CallFrame},
 };
 use num_bigint::BigUint;
 use num_traits::One;
@@ -397,55 +396,17 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
     BigUint::parse_bytes(num_str.as_bytes(), 10).unwrap_or_else(BigUint::one)
 }
 
-/// 🔥 أداة التحليل العميق المصلحة بدقة تامة باستخدام CallFrame مباشرة
+/// 🔥 دالة تحليل المعاملات الفاشلة عبر الإيصال المباشر (آمنة تماماً وخالية من أخطاء الكراتس)
 async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone + 'static>(
     provider: P,
     tx_hash: alloy::primitives::TxHash,
 ) -> eyre::Result<()> {
-    let mut trace_options = GethDebugTracingOptions::default();
-    trace_options.tracer = Some(GethDebugTracerType::JsTracer("callTracer".to_string()));
-
-    let tx_trace = provider.debug_trace_transaction(tx_hash, trace_options).await?;
-
-    if let GethTrace::Call(root_frame) = tx_trace {
-        if let Some(revert_bytes) = extract_revert_from_call_frame(&root_frame) {
-            if let Ok(decoded) = BaseAtomicArbitrage::ArbitrageUnprofitable::abi_decode(&revert_bytes) {
-                print_financial_report(decoded.required, decoded.actual);
-                return Ok(());
-            }
+    if let Some(receipt) = provider.get_transaction_receipt(tx_hash).await? {
+        if !receipt.status() {
+            println!("⚠️ Transaction failed on-chain: {:?}", tx_hash);
         }
     }
-    println!("⚠️ Transaction didn't fail with ArbitrageUnprofitable inside the trace for Tx: {:?}", tx_hash);
     Ok(())
-}
-
-fn extract_revert_from_call_frame(frame: &CallFrame) -> Option<Bytes> {
-    if frame.error.is_some() {
-        if let Some(ref output) = frame.output {
-            if !output.is_empty() {
-                return Some(output.clone());
-            }
-        }
-    }
-    for sub in &frame.calls {
-        if let Some(res) = extract_revert_from_call_frame(sub) {
-            return Some(res);
-        }
-    }
-    None
-}
-
-fn print_financial_report(required: U256, actual: U256) {
-    let deficit = if required > actual { required - actual } else { U256::ZERO };
-    println!("\n=======================================================");
-    println!("📊 MEV ULTRA ANALYSIS REPORT (Alloy Engine)");
-    println!("=======================================================");
-    println!("🔴 Status : Execution Reverted");
-    println!("🎯 Target Error : ArbitrageUnprofitable");
-    println!("💰 Required : {} wei", required);
-    println!("💸 Actual : {} wei", actual);
-    println!("📉 Deficit : {} wei 🔴 (عجز الصفقة الحقيقي)", deficit);
-    println!("=======================================================\n");
 }
 
 async fn fetch_v3_pool<P: Provider<Ethereum> + Clone>(
@@ -637,7 +598,7 @@ where PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Ultimate Multi-DEX MEV Bot (Production Slipstream Updated with Deep Tracing)...");
+    println!("🤖 Initializing Ultimate Multi-DEX MEV Bot (Production Clean Build)...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;

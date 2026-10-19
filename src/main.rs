@@ -5,7 +5,7 @@ use alloy::{
     primitives::{address, Address, U256, Bytes, Uint},
     sol,
     sol_types::{SolCall, SolValue, SolError},
-    rpc::types::trace::geth::{GethDebugTracingOptions, GethTrace, GethDebugTracerType},
+    rpc::types::trace::geth::{GethDebugTracingOptions, GethTrace, CallFrame},
 };
 use num_bigint::BigUint;
 use num_traits::One;
@@ -397,32 +397,29 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
     BigUint::parse_bytes(num_str.as_bytes(), 10).unwrap_or_else(BigUint::one)
 }
 
-/// 🔥 أداة التحليل العميق المتطورة باستخدام GethTrace والمتغيرات المتوافقة مع Alloy 2.5
+/// 🔥 أداة التحليل العميق المتطورة المتوافقة تماماً مع Alloy 2.5
 async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone + 'static>(
     provider: P,
     tx_hash: alloy::primitives::TxHash,
 ) -> eyre::Result<()> {
     let mut trace_options = GethDebugTracingOptions::default();
-    trace_options.tracer = Some(GethDebugTracerType::CallTracer);
+    trace_options.tracer = Some("callTracer".to_string());
 
     let tx_trace = provider.debug_trace_transaction(tx_hash, trace_options).await?;
 
-    match tx_trace {
-        GethTrace::Call(root_frame) => {
-            if let Some(revert_data_bytes) = find_revert_in_call_frames(&root_frame) {
-                if let Ok(decoded) = BaseAtomicArbitrage::ArbitrageUnprofitable::abi_decode(&revert_data_bytes) {
-                    print_financial_report(decoded.required, decoded.actual);
-                    return Ok(());
-                }
+    if let GethTrace::Default(root_frame) = tx_trace {
+        if let Some(revert_data_bytes) = find_revert_in_call_frames(&root_frame) {
+            if let Ok(decoded) = BaseAtomicArbitrage::ArbitrageUnprofitable::abi_decode(&revert_data_bytes) {
+                print_financial_report(decoded.required, decoded.actual);
+                return Ok(());
             }
         }
-        _ => {}
     }
     println!("⚠️ Transaction didn't fail with ArbitrageUnprofitable inside the trace trees for Tx: {:?}", tx_hash);
     Ok(())
 }
 
-fn find_revert_in_call_frames(frame: &alloy::rpc::types::trace::geth::CallFrame) -> Option<Bytes> {
+fn find_revert_in_call_frames(frame: &CallFrame) -> Option<Bytes> {
     if frame.error.is_some() {
         if let Some(ref output) = frame.output {
             if !output.is_empty() {
@@ -430,11 +427,9 @@ fn find_revert_in_call_frames(frame: &alloy::rpc::types::trace::geth::CallFrame)
             }
         }
     }
-    if let Some(ref calls) = frame.calls {
-        for sub_frame in calls {
-            if let Some(data) = find_revert_in_call_frames(sub_frame) {
-                return Some(data);
-            }
+    for sub_frame in &frame.calls {
+        if let Some(data) = find_revert_in_call_frames(sub_frame) {
+            return Some(data);
         }
     }
     None

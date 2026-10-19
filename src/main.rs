@@ -186,14 +186,14 @@ impl CausalCollapseSystem {
     }
 }
 
-// دالة مساعدة لتشفير مسار Slipstream (CLMM Path Encoding) - تم تصحيح تحويل الـ fee هنا بدقة
+// دالة مساعدة لتشفير مسار Slipstream (CLMM Path Encoding)
 fn abi_encode_slipstream_path(token_in: Address, token_out: Address, fee: u32) -> Bytes {
     let mut path = Vec::new();
     path.extend_from_slice(token_in.as_slice());
-    
+
     let fee_bytes_u32 = fee.to_be_bytes(); // يعطي 4 بايت
     path.extend_from_slice(&fee_bytes_u32[1..4]); // نأخذ آخر 3 بايتات فقط (تتوافق مع معيار 24-bit fee)
-    
+
     path.extend_from_slice(token_out.as_slice());
     Bytes::from(path)
 }
@@ -538,7 +538,6 @@ async fn trigger_cross_dex_arbitrage<P, PP>(http_provider: P, private_provider: 
 where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     if spread_gap < 5.0 { return Ok(()); }
 
-    // خوارزمية القرض الأمثل الآمنة والمعدلة بناءً على حدود السيولة المركزة
     let raw_loan = (spread_gap * 40.0) as u128 * 1_000_000;
     let dynamic_loan = raw_loan.clamp(500_000_000, 1_200_000_000); 
     let loan_amount = U256::from(dynamic_loan);
@@ -572,16 +571,31 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
         Err(contract_error) => {
             eprintln!("❌ [SIMULATION FAILED for {}]", pair_cfg.symbol);
             if let Some(revert_bytes) = contract_error.as_revert_data() {
-                if let Ok(err_decoded) = BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(revert_bytes.as_ref()) {
-                    match err_decoded {
-                        BaseAtomicArbitrage::BaseAtomicArbitrageErrors::ArbitrageUnprofitable(err_data) => {
-                            eprintln!("   💰 [Revert]: ArbitrageUnprofitable! Required: {}, Actual: {}", err_data.required, err_data.actual);
-                        }
-                        BaseAtomicArbitrage::BaseAtomicArbitrageErrors::InsufficientLiquidity(_) => {
-                            eprintln!("   💧 [Revert]: InsufficientLiquidity!");
+                // محاولة فك تشفير الخطأ القادم من عقد السوليدتي
+                match BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(revert_bytes.as_ref()) {
+                    Ok(err_decoded) => {
+                        match err_decoded {
+                            BaseAtomicArbitrage::BaseAtomicArbitrageErrors::ArbitrageUnprofitable(err_data) => {
+                                let required_f64 = err_data.required.to_string().parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
+                                let actual_f64 = err_data.actual.to_string().parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
+                                let deficit_f64 = required_f64 - actual_f64;
+                                eprintln!("   💰 [Revert Detail]: ArbitrageUnprofitable!");
+                                eprintln!("      🔹 Required Return: ${:.4} USDC", required_f64);
+                                eprintln!("      🔸 Actual Return:   ${:.4} USDC", actual_f64);
+                                eprintln!("      ⚠️ Deficit (Shortfall): ${:.4} USDC (العجز عن تحقيق الربح)", deficit_f64);
+                            }
+                            BaseAtomicArbitrage::BaseAtomicArbitrageErrors::InsufficientLiquidity(_) => {
+                                eprintln!("   💧 [Revert Detail]: InsufficientLiquidity! السيولة في المجمع لا تكفي لهذا الحجم.");
+                            }
                         }
                     }
+                    Err(_) => {
+                        // إذا كان الخطأ غير معرف أو رسالة Revert عادية من شبكة إيثريوم
+                        eprintln!("   🔍 [Raw Revert Data]: 0x{}", hex::encode(revert_bytes.as_ref()));
+                    }
                 }
+            } else {
+                eprintln!("   🛑 [Error]: Failed without explicit revert data: {:?}", contract_error);
             }
         }
     }

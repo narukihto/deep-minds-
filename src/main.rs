@@ -522,15 +522,15 @@ where P: Provider<Ethereum> + Clone {
     Ok((price_aero, price_v3, 0.0, 0.0, spread_gap))
 }
 
-async fn trigger_cross_dex_arbitrage<P, PP>(http_provider: P, private_provider: PP, contract_address: Address, signer_address: Address, spread_gap: f64, pair_cfg: &TokenPairConfig, price_aero: f64, price_v3: f64, target_price_usd: f64) -> Result<(), Box<dyn std::error::Error>>
-where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
+async fn trigger_cross_dex_arbitrage<PP>(private_provider: PP, contract_address: Address, signer_address: Address, spread_gap: f64, pair_cfg: &TokenPairConfig, price_aero: f64, price_v3: f64, target_price_usd: f64) -> Result<(), Box<dyn std::error::Error>>
+where PP: Provider<Ethereum> + Clone {
     if spread_gap < 5.0 { return Ok(()); }
 
     let raw_loan = (spread_gap * 40.0) as u128 * 1_000_000;
     let dynamic_loan = raw_loan.clamp(500_000_000, 1_200_000_000); 
     let loan_amount = U256::from(dynamic_loan);
 
-    println!("🎯 [Cross-DEX {}] Real Gap: ${:.2} | Optimized Loan: {} USDC... Simulating...", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
+    println!("🎯 [Cross-DEX {}] Real Gap: ${:.2} | Optimized Loan: {} USDC... Dispatching directly via Private RPC!", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
 
     let nodes = vec![QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000), frequency: spread_gap, token0: USDC_BASE, token1: pair_cfg.target_token }];
     let system = CausalCollapseSystem::new(nodes, vec![UNISWAP_V3_ROUTER, AERODROME_EXEC_ROUTER], contract_address, loan_amount, USDC_BASE, pair_cfg.clone(), price_aero, price_v3, target_price_usd);
@@ -539,60 +539,22 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
     let swap_path_data = (target_path.0, target_path.1).abi_encode();
 
-    let contract_sim = BaseAtomicArbitrage::new(contract_address, http_provider);
-    let simulation_call = contract_sim
-        .triggerBalancerArbitrage(USDC_BASE, loan_amount, swap_path_data.clone().into())
-        .from(signer_address)
-        .gas(3_500_000); // رفع سقف الغاز إلى 3,500,000 لتفادي أي Out of Gas مبكر
-
-    match simulation_call.call().await {
-        Ok(_) => {
-            println!("🎉 [SIMULATION PASSED! 🎉] Dispatching profitable trade via Private RPC...");
-            let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider);
-            if let Ok(tx) = contract_private.triggerBalancerArbitrage(USDC_BASE, loan_amount, swap_path_data.into()).from(signer_address).gas(3_500_000).send().await {
-                println!("🚀 [Dispatched Successfully] Hash: {:?}", tx.tx_hash());
-            }
+    // إلغاء خطوة المحاكاة بالكامل والإرسال المباشر للشبكة
+    let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider);
+    match contract_private.triggerBalancerArbitrage(USDC_BASE, loan_amount, swap_path_data.into()).from(signer_address).gas(3_500_000).send().await {
+        Ok(tx) => {
+            println!("🚀 [Dispatched Successfully] Hash: {:?}", tx.tx_hash());
         }
-        Err(contract_error) => {
-            eprintln!("❌ [SIMULATION FAILED for {}]", pair_cfg.symbol);
-
-            if let Some(revert_bytes) = contract_error.as_revert_data() {
-                match BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(revert_bytes.as_ref()) {
-                    Ok(err_decoded) => {
-                        match err_decoded {
-                            BaseAtomicArbitrage::BaseAtomicArbitrageErrors::ArbitrageUnprofitable(err_data) => {
-                                let required_f64 = err_data.required.to_string().parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
-                                let actual_f64 = err_data.actual.to_string().parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
-                                let deficit_f64 = required_f64 - actual_f64;
-                                eprintln!("   💰 [Revert Detail]: ArbitrageUnprofitable!");
-                                eprintln!("      🔹 Required Return: ${:.4} USDC", required_f64);
-                                eprintln!("      🔸 Actual Return:   ${:.4} USDC", actual_f64);
-                                eprintln!("      ⚠️ Deficit (Shortfall): ${:.4} USDC", deficit_f64);
-                            }
-                            BaseAtomicArbitrage::BaseAtomicArbitrageErrors::InsufficientLiquidity(_) => {
-                                eprintln!("   💧 [Revert Detail]: InsufficientLiquidity! السيولة في المجمع لا تكفي.");
-                            }
-                        }
-                    }
-                    Err(_) => {
-                        eprintln!("   🔍 [Raw Revert Data Bytes]: 0x{}", alloy::hex::encode(revert_bytes.as_ref()));
-                        if revert_bytes.len() >= 4 {
-                            eprintln!("   🔑 [Error Selector]: 0x{}", alloy::hex::encode(&revert_bytes[..4]));
-                        }
-                    }
-                }
-            } else {
-                let error_string = format!("{:?}", contract_error);
-                eprintln!("   🛑 [Full Raw Error/Transport Response]: {}", error_string);
-            }
+        Err(e) => {
+            eprintln!("❌ [Dispatch Failed for {}]: {:?}", pair_cfg.symbol, e);
         }
     }
 
     Ok(())
 }
 
-async fn trigger_triangular_arbitrage<P, PP>(http_provider: P, private_provider: PP, contract_address: Address, signer_address: Address, graph: &ArbitrageGraph) -> Result<(), Box<dyn std::error::Error>>
-where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
+async fn trigger_triangular_arbitrage<PP>(private_provider: PP, contract_address: Address, signer_address: Address, graph: &ArbitrageGraph) -> Result<(), Box<dyn std::error::Error>>
+where PP: Provider<Ethereum> + Clone {
     let cycles = graph.find_cycles(USDC_BASE, 3);
     if cycles.is_empty() { return Ok(()); }
 
@@ -601,16 +563,10 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
         let (targets, data) = TriangularPayloadEncoder::build_execution_payload(target_cycle, contract_address, loan_amount);
         if targets.is_empty() || data.is_empty() { continue; }
 
-        let contract_sim = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
-        let sim_call = contract_sim.triggerBalancerArbitrageMulti(USDC_BASE, loan_amount, targets.clone(), data.clone()).from(signer_address).gas(3_500_000);
-
-        match sim_call.call().await {
-            Ok(_) => {
-                println!("🎉 [Triangular SIMULATION PASSED!] Cycle #{}. Dispatching...", i + 1);
-                let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider.clone());
-                if let Ok(tx) = contract_private.triggerBalancerArbitrageMulti(USDC_BASE, loan_amount, targets, data).from(signer_address).gas(3_500_000).send().await {
-                    println!("🚀 [Triangular Dispatched] Hash: {:?}", tx.tx_hash());
-                }
+        let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider.clone());
+        match contract_private.triggerBalancerArbitrageMulti(USDC_BASE, loan_amount, targets, data).from(signer_address).gas(3_500_000).send().await {
+            Ok(tx) => {
+                println!("🚀 [Triangular Dispatched Successfully] Cycle #{}. Hash: {:?}", i + 1, tx.tx_hash());
                 break;
             }
             Err(_e) => {}
@@ -680,7 +636,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if spread_gap >= 5.0 {
                     let target_price = if p_v3 > 0.0 { p_v3 } else { current_weth_price };
                     let _ = trigger_cross_dex_arbitrage(
-                        http_provider.clone(),
                         private_provider.clone(),
                         contract_address,
                         signer_address,
@@ -695,7 +650,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let _ = trigger_triangular_arbitrage(
-            http_provider.clone(),
             private_provider.clone(),
             contract_address,
             signer_address,

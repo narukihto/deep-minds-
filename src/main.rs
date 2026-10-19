@@ -506,9 +506,9 @@ where P: Provider<Ethereum> + Clone {
         factory: AERODROME_V2_FACTORY,
     };
 
-    // التصحيح هنا: استخراج المخرجات عبر `._0` أو المخرجات المباشرة لمكتبة Alloy
+    // التصحيح النهائي: استخدام amounts_out مباشرة كمصفوفة مخرجات
     if let Ok(amounts_out) = aero_router.getAmountsOut(sample_amount, vec![route]).call().await {
-        let amounts_vec = amounts_out._0;
+        let amounts_vec = amounts_out;
         if !amounts_vec.is_empty() {
             let weth_out = amounts_vec.last().unwrap().to_string().parse::<f64>().unwrap_or(0.0) / 1e18;
             price_aero = weth_out * weth_price_usd;
@@ -661,8 +661,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         for pair in &monitored_pairs {
             if let Ok((p_aero, p_v3, _p_baseswap, _p_pancake, spread_gap)) = fetch_live_market_data_for_pair(http_provider.clone(), pair, current_weth_price).await {
+                // تم تنقية سطر الطباعة بالكامل
                 println!(
-                    " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} \vert{} Max Gap:${:.2}",
+                    " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} | Max Gap: ${:.2}",
                     pair.symbol, p_aero, p_v3, spread_gap
                 );
 

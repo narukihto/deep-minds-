@@ -537,20 +537,19 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     let target_path = system.execute_collapse();
     if target_path.0.is_empty() { return Ok(()); }
 
-    // التعديل الجذري هنا لترميز البيانات بالشكل المباشر والسليم الذي يتوقعه عقد السوليدتي
     let swap_path_data = (target_path.0, target_path.1).abi_encode();
 
     let contract_sim = BaseAtomicArbitrage::new(contract_address, http_provider);
     let simulation_call = contract_sim
         .triggerBalancerArbitrage(USDC_BASE, loan_amount, swap_path_data.clone().into())
         .from(signer_address)
-        .gas(1_500_000);
+        .gas(3_500_000); // رفع سقف الغاز إلى 3,500,000 لتفادي أي Out of Gas مبكر
 
     match simulation_call.call().await {
         Ok(_) => {
             println!("🎉 [SIMULATION PASSED! 🎉] Dispatching profitable trade via Private RPC...");
             let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider);
-            if let Ok(tx) = contract_private.triggerBalancerArbitrage(USDC_BASE, loan_amount, swap_path_data.into()).from(signer_address).gas(1_500_000).send().await {
+            if let Ok(tx) = contract_private.triggerBalancerArbitrage(USDC_BASE, loan_amount, swap_path_data.into()).from(signer_address).gas(3_500_000).send().await {
                 println!("🚀 [Dispatched Successfully] Hash: {:?}", tx.tx_hash());
             }
         }
@@ -603,13 +602,13 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
         if targets.is_empty() || data.is_empty() { continue; }
 
         let contract_sim = BaseAtomicArbitrage::new(contract_address, http_provider.clone());
-        let sim_call = contract_sim.triggerBalancerArbitrageMulti(USDC_BASE, loan_amount, targets.clone(), data.clone()).from(signer_address).gas(1_800_000);
+        let sim_call = contract_sim.triggerBalancerArbitrageMulti(USDC_BASE, loan_amount, targets.clone(), data.clone()).from(signer_address).gas(3_500_000);
 
         match sim_call.call().await {
             Ok(_) => {
                 println!("🎉 [Triangular SIMULATION PASSED!] Cycle #{}. Dispatching...", i + 1);
                 let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider.clone());
-                if let Ok(tx) = contract_private.triggerBalancerArbitrageMulti(USDC_BASE, loan_amount, targets, data).from(signer_address).gas(1_800_000).send().await {
+                if let Ok(tx) = contract_private.triggerBalancerArbitrageMulti(USDC_BASE, loan_amount, targets, data).from(signer_address).gas(3_500_000).send().await {
                     println!("🚀 [Triangular Dispatched] Hash: {:?}", tx.tx_hash());
                 }
                 break;

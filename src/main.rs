@@ -24,8 +24,12 @@ pub const VIRTUAL_BASE: Address = address!("0b3e328455c4059EEb9e3f84b5543F74E24e
 const UNISWAP_V3_FACTORY: Address = address!("33128a8fC17869897dcE68Ed026d694621f6FDfD");
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
 
-// ⚠️ العنوان الصحيح والمطابق تماماً لعقدك المنشور على البلوكشين
-const AERODROME_V2_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
+// 1. راوتر الاستعلام الرسمي لقراءة الأسعار بدون أصفار
+const AERODROME_OFFICIAL_ROUTER: Address = address!("0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43");
+
+// 2. عنوان الراوتر المسموح به في عقدك المنشور لاستخدامه في التنفيذ
+const AERODROME_EXEC_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
+
 const AERODROME_V2_FACTORY: Address = address!("0x420DD381b31aEf6683db6B902084cB0FFECe40Da");
 
 #[derive(Debug, Clone)]
@@ -116,7 +120,6 @@ impl CausalCollapseSystem {
         let dex_fee_allowance = self.loan_amount * U256::from(fee_bps) / U256::from(10000);
         let target_repay_amount = self.loan_amount + flash_loan_fee + dex_fee_allowance;
 
-        // تعديل هامش الانزلاق إلى 9920 (مرونة أكبر للسماح للصفقات الرابحة بالعبور)
         let min_amount_out_leg1 = expected_target_units * U256::from(9920) / U256::from(10000); 
         let min_amount_out_leg2 = target_repay_amount + U256::from(500_000);
 
@@ -137,7 +140,8 @@ impl CausalCollapseSystem {
             };
             payloads.push(IUniswapV3Router::exactInputCall { params: exact_input_params }.abi_encode());
 
-            addresses.push(AERODROME_V2_ROUTER);
+            // استخدام راوتر التنفيذ المطابق للعقد المنشور
+            addresses.push(AERODROME_EXEC_ROUTER);
             let aero_route = IAerodromeRouter::Route {
                 from: self.pair_config.target_token,
                 to: self.borrowed_token,
@@ -152,7 +156,8 @@ impl CausalCollapseSystem {
                 deadline: U256::from(u64::MAX),
             }.abi_encode());
         } else {
-            addresses.push(AERODROME_V2_ROUTER);
+            // استخدام راوتر التنفيذ المطابق للعقد المنشور
+            addresses.push(AERODROME_EXEC_ROUTER);
             let aero_route = IAerodromeRouter::Route {
                 from: self.borrowed_token,
                 to: self.pair_config.target_token,
@@ -300,7 +305,7 @@ impl TriangularPayloadEncoder {
         for edge in cycle {
             targets.push(match edge.pool.dex_type {
                 DexType::UniswapV3 => UNISWAP_V3_ROUTER,
-                DexType::Aerodrome => AERODROME_V2_ROUTER,
+                DexType::Aerodrome => AERODROME_EXEC_ROUTER,
             });
             let min_out = current_amount * U256::from(9900) / U256::from(10000);
             match edge.pool.dex_type {
@@ -486,7 +491,8 @@ async fn fetch_live_market_data_for_pair<P>(http_provider: P, config: &TokenPair
 where P: Provider<Ethereum> + Clone {
     let mut price_aero = 0.0;
 
-    let aero_router = IAerodromeRouter::new(AERODROME_V2_ROUTER, http_provider.clone());
+    // القراءة الحية المباشرة من الراوتر الرسمي لـ Aerodrome V2
+    let aero_router = IAerodromeRouter::new(AERODROME_OFFICIAL_ROUTER, http_provider.clone());
     let sample_amount = U256::from(10_u128.pow(config.decimals));
     let route = IAerodromeRouter::Route {
         from: config.target_token,
@@ -526,7 +532,7 @@ where P: Provider<Ethereum> + Clone {
 
 async fn trigger_cross_dex_arbitrage<P, PP>(http_provider: P, private_provider: PP, contract_address: Address, signer_address: Address, spread_gap: f64, pair_cfg: &TokenPairConfig, price_aero: f64, price_v3: f64, target_price_usd: f64) -> Result<(), Box<dyn std::error::Error>>
 where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
-    if spread_gap < 5.0 { return Ok(()); } // خفض العتبة إلى $5 لاقتناص المكاسب الحقيقية فوراً
+    if spread_gap < 5.0 { return Ok(()); }
 
     let raw_loan = (spread_gap * 150.0) as u128 * 1_000_000;
     let dynamic_loan = raw_loan.clamp(1_000_000_000, 2_400_000_000); 
@@ -535,7 +541,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
     println!("🎯 [Cross-DEX {}] Real Gap: ${:.2} | Optimal Loan: {} USDC... Simulating...", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);
 
     let nodes = vec![QuantumNode { id: 1, energy_scale: generate_astronomical_number(1000), frequency: spread_gap, token0: USDC_BASE, token1: pair_cfg.target_token }];
-    let system = CausalCollapseSystem::new(nodes, vec![UNISWAP_V3_ROUTER, AERODROME_V2_ROUTER], contract_address, loan_amount, USDC_BASE, pair_cfg.clone(), price_aero, price_v3, target_price_usd);
+    let system = CausalCollapseSystem::new(nodes, vec![UNISWAP_V3_ROUTER, AERODROME_EXEC_ROUTER], contract_address, loan_amount, USDC_BASE, pair_cfg.clone(), price_aero, price_v3, target_price_usd);
     let target_path = system.execute_collapse();
     if target_path.0.is_empty() { return Ok(()); }
 

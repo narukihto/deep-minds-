@@ -1,10 +1,14 @@
 use alloy::{
-    providers::{Provider, ProviderBuilder},
+    providers::{Provider, ProviderBuilder, ext::DebugApi},
     signers::local::PrivateKeySigner,
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256, Bytes, Uint},
     sol,
-    sol_types::{SolCall, SolValue, SolError},
+    sol_types::{SolCall, SolValue, SolError, SolInterface},
+    rpc::types::trace::geth::{
+        CallFrame, GethDebugBuiltInTracerType, GethDebugTracerType,
+        GethDebugTracingOptions, GethTrace,
+    },
 };
 use num_bigint::BigUint;
 use num_traits::One;
@@ -396,17 +400,68 @@ pub fn generate_astronomical_number(zeros: usize) -> BigUint {
     BigUint::parse_bytes(num_str.as_bytes(), 10).unwrap_or_else(BigUint::one)
 }
 
-/// 🔥 دالة تحليل المعاملات الفاشلة عبر الإيصال المباشر (آمنة تماماً وخالية من أخطاء الكراتس)
+/// 🔥 أداة التحليل العميق المتوافقة 100% مع معيار Alloy v2.5 الموثق
 async fn analyze_failed_mev_transaction<P: Provider<Ethereum> + Clone + 'static>(
     provider: P,
     tx_hash: alloy::primitives::TxHash,
 ) -> eyre::Result<()> {
-    if let Some(receipt) = provider.get_transaction_receipt(tx_hash).await? {
-        if !receipt.status() {
-            println!("⚠️ Transaction failed on-chain: {:?}", tx_hash);
+    let trace_options = GethDebugTracingOptions {
+        tracer: Some(GethDebugTracerType::BuiltInTracer(
+            GethDebugBuiltInTracerType::CallTracer,
+        )),
+        ..Default::default()
+    };
+
+    let trace: GethTrace = provider.debug_trace_transaction(tx_hash, trace_options).await?;
+
+    if let GethTrace::CallTracer(root_frame) = trace {
+        if let Some(revert_bytes) = find_revert_output(&root_frame) {
+            if let Ok(decoded) = BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(&revert_bytes, false) {
+                match decoded {
+                    BaseAtomicArbitrage::BaseAtomicArbitrageErrors::ArbitrageUnprofitable(err) => {
+                        print_financial_report(err.required, err.actual);
+                    }
+                    _ => {
+                        println!("⚠️ Reverted with another custom error.");
+                    }
+                }
+                return Ok(());
+            }
         }
     }
+    println!("⚠️ Transaction trace didn't yield ArbitrageUnprofitable for Tx: {:?}", tx_hash);
     Ok(())
+}
+
+fn find_revert_output(frame: &CallFrame) -> Option<Bytes> {
+    if frame.revert.unwrap_or(false) {
+        if let Some(ref output) = frame.output {
+            if !output.is_empty() {
+                return Some(output.clone());
+            }
+        }
+    }
+    if let Some(ref children) = frame.calls {
+        for child_frame in children {
+            if let Some(output) = find_revert_output(child_frame) {
+                return Some(output);
+            }
+        }
+    }
+    None
+}
+
+fn print_financial_report(required: U256, actual: U256) {
+    let deficit = if required > actual { required - actual } else { U256::ZERO };
+    println!("\n=======================================================");
+    println!("📊 MEV ULTRA ANALYSIS REPORT (Alloy v2.5 Engine)");
+    println!("=======================================================");
+    println!("🔴 Status : Execution Reverted");
+    println!("🎯 Target Error : ArbitrageUnprofitable");
+    println!("💰 Required : {} wei", required);
+    println!("💸 Actual : {} wei", actual);
+    println!("📉 Deficit : {} wei 🔴 (عجز الصفقة الحقيقي)", deficit);
+    println!("=======================================================\n");
 }
 
 async fn fetch_v3_pool<P: Provider<Ethereum> + Clone>(
@@ -598,7 +653,7 @@ where PP: Provider<Ethereum> + Clone {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Ultimate Multi-DEX MEV Bot (Production Clean Build)...");
+    println!("🤖 Initializing Ultimate Multi-DEX MEV Bot (Production Alloy v2.5 Tracing Enabled)...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x457820b3D7d2d607AEEF8248B46Ffa6ccD60121A".to_string());
     let contract_address: Address = contract_addr_str.parse()?;

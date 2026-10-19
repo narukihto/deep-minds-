@@ -24,10 +24,7 @@ pub const VIRTUAL_BASE: Address = address!("0b3e328455c4059EEb9e3f84b5543F74E24e
 const UNISWAP_V3_FACTORY: Address = address!("33128a8fC17869897dcE68Ed026d694621f6FDfD");
 const UNISWAP_V3_ROUTER: Address = address!("0x2626664c2603336E57B271c5C0b26F421741e481");
 
-// راوتر الاستعلام الرسمي لقراءة الأسعار
 const AERODROME_OFFICIAL_ROUTER: Address = address!("0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43");
-
-// راوتر التنفيذ المعتمد لـ Aerodrome Slipstream (Concentrated Liquidity)
 const AERODROME_EXEC_ROUTER: Address = address!("0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5");
 const AERODROME_V2_FACTORY: Address = address!("0x420DD381b31aEf6683db6B902084cB0FFECe40Da");
 
@@ -105,7 +102,6 @@ impl CausalCollapseSystem {
             return (vec![], vec![]);
         }
 
-        // رسوم فلاش لون Aave V3 المحدثة (0.05%)
         let flash_loan_fee = self.loan_amount * U256::from(5) / U256::from(10000); 
         let loan_usdc_f64 = self.loan_amount.to_string().parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
         let buy_on_univ3 = self.price_v3 < self.price_aero;
@@ -120,12 +116,10 @@ impl CausalCollapseSystem {
         let dex_fee_allowance = self.loan_amount * U256::from(fee_bps) / U256::from(10000);
         let target_repay_amount = self.loan_amount + flash_loan_fee + dex_fee_allowance;
 
-        // تعديل هامش الانزلاق ليتناسب مع نطاقات Slipstream والسيولة المركزة لمنع Revert
         let min_amount_out_leg1 = expected_target_units * U256::from(9950) / U256::from(10000); 
         let min_amount_out_leg2 = target_repay_amount + U256::from(200_000);
 
         if buy_on_univ3 {
-            // Leg 1: Uniswap V3 (ExactInput)
             addresses.push(UNISWAP_V3_ROUTER);
             let mut path_bytes = Vec::new();
             path_bytes.extend_from_slice(self.borrowed_token.as_slice());
@@ -142,7 +136,6 @@ impl CausalCollapseSystem {
             };
             payloads.push(IUniswapV3Router::exactInputCall { params: exact_input_params }.abi_encode());
 
-            // Leg 2: Aerodrome Slipstream (ExactInput للمسارات المركزة)
             addresses.push(AERODROME_EXEC_ROUTER);
             let aero_params = IAerodromeSlipstreamRouter::ExactInputParams {
                 path: abi_encode_slipstream_path(self.pair_config.target_token, self.borrowed_token, 500),
@@ -153,7 +146,6 @@ impl CausalCollapseSystem {
             };
             payloads.push(IAerodromeSlipstreamRouter::exactInputCall { params: aero_params }.abi_encode());
         } else {
-            // Leg 1: Aerodrome Slipstream
             addresses.push(AERODROME_EXEC_ROUTER);
             let aero_params = IAerodromeSlipstreamRouter::ExactInputParams {
                 path: abi_encode_slipstream_path(self.borrowed_token, self.pair_config.target_token, 500),
@@ -164,7 +156,6 @@ impl CausalCollapseSystem {
             };
             payloads.push(IAerodromeSlipstreamRouter::exactInputCall { params: aero_params }.abi_encode());
 
-            // Leg 2: Uniswap V3
             addresses.push(UNISWAP_V3_ROUTER);
             let mut path_bytes = Vec::new();
             path_bytes.extend_from_slice(self.pair_config.target_token.as_slice());
@@ -186,14 +177,11 @@ impl CausalCollapseSystem {
     }
 }
 
-// دالة مساعدة لتشفير مسار Slipstream (CLMM Path Encoding)
 fn abi_encode_slipstream_path(token_in: Address, token_out: Address, fee: u32) -> Bytes {
     let mut path = Vec::new();
     path.extend_from_slice(token_in.as_slice());
-
-    let fee_bytes_u32 = fee.to_be_bytes(); // يعطي 4 بايت
-    path.extend_from_slice(&fee_bytes_u32[1..4]); // نأخذ آخر 3 بايتات فقط (تتوافق مع معيار 24-bit fee)
-
+    let fee_bytes_u32 = fee.to_be_bytes();
+    path.extend_from_slice(&fee_bytes_u32[1..4]);
     path.extend_from_slice(token_out.as_slice());
     Bytes::from(path)
 }
@@ -571,7 +559,6 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
         Err(contract_error) => {
             eprintln!("❌ [SIMULATION FAILED for {}]", pair_cfg.symbol);
             if let Some(revert_bytes) = contract_error.as_revert_data() {
-                // محاولة فك تشفير الخطأ القادم من عقد السوليدتي
                 match BaseAtomicArbitrage::BaseAtomicArbitrageErrors::abi_decode(revert_bytes.as_ref()) {
                     Ok(err_decoded) => {
                         match err_decoded {
@@ -590,8 +577,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
                         }
                     }
                     Err(_) => {
-                        // إذا كان الخطأ غير معرف أو رسالة Revert عادية من شبكة إيثريوم
-                        eprintln!("   🔍 [Raw Revert Data]: 0x{}", hex::encode(revert_bytes.as_ref()));
+                        eprintln!("   🔍 [Raw Revert Data]: 0x{}", alloy::hex::encode(revert_bytes.as_ref()));
                     }
                 }
             } else {

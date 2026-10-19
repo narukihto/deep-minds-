@@ -186,12 +186,14 @@ impl CausalCollapseSystem {
     }
 }
 
-// دالة مساعدة لتشفير مسار Slipstream (CLMM Path Encoding)
+// دالة مساعدة لتشفير مسار Slipstream (CLMM Path Encoding) - تم تصحيح تحويل الـ fee هنا بدقة
 fn abi_encode_slipstream_path(token_in: Address, token_out: Address, fee: u32) -> Bytes {
     let mut path = Vec::new();
     path.extend_from_slice(token_in.as_slice());
-    let fee_bytes = (fee as u24).to_be_bytes(); // 3 bytes fee
-    path.extend_from_slice(&fee_bytes);
+    
+    let fee_bytes_u32 = fee.to_be_bytes(); // يعطي 4 بايت
+    path.extend_from_slice(&fee_bytes_u32[1..4]); // نأخذ آخر 3 بايتات فقط (تتوافق مع معيار 24-bit fee)
+    
     path.extend_from_slice(token_out.as_slice());
     Bytes::from(path)
 }
@@ -538,7 +540,7 @@ where P: Provider<Ethereum> + Clone, PP: Provider<Ethereum> + Clone {
 
     // خوارزمية القرض الأمثل الآمنة والمعدلة بناءً على حدود السيولة المركزة
     let raw_loan = (spread_gap * 40.0) as u128 * 1_000_000;
-    let dynamic_loan = raw_loan.clamp(500_000_000, 1_200_000_000); // تقليص القرض بذكاء لتجنب الانزلاق العالي
+    let dynamic_loan = raw_loan.clamp(500_000_000, 1_200_000_000); 
     let loan_amount = U256::from(dynamic_loan);
 
     println!("🎯 [Cross-DEX {}] Real Gap: ${:.2} | Optimized Loan: {} USDC... Simulating...", pair_cfg.symbol, spread_gap, dynamic_loan as f64 / 1_000_000.0);

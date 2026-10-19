@@ -22,12 +22,9 @@ pub const CBETH_BASE: Address = address!("2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc
 pub const VIRTUAL_BASE: Address = address!("0b3e328455c4059EEb9e3f84b5543F74E24e7E1b");
 
 const UNISWAP_V3_FACTORY: Address = address!("33128a8fC17869897dcE68Ed026d694621f6FDfD");
-
 const UNISWAP_V3_ROUTER: Address = address!("0xcf77A3bA9Aab7D3E44917635033322DF3f564171");
 const AERODROME_V2_ROUTER: Address = address!("0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43");
 const AERODROME_V2_FACTORY: Address = address!("0x420DD381b31aEf6683db6B902084cB0FFECe40Da");
-const SLIPSTREAM_QUOTER: Address = address!("0x254cF9E1E6e233aa1AC962CB9B05b2cfeAaE15b0");
-const PANCAKESWAP_V3_ROUTER: Address = address!("0x1b81D678ffb9C0263b24A97847620C99d213eB14"); 
 
 #[derive(Debug, Clone)]
 pub struct TokenPairConfig {
@@ -192,8 +189,6 @@ impl CausalCollapseSystem {
 pub enum DexType {
     UniswapV3,
     Aerodrome,
-    BaseSwap,
-    PancakeSwapV3,
 }
 
 #[derive(Debug, Clone)]
@@ -301,12 +296,12 @@ impl TriangularPayloadEncoder {
         let mut current_amount = amount_in;
         for edge in cycle {
             targets.push(match edge.pool.dex_type {
-                DexType::UniswapV3 | DexType::PancakeSwapV3 => UNISWAP_V3_ROUTER,
-                DexType::Aerodrome | DexType::BaseSwap => AERODROME_V2_ROUTER,
+                DexType::UniswapV3 => UNISWAP_V3_ROUTER,
+                DexType::Aerodrome => AERODROME_V2_ROUTER,
             });
             let min_out = current_amount * U256::from(9900) / U256::from(10000);
             match edge.pool.dex_type {
-                DexType::UniswapV3 | DexType::PancakeSwapV3 => {
+                DexType::UniswapV3 => {
                     let sub_path = Self::encode_v3_path(&[edge.clone()]);
                     let params = IUniswapV3Router::ExactInputParams {
                         path: Bytes::from(sub_path),
@@ -317,7 +312,7 @@ impl TriangularPayloadEncoder {
                     };
                     data.push(Bytes::from(IUniswapV3Router::exactInputCall { params }.abi_encode()));
                 }
-                DexType::Aerodrome | DexType::BaseSwap => {
+                DexType::Aerodrome => {
                     let aero_route = IAerodromeRouter::Route {
                         from: edge.from_token,
                         to: edge.to_token,
@@ -387,20 +382,6 @@ sol! {
         ) external returns (uint256[] memory amounts);
 
         function getAmountsOut(uint256 amountIn, Route[] calldata routes) external view returns (uint256[] memory amounts);
-    }
-
-    #[sol(rpc)]
-    contract ISlipstreamQuoter {
-        struct QuoteExactInputSingleParams {
-            address tokenIn;
-            address tokenOut;
-            uint256 amountIn;
-            int24 tickSpacing;
-            uint160 sqrtPriceLimitX96;
-        }
-        function quoteExactInputSingle(QuoteExactInputSingleParams calldata params) 
-            external 
-            returns (uint256 amountOut, uint160 sqrtPriceX96After, int24 initializedTicksCrossed, uint256 gasEstimate);
     }
 
     #[sol(rpc)]
@@ -486,6 +467,11 @@ fn calculate_v3_price_dynamic(sqrt_price_x96: _U160, pool_token0: Address, targe
     let price_raw = ratio * ratio;
     if price_raw <= 0.0 { return 0.0; }
 
+    if target_token == WETH_BASE {
+        let p = price_raw * 10f64.powi(12);
+        return if p > 100.0 && p < 20000.0 { p } else if p > 0.0 { 1.0 / p * 10f64.powi(12) } else { 0.0 };
+    }
+
     let is_target_token0 = pool_token0 == target_token;
     let price_in_weth = if is_target_token0 { price_raw } else { 1.0 / price_raw };
     let calculated_usd = price_in_weth * weth_price_usd;
@@ -497,21 +483,24 @@ async fn fetch_live_market_data_for_pair<P>(http_provider: P, config: &TokenPair
 where P: Provider<Ethereum> + Clone {
     let mut price_aero = 0.0;
 
+    // استعلام V2 Router المباشر لجميع الأصول على Aerodrome (بدون أصفار وبدون تعقيد)
     let aero_router = IAerodromeRouter::new(AERODROME_V2_ROUTER, http_provider.clone());
     let sample_amount = U256::from(10_u128.pow(config.decimals));
     let route = IAerodromeRouter::Route {
         from: config.target_token,
-        to: WETH_BASE,
-        stable: config.symbol == "cbETH",
+        to: if config.symbol == "WETH" { USDC_BASE } else { WETH_BASE },
+        stable: config.symbol == "cbETH", // true لـ cbETH، و false لباقي الأصول المتقلبة
         factory: AERODROME_V2_FACTORY,
     };
 
-    // التصحيح النهائي: استخدام amounts_out مباشرة كمصفوفة مخرجات
     if let Ok(amounts_out) = aero_router.getAmountsOut(sample_amount, vec![route]).call().await {
-        let amounts_vec = amounts_out;
-        if !amounts_vec.is_empty() {
-            let weth_out = amounts_vec.last().unwrap().to_string().parse::<f64>().unwrap_or(0.0) / 1e18;
-            price_aero = weth_out * weth_price_usd;
+        if !amounts_out.is_empty() {
+            let out_f64 = amounts_out.last().unwrap().to_string().parse::<f64>().unwrap_or(0.0);
+            if config.symbol == "WETH" {
+                price_aero = out_f64 / 1e6;
+            } else {
+                price_aero = (out_f64 / 1e18) * weth_price_usd;
+            }
         }
     }
 
@@ -661,7 +650,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         for pair in &monitored_pairs {
             if let Ok((p_aero, p_v3, _p_baseswap, _p_pancake, spread_gap)) = fetch_live_market_data_for_pair(http_provider.clone(), pair, current_weth_price).await {
-                // تم تنقية سطر الطباعة بالكامل
                 println!(
                     " 📈 [{}] Aero: ${:.4} | UniV3: ${:.4} | Max Gap: ${:.2}",
                     pair.symbol, p_aero, p_v3, spread_gap

@@ -236,7 +236,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if cycles.is_empty() { continue; }
 
             let initial_amount_in = if base_token == USDC_BASE { 500_000_000u64 } else { 200_000_000_000_000_000u64 };
-            let min_profit = initial_amount_in / 1000; // 0.1% min profit target
+            let min_profit = initial_amount_in / 1000;
 
             for cycle in &cycles {
                 let mut router_steps = Vec::new();
@@ -245,7 +245,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     router_steps.push(IBalancerV3BatchRouter::SwapPathStep {
                         pool: edge.pool.id,
                         tokenOut: edge.to_token,
-                        userData: Bytes::new(),
+                        userData: Bytes::default(),
                     });
                 }
 
@@ -255,7 +255,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     steps: router_steps,
                 }];
 
-                // Map to contract struct type
                 let contract_paths = batch_paths.iter().map(|p| {
                     let steps = p.steps.iter().map(|s| {
                         BaseAtomicArbitrage::SwapPathStep {
@@ -296,7 +295,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     d_steps.push(BaseAtomicArbitrage::SwapPathStep {
                                         pool: edge.pool.id,
                                         tokenOut: edge.to_token,
-                                        userData: Bytes::new(),
+                                        userData: Bytes::default(),
                                     });
                                 }
                                 let final_paths = vec![BaseAtomicArbitrage::SwapPathExactAmountIn {

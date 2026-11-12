@@ -240,7 +240,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     steps: router_steps,
                 }];
 
-                // تحديد نوع البيانات صراحة لتجنب خطأ E0282
                 let contract_paths: Vec<BaseAtomicArbitrage::SwapPathExactAmountIn> = batch_paths.iter().map(|p| {
                     let steps = p.steps.iter().map(|s| {
                         BaseAtomicArbitrage::SwapPathStep {
@@ -261,8 +260,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let amount_out = total_out;
                         let target_required = U256::from(initial_amount_in) + U256::from(min_profit);
 
+                        // طباعة تفصيلية مستمرة لكل مسار وسعر ومقارنة للفروقات في الـ Terminal
                         println!(
-                            "📊 [Multi-Hop Price Check] Path Hops: {} | Input: {} | Expected Out: {} | Target Required: {}",
+                            "📊 [Price & Spread Check] Hops: {} | Input: {} | Output: {} | Target: {}",
                             cycle.len(), initial_amount_in, amount_out, target_required
                         );
 
@@ -294,7 +294,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
-                    Err(_) => {}
+                    Err(e) => {
+                        // طباعة الأخطاء في حال رفض عقد الـ BatchRouter للمسار بسبب السيولة أو الصلاحية
+                        // println!("⚠️ Query Error on path: {:?}", e);
+                    }
                 }
             }
         }

@@ -30,7 +30,6 @@ jobs:
           nohup anvil --fork-url "$ALCHEMY_HTTP_URL" --port 8545 > anvil.log 2>&1 &
           echo "[*] Waiting for Anvil RPC to initialize..."
           
-          # حلقة تحقق ذكية بديلة لـ nc تضمن جاهزية الـ RPC تماماً
           for i in {1..20}; do
             if curl -s -X POST -H "Content-Type: application/json" --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' http://localhost:8545 > /dev/null; then
               echo "[*] Anvil is up and running!"
@@ -40,33 +39,36 @@ jobs:
             sleep 2
           done
 
-          # التحقق النهائي وإن لم يعمل يتم طباعة السجلات والخروج
           if ! curl -s -X POST -H "Content-Type: application/json" --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' http://localhost:8545 > /dev/null; then
             echo "[!] Anvil failed to start. Logs:"
             cat anvil.log
             exit 1
           fi
 
-      - name: Inspect Execution Trace (Deep Flash Loan Check)
+      - name: Verify Contract State & Ownership
         env:
           CONTRACT_ADDR: ${{ secrets.CONTRACT_ADDR }}
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
         run: |
           echo "======================================================="
-          echo "🔍 [DEEP TRACE] Inspecting EVM Calls & Flash Loan Execution..."
+          echo "🔍 [VERIFY] Checking Deployed Contract on Base Fork..."
           echo "======================================================="
           
           ACCOUNT_ADDR=$(cast wallet address --private-key "$PRIVATE_KEY")
-          USDC_BASE="0x833589fCD6eDb6E08f4c7C32D4f71b54bda02913"
-          LOAN_AMOUNT="2000000000"
+          echo "[*] Bot Signer Address: $ACCOUNT_ADDR"
 
-          cast call "$CONTRACT_ADDR" \
-            "triggerBalancerArbitrage(address,uint256,bytes)" \
-            "$USDC_BASE" "$LOAN_AMOUNT" "0x" \
-            --from "$ACCOUNT_ADDR" \
-            --rpc-url "http://127.0.0.1:8545" \
-            --trace || true
+          # التحقق من المالك وعنوان الراوتر المسجل في العقد الجديد
+          OWNER=$(cast call "$CONTRACT_ADDR" "owner()(address)" --rpc-url "http://127.0.0.1:8545")
+          ROUTER=$(cast call "$CONTRACT_ADDR" "BALANCER_V3_BATCH_ROUTER()(address)" --rpc-url "http://127.0.0.1:8545")
           
+          echo "[*] Contract Owner: $OWNER"
+          echo "[*] Balancer V3 BatchRouter: $ROUTER"
+
+          # تسجيل عنوان البوت كـ botAddress في العقد تلقائياً على الفورك المحلي للمحاكاة
+          cast send "$CONTRACT_ADDR" "updateBotAddress(address)" "$ACCOUNT_ADDR" \
+            --private-key "$PRIVATE_KEY" \
+            --rpc-url "http://127.0.0.1:8545" > /dev/null 2>&1 || true
+
           echo "======================================================="
 
       - name: Cache Cargo Dependencies
@@ -89,8 +91,7 @@ jobs:
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           ALCHEMY_HTTP_URL: ${{ secrets.ALCHEMY_HTTP_URL }}
           ALCHEMY_WSS_URL: ${{ secrets.ALCHEMY_WSS_URL }}
-          BASE_WSS_RPC: ${{ secrets.ALCHEMY_WSS_URL }}
-          ANVIL_RPC_URL: "http://127.0.0.1:8545"
+          PRIVATE_RPC_URL: "http://127.0.0.1:8545"
         run: |
-          echo "[*] Starting MEV Engine with Local Anvil Simulation..."
+          echo "[*] Starting Balancer V3 BatchRouter MEV Engine..."
           cargo run --release

@@ -270,54 +270,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }).collect();
 
-                if let Ok(total_out) = router_contract.querySwapExactIn(batch_paths).call().await {
-                    let amount_out = total_out;
-                    let target_required = U256::from(initial_amount_in) + U256::from(min_profit);
+                match router_contract.querySwapExactIn(batch_paths).call().await {
+                    Ok(total_out) => {
+                        let amount_out = total_out;
+                        let target_required = U256::from(initial_amount_in) + U256::from(min_profit);
 
-                    if amount_out > target_required {
-                        println!("🎯 [Profitable V3 Cycle Found] Expected Out: {} | Required: {}", amount_out, target_required);
+                        println!(
+                            "📊 [Price Check] Input: {} | Expected Output: {} | Target Required (Min Profit): {}",
+                            initial_amount_in, amount_out, target_required
+                        );
 
-                        let is_profitable = simulate_and_diagnose_arbitrage(
-                            private_provider.clone(),
-                            contract_address,
-                            signer_address,
-                            base_token,
-                            U256::from(initial_amount_in),
-                            U256::from(min_profit),
-                            contract_paths,
-                        ).await.unwrap_or(false);
+                        if amount_out > target_required {
+                            println!("🎯 [Profitable V3 Cycle Found!] Expected Out: {} | Required: {}", amount_out, target_required);
 
-                        if is_profitable {
-                            let dispatch_paths = liquidity_graph.find_cycles(base_token, 3);
-                            if let Some(target_cycle) = dispatch_paths.first() {
-                                let mut d_steps = Vec::new();
-                                for edge in target_cycle {
-                                    d_steps.push(BaseAtomicArbitrage::SwapPathStep {
-                                        pool: edge.pool.id,
-                                        tokenOut: edge.to_token,
-                                        userData: Bytes::default(),
-                                    });
-                                }
-                                let final_paths = vec![BaseAtomicArbitrage::SwapPathExactAmountIn {
-                                    tokenIn: base_token,
-                                    exactAmountIn: U256::from(initial_amount_in),
-                                    steps: d_steps,
-                                }];
+                            let is_profitable = simulate_and_diagnose_arbitrage(
+                                private_provider.clone(),
+                                contract_address,
+                                signer_address,
+                                base_token,
+                                U256::from(initial_amount_in),
+                                U256::from(min_profit),
+                                contract_paths,
+                            ).await.unwrap_or(false);
 
-                                let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider.clone());
-                                match contract_private
-                                    .executeBatchRouterArbitrage(base_token, U256::from(initial_amount_in), U256::from(min_profit), final_paths)
-                                    .from(signer_address)
-                                    .gas(3_500_000)
-                                    .send()
-                                    .await
-                                {
-                                    Ok(tx) => println!("🚀 [Dispatched Successfully] Hash: {:?}", tx.tx_hash()),
-                                    Err(e) => eprintln!("❌ [Dispatch Failed]: {:?}", e),
+                            if is_profitable {
+                                let dispatch_paths = liquidity_graph.find_cycles(base_token, 3);
+                                if let Some(target_cycle) = dispatch_paths.first() {
+                                    let mut d_steps = Vec::new();
+                                    for edge in target_cycle {
+                                        d_steps.push(BaseAtomicArbitrage::SwapPathStep {
+                                            pool: edge.pool.id,
+                                            tokenOut: edge.to_token,
+                                            userData: Bytes::default(),
+                                        });
+                                    }
+                                    let final_paths = vec![BaseAtomicArbitrage::SwapPathExactAmountIn {
+                                        tokenIn: base_token,
+                                        exactAmountIn: U256::from(initial_amount_in),
+                                        steps: d_steps,
+                                    }];
+
+                                    let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider.clone());
+                                    match contract_private
+                                        .executeBatchRouterArbitrage(base_token, U256::from(initial_amount_in), U256::from(min_profit), final_paths)
+                                        .from(signer_address)
+                                        .gas(3_500_000)
+                                        .send()
+                                        .await
+                                    {
+                                        Ok(tx) => println!("🚀 [Dispatched Successfully] Hash: {:?}", tx.tx_hash()),
+                                        Err(e) => eprintln!("❌ [Dispatch Failed]: {:?}", e),
+                                    }
                                 }
                             }
                         }
                     }
+                    Err(_) => {}
                 }
             }
         }

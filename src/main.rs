@@ -223,7 +223,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let initial_amount_in = if base_token == USDC_BASE { 500_000_000u64 } else { 200_000_000_000_000_000u64 };
             let min_profit = initial_amount_in / 1000;
 
-            for cycle in &cycles {
+            for (i, cycle) in cycles.iter().enumerate() {
                 let mut router_steps = Vec::new();
 
                 for edge in cycle {
@@ -255,15 +255,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }).collect();
 
+                // طباعة تقرير الفحص المباشر لكل مسار قبل الاستعلام لتوضيح الـ Hops والمدخلات
+                println!("🔍 [Evaluating Path #{}] BaseToken: {:?} | Hops: {}", i, base_token, cycle.len());
+
                 match router_contract.querySwapExactIn(batch_paths).call().await {
                     Ok(total_out) => {
                         let amount_out = total_out;
                         let target_required = U256::from(initial_amount_in) + U256::from(min_profit);
 
-                        // طباعة تفصيلية مستمرة لكل مسار وسعر ومقارنة للفروقات في الـ Terminal
+                        // طباعة شاملة تظهر السعر الفعلي والمخرج بغض النظر عن حالة الربح لرؤية الفروقات
                         println!(
-                            "📊 [Price & Spread Check] Hops: {} | Input: {} | Output: {} | Target: {}",
-                            cycle.len(), initial_amount_in, amount_out, target_required
+                            "📊 [Live Price Feed] Input: {} | Output: {} | Target Required: {}",
+                            initial_amount_in, amount_out, target_required
                         );
 
                         if amount_out > target_required {
@@ -295,8 +298,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Err(e) => {
-                        // طباعة الأخطاء في حال رفض عقد الـ BatchRouter للمسار بسبب السيولة أو الصلاحية
-                        // println!("⚠️ Query Error on path: {:?}", e);
+                        // طباعة سبب رفض أو تعثر الاستعلام من العقد الذكي للشفافية الكاملة
+                        println!("⚠️ [Query Error / Liquidity Unready]: {:?}", e);
                     }
                 }
             }

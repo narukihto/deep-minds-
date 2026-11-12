@@ -12,10 +12,12 @@ use std::collections::HashMap;
 
 pub const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
 pub const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
-pub const CBBTC_BASE: Address = address!("cbb7c0000ab88b473b1f5afd9ef808440eed33bf"); // cbBTC on Base
-pub const EURC_BASE: Address = address!("60a3111d4d03d3f9f38f71f9bc9a7bb26960fffe"); // EURC on Base
+pub const CBBTC_BASE: Address = address!("cbb7c0000ab88b473b1f5afd9ef808440eed33bf");
+pub const EURC_BASE: Address = address!("60a3111d4d03d3f9f38f71f9bc9a7bb26960fffe");
 
+// عناوين Balancer V3 الرسمية المعتمدة على شبكة Base
 pub const BALANCER_V3_BATCH_ROUTER: Address = address!("0x136f1EFcC3f8f88516B9E94110D56FDBfB1778d1");
+pub const BALANCER_V3_VAULT: Address = address!("0xbA1333333333a1BA1108E8412f11850A5C319bA9");
 
 sol! {
     #[sol(rpc)]
@@ -112,12 +114,12 @@ impl ArbitrageGraph {
     ) {
         if current_path.len() > max_hops { return; }
         if current_token == start_token && !current_path.is_empty() {
-            if current_path.len() >= 2 && current_path.len() <= 3 {
+            if current_path.len() >= 2 && current_path.len() <= max_hops {
                 let mut pool_ids = Vec::new();
                 for edge in current_path.iter() { pool_ids.push(edge.pool.id); }
                 pool_ids.sort();
                 pool_ids.dedup();
-                if pool_ids.len() == current_path.len() {
+                if pool_ids.len() >= 1 {
                     cycles.push(current_path.clone());
                 }
             }
@@ -126,7 +128,6 @@ impl ArbitrageGraph {
         if current_path.len() == max_hops { return; }
         if let Some(edges) = self.adjacency_list.get(&current_token) {
             for edge in edges {
-                if current_path.iter().any(|e| e.pool.id == edge.pool.id) { continue; }
                 current_path.push(edge.clone());
                 self.dfs_search(start_token, edge.to_token, max_hops, current_path, cycles);
                 current_path.pop();
@@ -135,46 +136,28 @@ impl ArbitrageGraph {
     }
 }
 
-// بناء شبكة السيولة محلياً اعتماداً على أحواض Balancer V3 الموثوقة على Base
-pub async fn load_onchain_liquidity_graph() -> ArbitrageGraph {
+// تهيئة الرسم البياني عبر ربط الـ Vault لضمان استقرار قراءة العقود
+pub async fn load_balancer_v3_graph() -> ArbitrageGraph {
     let mut graph = ArbitrageGraph::new();
 
-    println!("⛓️ Building Balancer V3 Liquidity Graph On-Chain via Alchemy RPC...");
+    println!("⚖️ Initializing Balancer V3 Multi-Hop Graph via Vault & BatchRouter on Base...");
 
-    // إضافة أحواض V3 حقيقية ونشطة على شبكة Base
-    // 1. WETH / USDC Pool
+    // استخدام Vault كمرجع رئيسي لتوجيه السيولة الذرية لـ Balancer V3
     graph.add_pool(Pool {
-        id: address!("0x23f6045a9171a18179784974c3e87c649a02c633"),
+        id: BALANCER_V3_VAULT,
         token0: WETH_BASE,
         token1: USDC_BASE,
         fee: 300,
     });
 
-    // 2. cbBTC / WETH Pool
     graph.add_pool(Pool {
-        id: address!("0x81176b6d552cf34cb249e0c523aa787e914bf459"),
+        id: BALANCER_V3_BATCH_ROUTER,
         token0: CBBTC_BASE,
         token1: WETH_BASE,
         fee: 300,
     });
 
-    // 3. USDC / EURC Pool
-    graph.add_pool(Pool {
-        id: address!("0x421d6f51c72dd85aeb30d4734898fc60d7031336"),
-        token0: USDC_BASE,
-        token1: EURC_BASE,
-        fee: 100,
-    });
-
-    // 4. cbBTC / USDC Pool (لإغلاق الدورة الثلاثية Triangular)
-    graph.add_pool(Pool {
-        id: address!("0x78536ee1e91be8336aa081e7d23533ecf52233f2"),
-        token0: CBBTC_BASE,
-        token1: USDC_BASE,
-        fee: 500,
-    });
-
-    println!("✅ Loaded On-Chain Liquidity Graph successfully with active V3 pools!");
+    println!("✅ Balancer V3 Graph Initialized Successfully.");
     graph
 }
 
@@ -204,7 +187,7 @@ async fn simulate_and_diagnose_arbitrage<P: Provider<Ethereum> + Clone + 'static
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🤖 Initializing Balancer V3 BatchRouter MEV Bot (100% On-Chain via Alchemy)...");
+    println!("🤖 Initializing Balancer V3 Multi-Hop Batch Swap MEV Engine...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x23f6045a9171a18179784974c3e87c649a02c633".to_string());
     let contract_address: Address = contract_addr_str.trim().parse()?;
@@ -220,7 +203,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let http_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_http(primary_http_url.trim().parse()?);
     let private_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_http(private_http_url.trim().parse()?);
 
-    let liquidity_graph = load_onchain_liquidity_graph().await;
+    let liquidity_graph = load_balancer_v3_graph().await;
     let router_contract = IBalancerV3BatchRouter::new(BALANCER_V3_BATCH_ROUTER, http_provider.clone());
 
     let ws = alloy::providers::WsConnect::new(alchemy_wss_url.trim().to_string());
@@ -234,7 +217,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(block) = stream.next().await {
         block_counter += 1;
         let block_num = block.inner.number;
-        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Balancer V3 Markets via Alchemy...", block_num, block_counter);
+        println!("\n📦 WSS Block Synced: #{} (Counter: {}) - Scanning Balancer V3 Multi-Hop Markets...", block_num, block_counter);
 
         for &base_token in &test_base_tokens {
             let cycles = liquidity_graph.find_cycles(base_token, 3);
@@ -275,19 +258,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }).collect();
 
-                // استعلام السعر المباشر من عقد BatchRouter عبر Alchemy RPC
                 match router_contract.querySwapExactIn(batch_paths).call().await {
                     Ok(total_out) => {
                         let amount_out = total_out;
                         let target_required = U256::from(initial_amount_in) + U256::from(min_profit);
 
                         println!(
-                            "📊 [Price Check] Input: {} | Expected Output: {} | Target Required (Min Profit): {}",
-                            initial_amount_in, amount_out, target_required
+                            "📊 [Multi-Hop Price Check] Path Hops: {} | Input: {} | Expected Out: {} | Target Required: {}",
+                            cycle.len(), initial_amount_in, amount_out, target_required
                         );
 
                         if amount_out > target_required {
-                            println!("🎯 [Profitable V3 Cycle Found!] Expected Out: {} | Required: {}", amount_out, target_required);
+                            println!("🎯 [Profitable Multi-Hop V3 Cycle Found!] Expected Out: {} | Required: {}", amount_out, target_required);
 
                             let is_profitable = simulate_and_diagnose_arbitrage(
                                 private_provider.clone(),
@@ -300,46 +282,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ).await.unwrap_or(false);
 
                             if is_profitable {
-                                let dispatch_paths = liquidity_graph.find_cycles(base_token, 3);
-                                if let Some(target_cycle) = dispatch_paths.first() {
-                                    let mut d_steps = Vec::new();
-                                    for edge in target_cycle {
-                                        d_steps.push(BaseAtomicArbitrage::SwapPathStep {
-                                            pool: edge.pool.id,
-                                            tokenOut: edge.to_token,
-                                            userData: Bytes::default(),
-                                        });
-                                    }
-                                    let final_paths = vec![BaseAtomicArbitrage::SwapPathExactAmountIn {
-                                        tokenIn: base_token,
-                                        exactAmountIn: U256::from(initial_amount_in),
-                                        steps: d_steps,
-                                    }];
-
-                                    let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider.clone());
-                                    match contract_private
-                                        .executeBatchRouterArbitrage(base_token, U256::from(initial_amount_in), U256::from(min_profit), final_paths)
-                                        .from(signer_address)
-                                        .gas(3_500_000)
-                                        .send()
-                                        .await
-                                    {
-                                        Ok(tx) => println!("🚀 [Dispatched Successfully] Hash: {:?}", tx.tx_hash()),
-                                        Err(e) => eprintln!("❌ [Dispatch Failed]: {:?}", e),
-                                    }
+                                let contract_private = BaseAtomicArbitrage::new(contract_address, private_provider.clone());
+                                match contract_private
+                                    .executeBatchRouterArbitrage(base_token, U256::from(initial_amount_in), U256::from(min_profit), contract_paths)
+                                    .from(signer_address)
+                                    .gas(4_500_000)
+                                    .send()
+                                    .await
+                                {
+                                    Ok(tx) => println!("🚀 [Multi-Hop Dispatched Successfully] Hash: {:?}", tx.tx_hash()),
+                                    Err(e) => eprintln!("❌ [Dispatch Failed]: {:?}", e),
                                 }
                             }
                         }
                     }
-                    Err(e) => {
-                        // تتبع أي استعلام تعثر على الشبكة
-                        // eprintln!("⚠️ Query Error: {:?}", e);
-                    }
+                    Err(_) => {}
                 }
             }
         }
 
-        sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(50)).await;
     }
 
     Ok(())

@@ -15,7 +15,6 @@ pub const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda0291
 pub const CBBTC_BASE: Address = address!("cbb7c0000ab88b473b1f5afd9ef808440eed33bf");
 pub const EURC_BASE: Address = address!("60a3111d4d03d3f9f38f71f9bc9a7bb26960fffe");
 
-// عناوين Balancer V3 الرسمية المعتمدة على شبكة Base
 pub const BALANCER_V3_BATCH_ROUTER: Address = address!("0x136f1EFcC3f8f88516B9E94110D56FDBfB1778d1");
 pub const BALANCER_V3_VAULT: Address = address!("0xbA1333333333a1BA1108E8412f11850A5C319bA9");
 
@@ -136,13 +135,11 @@ impl ArbitrageGraph {
     }
 }
 
-// تهيئة الرسم البياني عبر ربط الـ Vault لضمان استقرار قراءة العقود
 pub async fn load_balancer_v3_graph() -> ArbitrageGraph {
     let mut graph = ArbitrageGraph::new();
 
     println!("⚖️ Initializing Balancer V3 Multi-Hop Graph via Vault & BatchRouter on Base...");
 
-    // استخدام Vault كمرجع رئيسي لتوجيه السيولة الذرية لـ Balancer V3
     graph.add_pool(Pool {
         id: BALANCER_V3_VAULT,
         token0: WETH_BASE,
@@ -271,6 +268,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if amount_out > target_required {
                             println!("🎯 [Profitable Multi-Hop V3 Cycle Found!] Expected Out: {} | Required: {}", amount_out, target_required);
 
+                            // تم إضافة .clone هنا لتجنب خطأ الـ Ownership (E0382)
                             let is_profitable = simulate_and_diagnose_arbitrage(
                                 private_provider.clone(),
                                 contract_address,
@@ -278,7 +276,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 base_token,
                                 U256::from(initial_amount_in),
                                 U256::from(min_profit),
-                                contract_paths,
+                                contract_paths.clone(),
                             ).await.unwrap_or(false);
 
                             if is_profitable {

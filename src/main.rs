@@ -240,7 +240,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     steps: router_steps,
                 }];
 
-                let contract_paths = batch_paths.iter().map(|p| {
+                // تحديد نوع البيانات صراحة لتجنب خطأ E0282
+                let contract_paths: Vec<BaseAtomicArbitrage::SwapPathExactAmountIn> = batch_paths.iter().map(|p| {
                     let steps = p.steps.iter().map(|s| {
                         BaseAtomicArbitrage::SwapPathStep {
                             pool: s.pool,
@@ -268,7 +269,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if amount_out > target_required {
                             println!("🎯 [Profitable Multi-Hop V3 Cycle Found!] Expected Out: {} | Required: {}", amount_out, target_required);
 
-                            // تم إضافة .clone هنا لتجنب خطأ الـ Ownership (E0382)
                             let is_profitable = simulate_and_diagnose_arbitrage(
                                 private_provider.clone(),
                                 contract_address,

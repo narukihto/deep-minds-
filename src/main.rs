@@ -146,10 +146,10 @@ pub async fn load_global_liquidity_graph() -> ArbitrageGraph {
             if let Some(pools) = json["data"]["poolGetPools"]["pools"].as_array() {
                 for p in pools {
                     if let (Some(addr_str), Some(tokens)) = (p["address"].as_str(), p["poolTokens"].as_array()) {
-                        if let Ok(pool_addr) = addr_str.parse::<Address>() {
+                        if let Ok(pool_addr) = addr_str.trim().parse::<Address>() {
                             if tokens.len() >= 2 {
                                 if let (Some(t0_str), Some(t1_str)) = (tokens[0]["address"].as_str(), tokens[1]["address"].as_str()) {
-                                    if let (Ok(t0), Ok(t1)) = (t0_str.parse::<Address>(), t1_str.parse::<Address>()) {
+                                    if let (Ok(t0), Ok(t1)) = (t0_str.trim().parse::<Address>(), t1_str.trim().parse::<Address>()) {
                                         graph.add_pool(Pool {
                                             id: pool_addr,
                                             token0: t0,
@@ -202,23 +202,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🤖 Initializing Balancer V3 BatchRouter MEV Bot...");
 
     let contract_addr_str = std::env::var("CONTRACT_ADDR").unwrap_or_else(|_| "0x23f6045a9171a18179784974c3e87c649a02c633".to_string());
-    let contract_address: Address = contract_addr_str.parse()?;
+    let contract_address: Address = contract_addr_str.trim().parse()?;
 
     let primary_http_url = std::env::var("ALCHEMY_HTTP_URL").unwrap_or_else(|_| "https://base-mainnet.g.alchemy.com/v2/alch_c3Z7QmOs3ZZFLUr0zngV6".to_string());
     let private_http_url = std::env::var("PRIVATE_RPC_URL").unwrap_or_else(|_| primary_http_url.clone());
     let alchemy_wss_url = std::env::var("ALCHEMY_WSS_URL").unwrap_or_else(|_| "ws://127.0.0.1:8545".to_string());
+    
     let private_key_str = std::env::var("PRIVATE_KEY").unwrap_or_else(|_| "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string());
-
-    let signer = PrivateKeySigner::from_str(&private_key_str)?;
+    let signer = PrivateKeySigner::from_str(private_key_str.trim())?;
     let signer_address = signer.address();
 
-    let http_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_http(primary_http_url.parse()?);
-    let private_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_http(private_http_url.parse()?);
+    let http_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_http(primary_http_url.trim().parse()?);
+    let private_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_http(private_http_url.trim().parse()?);
 
     let liquidity_graph = load_global_liquidity_graph().await;
     let router_contract = IBalancerV3BatchRouter::new(BALANCER_V3_BATCH_ROUTER, http_provider.clone());
 
-    let ws = alloy::providers::WsConnect::new(alchemy_wss_url);
+    let ws = alloy::providers::WsConnect::new(alchemy_wss_url.trim().to_string());
     let ws_provider = ProviderBuilder::new().wallet(EthereumWallet::from(signer.clone())).connect_ws(ws).await?;
     let sub = ws_provider.subscribe_blocks().await?;
     let mut stream = sub.into_stream();

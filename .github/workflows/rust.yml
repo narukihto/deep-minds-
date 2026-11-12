@@ -54,19 +54,23 @@ jobs:
           echo "🔍 [VERIFY] Checking Deployed Contract on Base Fork..."
           echo "======================================================="
           
-          ACCOUNT_ADDR=$(cast wallet address --private-key "$PRIVATE_KEY")
+          # تنظيف المتغيرات من أي أحرف خفية أو فواصل سطرية أو مسافات زائدة
+          CLEAN_CONTRACT_ADDR=$(echo "$CONTRACT_ADDR" | tr -d '[:space:]')
+          CLEAN_PRIVATE_KEY=$(echo "$PRIVATE_KEY" | tr -d '[:space:]')
+
+          ACCOUNT_ADDR=$(cast wallet address --private-key "$CLEAN_PRIVATE_KEY")
           echo "[*] Bot Signer Address: $ACCOUNT_ADDR"
 
-          # التحقق من المالك وعنوان الراوتر المسجل في العقد الجديد
-          OWNER=$(cast call "$CONTRACT_ADDR" "owner()(address)" --rpc-url "http://127.0.0.1:8545")
-          ROUTER=$(cast call "$CONTRACT_ADDR" "BALANCER_V3_BATCH_ROUTER()(address)" --rpc-url "http://127.0.0.1:8545")
+          # التحقق من المالك وعنوان الراوتر باستخدام المتغيرات المنظفة
+          OWNER=$(cast call "$CLEAN_CONTRACT_ADDR" "owner()(address)" --rpc-url "http://127.0.0.1:8545")
+          ROUTER=$(cast call "$CLEAN_CONTRACT_ADDR" "BALANCER_V3_BATCH_ROUTER()(address)" --rpc-url "http://127.0.0.1:8545")
           
           echo "[*] Contract Owner: $OWNER"
           echo "[*] Balancer V3 BatchRouter: $ROUTER"
 
           # تسجيل عنوان البوت كـ botAddress في العقد تلقائياً على الفورك المحلي للمحاكاة
-          cast send "$CONTRACT_ADDR" "updateBotAddress(address)" "$ACCOUNT_ADDR" \
-            --private-key "$PRIVATE_KEY" \
+          cast send "$CLEAN_CONTRACT_ADDR" "updateBotAddress(address)" "$ACCOUNT_ADDR" \
+            --private-key "$CLEAN_PRIVATE_KEY" \
             --rpc-url "http://127.0.0.1:8545" > /dev/null 2>&1 || true
 
           echo "======================================================="

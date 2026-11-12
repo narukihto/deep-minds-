@@ -4,7 +4,6 @@ use alloy::{
     network::{EthereumWallet, Ethereum},
     primitives::{address, Address, U256, Bytes},
     sol,
-    sol_types::SolCall,
 };
 use futures_util::StreamExt;
 use tokio::time::{sleep, Duration};
@@ -273,7 +272,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }).collect();
 
                 if let Ok(total_out) = router_contract.querySwapExactIn(batch_paths).call().await {
-                    let amount_out = total_out._0;
+                    let amount_out = total_out;
                     let target_required = U256::from(initial_amount_in) + U256::from(min_profit);
 
                     if amount_out > target_required {
@@ -290,14 +289,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ).await.unwrap_or(false);
 
                         if is_profitable {
-                            // Re-generate contract paths for actual dispatch
                             let dispatch_paths = liquidity_graph.find_cycles(base_token, 3);
                             if let Some(target_cycle) = dispatch_paths.first() {
                                 let mut d_steps = Vec::new();
                                 for edge in target_cycle {
                                     d_steps.push(BaseAtomicArbitrage::SwapPathStep {
                                         pool: edge.pool.id,
-                                           tokenOut: edge.to_token,
+                                        tokenOut: edge.to_token,
                                         userData: Bytes::new(),
                                     });
                                 }

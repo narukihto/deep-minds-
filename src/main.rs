@@ -13,8 +13,8 @@ use std::collections::HashMap;
 pub const WETH_BASE: Address = address!("4200000000000000000000000000000000000006");
 pub const USDC_BASE: Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bda02913");
 pub const CBBTC_BASE: Address = address!("cbb7c0000ab88b473b1f5afd9ef808440eed33bf");
-pub const EURC_BASE: Address = address!("60a3111d4d03d3f9f38f71f9bc9a7bb26960fffe");
 
+// العقود والموجهات الرسمية لـ Balancer V3 على Base
 pub const BALANCER_V3_BATCH_ROUTER: Address = address!("0x136f1EFcC3f8f88516B9E94110D56FDBfB1778d1");
 pub const BALANCER_V3_VAULT: Address = address!("0xbA1333333333a1BA1108E8412f11850A5C319bA9");
 
@@ -135,26 +135,37 @@ impl ArbitrageGraph {
     }
 }
 
+// بناء الرسم البياني باستخدام عناوين الأحواض الحقيقية المعتمدة لـ Balancer V3 على Base
 pub async fn load_balancer_v3_graph() -> ArbitrageGraph {
     let mut graph = ArbitrageGraph::new();
 
-    println!("⚖️ Initializing Balancer V3 Multi-Hop Graph via Vault & BatchRouter on Base...");
+    println!("⚖️ Initializing Balancer V3 Verified Graph with Base Pool Addresses...");
 
+    // 1. حوض USDC-waWETH الفعلي: 0x4Fbb7870DBE7A7Ef4866A33c0eED73D395730dc0
     graph.add_pool(Pool {
-        id: BALANCER_V3_VAULT,
-        token0: WETH_BASE,
-        token1: USDC_BASE,
-        fee: 300,
-    });
-
-    graph.add_pool(Pool {
-        id: BALANCER_V3_BATCH_ROUTER,
-        token0: CBBTC_BASE,
+        id: address!("0x4Fbb7870DBE7A7Ef4866A33c0eED73D395730dc0"),
+        token0: USDC_BASE,
         token1: WETH_BASE,
         fee: 300,
     });
 
-    println!("✅ Balancer V3 Graph Initialized Successfully.");
+    // 2. حوض مشتقات البيتكوين (yoBTC Balancer Stable): 0xe5556b41256d7efb2f0a17011ef8ab507a352141
+    graph.add_pool(Pool {
+        id: address!("0xe5556b41256d7efb2f0a17011ef8ab507a352141"),
+        token0: CBBTC_BASE,
+        token1: WETH_BASE,
+        fee: 100,
+    });
+
+    // 3. حوض derolas-v2 (يتضمن cbBTC و WETH و USDC): 0x7b4c560f33a71a9f7a500af3c4c65b46fbbafdb7
+    graph.add_pool(Pool {
+        id: address!("0x7b4c560f33a71a9f7a500af3c4c65b46fbbafdb7"),
+        token0: USDC_BASE,
+        token1: CBBTC_BASE,
+        fee: 300,
+    });
+
+    println!("✅ Balancer V3 Verified Graph Initialized with Real Pool Addresses.");
     graph
 }
 
@@ -255,7 +266,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }).collect();
 
-                // طباعة تقرير الفحص المباشر لكل مسار قبل الاستعلام لتوضيح الـ Hops والمدخلات
                 println!("🔍 [Evaluating Path #{}] BaseToken: {:?} | Hops: {}", i, base_token, cycle.len());
 
                 match router_contract.querySwapExactIn(batch_paths).call().await {
@@ -263,7 +273,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let amount_out = total_out;
                         let target_required = U256::from(initial_amount_in) + U256::from(min_profit);
 
-                        // طباعة شاملة تظهر السعر الفعلي والمخرج بغض النظر عن حالة الربح لرؤية الفروقات
                         println!(
                             "📊 [Live Price Feed] Input: {} | Output: {} | Target Required: {}",
                             initial_amount_in, amount_out, target_required
@@ -298,7 +307,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Err(e) => {
-                        // طباعة سبب رفض أو تعثر الاستعلام من العقد الذكي للشفافية الكاملة
                         println!("⚠️ [Query Error / Liquidity Unready]: {:?}", e);
                     }
                 }
